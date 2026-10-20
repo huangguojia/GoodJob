@@ -196,10 +196,10 @@ process.stdin.on("end", () => {
       .post(`/api/v1/conversations/${message.conversationId}/messages`)
       .send({ accountId: europe.id, clientMessageId: "cli-seed-reply-0001", body: SEEDED_REPLY })
       .expect(201);
-    profile = (await api()
+    profile = ((await api()
       .post("/api/v1/training/profiles")
       .send({ name: "CLI 话术档案", useAi: false, conversationIds: [message.conversationId] })
-      .expect(201)).body as TrainingProfile;
+      .expect(201)).body as { profile: TrainingProfile }).profile;
     expect(profile.status).toBe("ready");
 
     const settings = await enableCliAutoReply();
@@ -307,6 +307,30 @@ process.stdin.on("end", () => {
       .rejects.toThrow(/本机 CLI 当前不可用/u);
     const kept = await service.updateSettings("test-user", { enabled: true, mode: "draft", dailyLimit: 7 });
     expect(kept).toMatchObject({ engine: "rules", dailyLimit: 7 });
+  }, 30_000);
+
+  it("通话推荐：engine=rules 只回一条「快稿」，而且真的没起子进程", async () => {
+    // 快稿是"先垫一句"：通话里模型要 5~9 秒，训练库命中时这条几十毫秒就能显示。
+    await putSettings({ enabled: true, mode: "draft", accountId: null, engine: "rules", profileId: profile.id }).expect(200);
+    const response = await api()
+      .post("/api/v1/call-suggest")
+      .send({
+        engine: "rules",
+        messages: [
+          { direction: "inbound", body: QUESTION },
+          { direction: "outbound", body: "好的，我确认一下。" }
+        ],
+        contact: { phone: "+8613800000001", name: "快稿客户" }
+      })
+      .expect(200);
+
+    // 三条那一路的收口是"最多三条"；快稿必须**正好一条**并显式带 quick 标记，
+    // 界面靠它决定"这是垫话、三条回来要整块替换"。
+    expect(response.body).toMatchObject({ ok: true, quick: true, engine: "rules" });
+    expect(response.body.options).toHaveLength(1);
+    // 回复来自训练库原话。走 CLI 的话这里会是假 CLI 的 CLI_REPLY —— 所以这一条同时证明"没起子进程"。
+    expect(response.body.options[0].reply).toBe(SEEDED_REPLY);
+    expect(response.body.options[0].reasonZh.startsWith("快速草稿 · ")).toBe(true);
   }, 30_000);
 
   it("自动回复关掉后不再生成任何草稿", async () => {

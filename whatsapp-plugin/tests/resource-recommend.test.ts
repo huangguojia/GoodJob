@@ -548,3 +548,111 @@ describe("推荐效果报表透传（docs/RESOURCE-FEEDBACK-REPORT-DESIGN.md）"
     await expect(service(impl).stats("user-1")).rejects.toThrow();
   });
 });
+
+// ------------------------------------------------------------------ 目录快照 ----
+
+describe("资料库目录快照透传（/api/agent/resources/catalog）", () => {
+  const catalogBody = {
+    revision: {
+      generatedAt: "2026-10-14T08:00:00.000Z",
+      latestUpdatedAt: "2026-10-14T07:59:00.000Z",
+      total: 411,
+      fingerprint: "419:411:2:0:4:2026-10-14T07:59:00.000Z"
+    },
+    vocabulary: {
+      categories: [{ value: "产品资料", usageCount: 407 }],
+      tags: [{ value: "led", usageCount: 120 }]
+    },
+    governance: {
+      total: 419,
+      published: 411,
+      draft: 5,
+      review: 1,
+      archived: 2,
+      verified: 0,
+      unverified: 411,
+      corePool: 0,
+      longTailPool: 411,
+      missingLink: 4,
+      orphans: 0,
+      qualityFlags: { 缺少说明: 415, 缺少标签: 417 },
+      byCategory: [{ category: "产品资料", total: 407, verified: 0, missingLink: 1 }]
+    },
+    items: [
+      {
+        id: "k_1",
+        title: "LED 工程灯 规格书",
+        category: "产品资料",
+        tags: ["led"],
+        description: "含光效与防护等级",
+        fileType: "pdf",
+        version: "1.0",
+        status: "published",
+        verified: false,
+        pool: "longtail",
+        hasExternalLink: true,
+        qualityFlags: [],
+        accessCount: 3,
+        author: "张三",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-14T07:59:00.000Z"
+      }
+    ],
+    truncated: 0,
+    warnings: []
+  };
+
+  it("GET 透传：路径 / since / limit / Bearer，治理与词表原样带回", async () => {
+    const { impl, calls } = stubFetch(() => ({ body: catalogBody }));
+    const result = await service(impl).catalog("user-1", { since: "2026-10-01T00:00:00.000Z", limit: 50 });
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].path).toBe("/api/agent/resources/catalog");
+    expect(calls[0].query).toContain("since=2026-10-01");
+    expect(calls[0].query).toContain("limit=50");
+    expect(calls[0].authorization).toMatch(/^Bearer /);
+    expect(result.governance.longTailPool).toBe(411);
+    expect(result.governance.corePool + result.governance.longTailPool).toBe(result.governance.published);
+    expect(result.vocabulary.categories[0].value).toBe("产品资料");
+    expect(result.items[0].pool).toBe("longtail");
+    expect(result.revision.latestUpdatedAt).toBe("2026-10-14T07:59:00.000Z");
+  });
+
+  it("不带 since 时不发这个参数（首次全量同步）", async () => {
+    const { impl, calls } = stubFetch(() => ({ body: catalogBody }));
+    await service(impl).catalog("user-1");
+    expect(calls[0].query).not.toContain("since=");
+  });
+
+  it("上游挂掉时如实抛错 —— 「目录是空的」与「目录拿不到」必须能分开", async () => {
+    const { impl } = stubFetch(() => ({ throws: true }));
+    await expect(service(impl).catalog("user-1")).rejects.toThrow();
+  });
+
+  it("未接入 CRM 时抛错，而不是回一份空目录", async () => {
+    const hub = new ResourceHubClient({ baseUrl: "", jwtSecret: "" });
+    await expect(new ResourceRecommendService(hub).catalog("user-1")).rejects.toThrow(/未配置/);
+  });
+});
+
+// ------------------------------------------------------------------ 治理字段 ----
+
+describe("治理字段不再被丢弃（CRM 一直在返回，插件声明与映射里都没有）", () => {
+  it("候选的 verified / pool 一路带到面板数据（toSuggested 是显式列举字段的，最容易漏）", async () => {
+    const { impl } = stubFetch(
+      () =>
+        recommendResponse([
+          candidate({ id: "core-1", verified: true, pool: "core" }),
+          candidate({ id: "tail-1", verified: false, pool: "longtail" })
+        ])
+    );
+    const result = await service(impl).search("user-1", { messages: MESSAGES });
+    expect(result.resources.map((item) => item.pool)).toEqual(["core", "longtail"]);
+    expect(result.resources.map((item) => item.verified)).toEqual([true, false]);
+  });
+
+  it("CRM 未给 pool 时按 verified 兜底（口径与 CRM 一致，不会把核心池标成长尾）", async () => {
+    const { impl } = stubFetch(() => recommendResponse([candidate({ verified: true })]));
+    const result = await service(impl).search("user-1", { messages: MESSAGES });
+    expect(result.resources[0].pool).toBe("core");
+  });
+});

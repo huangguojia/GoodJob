@@ -27,8 +27,14 @@ export const queryKeys = {
   crmTodos: ["crm-todos"] as const,
   automation: ["automation"] as const,
   automationRuns: ["automation-runs"] as const,
+  followupSyncRuns: ["followup-sync-runs"] as const,
   trainingProfiles: ["training-profiles"] as const,
   trainingLibrary: ["training-library"] as const,
+  /**
+   * 候选池是 `trainingLibrary` 的**子键**（故意）：
+   * invalidateQueries({ queryKey: ["training-library"] }) 按前缀失效，一次能刷到两个列表。
+   */
+  trainingLibraryCandidates: ["training-library", "candidate"] as const,
   autoChatSettings: (accountId?: string) => ["auto-chat-settings", accountId ?? "all"] as const,
   autoChatEngine: ["auto-chat-engine"] as const,
   autoChatDrafts: (status?: string) => ["auto-chat-drafts", status ?? "all"] as const

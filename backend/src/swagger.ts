@@ -464,7 +464,12 @@ function requestBodyFor(method: HttpMethod, path: string) {
         required: ["email", "password"],
         properties: {
           email: { type: "string", format: "email", description: "CRM 登录邮箱" },
-          password: { type: "string", format: "password", description: "CRM 登录密码" }
+          password: { type: "string", format: "password", description: "CRM 登录密码" },
+          client: {
+            type: "string",
+            enum: ["web", "plugin"],
+            description: "登录端。`plugin` = WhatsApp 扩展 / 本机插件（发一个月令牌、不写 cookie）；缺省 = 网页端 8 小时。"
+          }
         },
           additionalProperties: false
         }

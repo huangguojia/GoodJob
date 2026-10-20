@@ -49,6 +49,8 @@ export interface ExchangeMessage {
   errorMessage: string;
   /** 自动建线索闭环：收到的报文若已生成/关联线索，这里记录线索 ID */
   leadId: string;
+  /** 报文对端的来源 IP（入站=对方推来的地址；出站=触发这次推送的 CRM 用户地址）。 */
+  sourceIp: string;
   createdAt: string;
 }
 
@@ -64,7 +66,7 @@ interface MessageRow extends RowDataPacket {
   direction: string; topic: string; method: string; url: string;
   request_headers_json: string; request_body: string; status: string;
   http_status: number | null; response_headers_json: string; response_body: string;
-  duration_ms: number | null; error_message: string; lead_id: string; created_at: Date;
+  duration_ms: number | null; error_message: string; lead_id: string; source_ip: string | null; created_at: Date;
 }
 
 function iso(value: Date | string | null): string {
@@ -112,6 +114,7 @@ function mapMessage(row: MessageRow): ExchangeMessage {
     durationMs: row.duration_ms ?? null,
     errorMessage: row.error_message || "",
     leadId: row.lead_id || "",
+    sourceIp: row.source_ip || "",
     createdAt: iso(row.created_at)
   };
 }
@@ -148,6 +151,7 @@ export interface ExchangeMessageInput {
   durationMs: number | null;
   errorMessage: string;
   leadId: string;
+  sourceIp?: string;
 }
 
 export async function ensureExchangeSchema(pool: Pool): Promise<void> {
@@ -192,6 +196,7 @@ export async function ensureExchangeSchema(pool: Pool): Promise<void> {
       duration_ms INT NULL,
       error_message VARCHAR(1000) NOT NULL DEFAULT '',
       lead_id VARCHAR(64) NOT NULL DEFAULT '',
+      source_ip VARCHAR(64) NOT NULL DEFAULT '',
       created_at DATETIME(3) NOT NULL,
       KEY idx_exchange_msg_team_time (team_id, created_at),
       KEY idx_exchange_msg_endpoint (endpoint_id, created_at)
@@ -209,6 +214,12 @@ export async function ensureExchangeSchema(pool: Pool): Promise<void> {
   );
   if (!(messageCols as unknown[]).length) {
     await pool.query("ALTER TABLE exchange_messages ADD COLUMN lead_id VARCHAR(64) NOT NULL DEFAULT '' AFTER error_message");
+  }
+  const [sourceIpCols] = await pool.query<RowDataPacket[]>(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exchange_messages' AND COLUMN_NAME = 'source_ip'"
+  );
+  if (!(sourceIpCols as unknown[]).length) {
+    await pool.query("ALTER TABLE exchange_messages ADD COLUMN source_ip VARCHAR(64) NOT NULL DEFAULT '' AFTER lead_id");
   }
 }
 
@@ -235,6 +246,15 @@ export class MysqlExchangeRepository {
     const [rows] = await this.pool.query<EndpointRow[]>(
       "SELECT * FROM exchange_endpoints WHERE inbound_key = ? AND enabled = 1 LIMIT 1",
       [inboundKey]
+    );
+    return rows[0] ? mapEndpoint(rows[0]) : null;
+  }
+
+  /** 按名称找对接方（系统自动登记的内置对接方复用它，避免每次收发都新建）。 */
+  async findEndpointByName(teamId: string, name: string): Promise<ExchangeEndpoint | null> {
+    const [rows] = await this.pool.query<EndpointRow[]>(
+      "SELECT * FROM exchange_endpoints WHERE team_id = ? AND name = ? ORDER BY created_at LIMIT 1",
+      [teamId, name]
     );
     return rows[0] ? mapEndpoint(rows[0]) : null;
   }
@@ -308,17 +328,18 @@ export class MysqlExchangeRepository {
     const message: ExchangeMessage = {
       id: `exm_${randomUUID().replaceAll("-", "").slice(0, 20)}`,
       createdAt: new Date().toISOString(),
+      sourceIp: "",
       ...input
     };
     await this.pool.query(
       `INSERT INTO exchange_messages
         (id, team_id, endpoint_id, endpoint_name, direction, topic, method, url, request_headers_json,
-         request_body, status, http_status, response_headers_json, response_body, duration_ms, error_message, lead_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         request_body, status, http_status, response_headers_json, response_body, duration_ms, error_message, lead_id, source_ip, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [message.id, message.teamId, message.endpointId, message.endpointName, message.direction, message.topic,
         message.method, message.url, message.requestHeadersJson, message.requestBody, message.status,
         message.httpStatus, message.responseHeadersJson, message.responseBody, message.durationMs,
-        message.errorMessage, message.leadId, new Date(message.createdAt)]
+        message.errorMessage, message.leadId, message.sourceIp || "", new Date(message.createdAt)]
     );
     return message;
   }

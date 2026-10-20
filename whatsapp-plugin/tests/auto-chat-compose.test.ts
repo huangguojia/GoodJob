@@ -132,7 +132,7 @@ process.stdin.on("end", () => {
     ["engineName", "goodjob-auto-reply"]
   ];
   const reply = probes.map(([name, needle]) => (prompt.includes(needle) ? name + "=1" : name + "=0")).join(" ");
-  const text = JSON.stringify({ reply, confidence: 0.88, reason: "probe", language: "en" });
+  const text = JSON.stringify({ reply, replyZh: "中文稿：" + reply, confidence: 0.88, reason: "probe", language: "en" });
   emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
   emit({ type: "result", subtype: "success", is_error: false, result: text, session_id: "sess-compose" });
   process.exit(0);
@@ -242,6 +242,7 @@ process.stdin.on("end", () => {
     const result = response.body as {
       action: string;
       reply: string;
+      replyZh: string;
       engine: string;
       model: string | null;
       evidence: { crm: { matchedBy: string; customer: string; followUps: number; quotes: number; knowledge: Array<{ title: string }> } };
@@ -251,6 +252,9 @@ process.stdin.on("end", () => {
     expect(result.engine).toBe("cli");
     // 假 CLI 把「提示词里有没有这些标记」当成回复写回来了。
     expect(result.reply).toBe("company=1 followup=1 quote=1 knowledge=1 engineName=1");
+    // 中文版必须原样回到右列（业务员靠它复核「我到底答应了什么」）：
+    // 这一格不能靠事后回译，必须是同一次生成给的。
+    expect(result.replyZh).toBe("中文稿：company=1 followup=1 quote=1 knowledge=1 engineName=1");
     expect(result.evidence.crm.matchedBy).toBe("phone");
     expect(result.evidence.crm.customer).toBe(COMPANY_MARKER);
     expect(result.evidence.crm.followUps).toBe(1);
@@ -296,10 +300,10 @@ process.stdin.on("end", () => {
       .post(`/api/v1/conversations/${seeded.conversationId}/messages`)
       .send({ accountId: europe.id, clientMessageId: "compose-seed-0001", body: "我们的最小起订量是 500 件。" })
       .expect(201);
-    const profile = (await api()
+    const profile = ((await api()
       .post("/api/v1/training/profiles")
       .send({ name: "Compose 话术档案", useAi: false, conversationIds: [seeded.conversationId] })
-      .expect(201)).body as { id: string };
+      .expect(201)).body as { profile: { id: string } }).profile;
 
     try {
       // 全局设成 auto：后台通道（runNow）在这个配置下是会直接发出的。
@@ -389,6 +393,38 @@ process.stdin.on("end", () => {
     ).expect(200);
     const body = response.body as { reply: string; reason: string };
     expect(body.reply).toContain("500");
+    expect(body.reason).not.toContain("没有相近问法");
+  });
+
+  it("客户说俄语时用中文译文检索训练库，而不是拿原文空比一场", async () => {
+    // 训练库是中文写的、检索是纯词法：俄语原文与中文条目交集恒为 0。
+    // 扩展左侧本来就有中文译文，顺流带上来即可命中 —— 这条用例把「带」与「不带」都钉住，
+    // 只测带译文那一半的话，「其实还是靠原文蒙中」这种回归不会被发现。
+    await api()
+      .post("/api/v1/training/library")
+      .send({ kind: "qa", question: "质保期多久？运费谁出？", answer: "整机质保 24 个月，运费由我方承担。", priority: 5 })
+      .expect(201);
+
+    const russian = "Каков срок гарантии и кто оплачивает доставку?";
+    const withoutZh = await compose(
+      composePayload({
+        engine: "rules",
+        messages: [{ direction: "inbound", body: russian, occurredAt: "2026-10-01T08:00:00.000Z" }]
+      })
+    ).expect(200);
+    expect((withoutZh.body as { reason: string }).reason).toContain("没有相近问法");
+
+    const withZh = await compose(
+      composePayload({
+        engine: "rules",
+        messages: [
+          { direction: "inbound", body: russian, zh: "质保期多久？运费谁出？", occurredAt: "2026-10-01T08:00:00.000Z" }
+        ]
+      })
+    ).expect(200);
+    const body = withZh.body as { reply: string; action: string; reason: string };
+    expect(body.action).toBe("reply");
+    expect(body.reply).toContain("24");
     expect(body.reason).not.toContain("没有相近问法");
   });
 

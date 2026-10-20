@@ -1,9 +1,9 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { platform as osPlatform } from "node:os";
 import path from "node:path";
-import readline from "node:readline";
+import readline, { type Interface } from "node:readline";
 import { promisify } from "node:util";
 import type { CliEngineStatus } from "../../shared/types.js";
 
@@ -14,6 +14,21 @@ const MAC_BUNDLED_BINARY = "/Applications/WorkBuddy.app/Contents/Resources/app.a
 
 const MAX_RESULT_BYTES = 200_000;
 const MAX_STDERR_BYTES = 8_000;
+/** 常驻进程每轮保留的行数上限：只用于解析这一轮的终态，不需要无限攒。 */
+const MAX_WARM_LINES = 4_000;
+/** 预热池默认容量。2 = 「回复」与「资料复排」各占一个，是唯一会同时出现的并发。 */
+const WARM_TARGET_DEFAULT = 2;
+/** 预热进程闲置多久后回收。CLI 空闲几乎不吃 CPU，但没必要无限占内存。 */
+const WARM_IDLE_MS = 30 * 60_000;
+/**
+ * 进程 spawned 之后多久才算「加载完成」。
+ *
+ * CLI 不会在就绪时输出任何信号（实测空转 3 秒 stdout 一行都没有），只能按时间判断。
+ * 实测（串行、单进程）：spawn 后立刻发请求，总耗时 ≈ 4.2 秒；空转 2.5 秒以上再发，
+ * 请求本身只要 ≈ 1.9~2.6 秒。所以这 2.5 秒就是「Node 加载 + 拉配置 + 鉴权 + 组装
+ * system prompt」的那一坨，提前付掉就没有了。
+ */
+const WARM_READY_MS = 2_500;
 
 /**
  * ⚠️ 这份清单与 `goodjob-runner/src/workbuddy-adapter.ts::STRIPPED_ENVIRONMENT_KEYS` 是同一份知识，
@@ -285,6 +300,40 @@ interface CliEngineOptions {
   /** 探测结果缓存时长：成功后 5 分钟，失败后 20 秒（能力掉线要秒级自愈）。 */
   successTtlMs?: number;
   failureTtlMs?: number;
+  /**
+   * 常驻预热池。默认关闭：只有真正跑 CLI 的进程（app.ts）才开，回测里的假 CLI
+   * 是「读 stdin 到 EOF」的老形态，开了反而要把假 CLI 也改成流式输入。
+   */
+  warm?: boolean;
+  /** 池容量。默认 2（回复 + 资料复排）。 */
+  warmTarget?: number;
+  /** 进程启动后多久算就绪（毫秒）。回测里假 CLI 是瞬时的，会调小。 */
+  warmReadyMs?: number;
+}
+
+/**
+ * 一个**干净的**常驻 CLI 进程：冷启动已经付过，还没接过任何请求。
+ *
+ * 为什么是「用完即弃」而不是「复用会话」：实测同一个 `--print --input-format stream-json`
+ * 进程的第二轮会记得第一轮的内容（问它上一轮说过的暗号，它能原样答出来）。
+ * 换句话说，复用进程就是让 A 客户的报价出现在 B 客户的上下文里。
+ * `/clear` 在 `--print` 下不生效（实测第三轮仍记得暗号），所以只能靠「一轮一进程」隔离。
+ *
+ * 池子里**只放干净进程**：`takeWarm()` 取走后立刻从池里摘掉，用完 kill，再后台补一个。
+ */
+interface WarmWorker {
+  child: ChildProcessWithoutNullStreams;
+  reader: Interface;
+  key: string;
+  lines: string[];
+  stderr: string;
+  createdAt: number;
+  lastUsedAt: number;
+  closed: boolean;
+  /** 当前轮的行回调；`null` = 这个进程还干净，没在跑任务。 */
+  onLine: ((line: string) => void) | null;
+  /** 进程意外退出的回调（当前轮需要立刻失败，而不是等到超时）。 */
+  onExit: (() => void) | null;
 }
 
 /**
@@ -386,13 +435,25 @@ function redact(value: string): string {
 export class CliEngine {
   private cache?: { at: number; status: CliEngineStatus };
   private readonly options: CliEngineOptions;
+  /** key = `${model}|${effort}`。池里只存**干净**进程（没接过任何任务）。 */
+  private readonly warm = new Map<string, WarmWorker[]>();
+  /** 正在后台补位的数量，避免一批请求同时各补一个把进程数打爆。 */
+  private warming = 0;
+  /** 已 spawn 但还没就绪的进程：dispose 时也要能收掉，否则会漏。 */
+  private readonly booting = new Set<WarmWorker>();
+  private warmTimer: NodeJS.Timeout | null = null;
 
   constructor(options: CliEngineOptions = {}) {
     this.options = {
       successTtlMs: 5 * 60_000,
       failureTtlMs: 20_000,
+      warmTarget: WARM_TARGET_DEFAULT,
       ...options
     };
+    if (this.options.warm) {
+      this.warmTimer = setInterval(() => this.reapIdle(), 60_000);
+      this.warmTimer.unref?.();
+    }
   }
 
   binary(): string {
@@ -506,7 +567,318 @@ export class CliEngine {
    * 跑一次非交互 CLI 任务，把提示词写进 stdin（**不能**走命令行参数：正文里有引号/换行会被 shell 与
    * argv 长度限制破坏），读 stream-json 直到进程退出。
    */
+  /**
+   * 预热。插件启动后调一次即可（不阻塞启动流程）。
+   *
+   * 为什么值得：实测一次 `--print` 冷启动 ≈ 4.2 秒（Node 启动 + 拉配置 + 鉴权 + 组装
+   * 20k token 的 system prompt），而模型本身生成一句话只要 1~2 秒。
+   * 也就是说「点开面板等 8 秒」里有五六秒是在等一个空进程把架子搭起来。
+   * 预热把这几秒挪到没人等的时刻，第一次请求就只剩生成时间。
+   */
+  async warmup(model = "", effort = ""): Promise<void> {
+    if (!this.options.warm) return;
+    /**
+     * 预热两组参数：
+     * - 空 = 跟随账号默认（设置里没选模型时请求就是这么发的）；
+     * - 出厂默认 `deepseek-v4.1-flash`（用户在设置里选了它，这是最常见的一档）。
+     *
+     * 池容量按 2 算，正好各一个。用户选了别的模型时第一次仍要现场启动，
+     * 但那次请求结束后会按真实参数补位，第二次起就命中。
+     */
+    const plans = model || effort ? [{ model, effort }] : [{ model: "", effort: "" }, { model: CLI_MODEL_DEFAULT, effort: "" }];
+    // 并行预热：两个进程各自要等 2.5 秒就绪，串起来就是 5 秒，而它们互不依赖。
+    await Promise.all(plans.map((plan) => this.ensureWarm(plan.model, plan.effort)));
+  }
+
+  /** 关停：把池里的进程全部收掉（测试 / 进程退出时用）。 */
+  dispose(): void {
+    if (this.warmTimer) clearInterval(this.warmTimer);
+    this.warmTimer = null;
+    for (const worker of this.booting) this.kill(worker);
+    this.booting.clear();
+    for (const list of this.warm.values()) for (const worker of list) this.kill(worker);
+    this.warm.clear();
+  }
+
+  private warmCount(): number {
+    let total = 0;
+    for (const list of this.warm.values()) total += list.length;
+    return total;
+  }
+
+  /** 后台补一个干净进程。失败静默：真实请求自己会把错误报出来。 */
+  private async ensureWarm(model: string, effort: string): Promise<void> {
+    if (!this.options.warm) return;
+    const target = Math.max(1, this.options.warmTarget ?? WARM_TARGET_DEFAULT);
+    if (this.warmCount() + this.warming >= target) return;
+    this.warming += 1;
+    let worker: WarmWorker | null = null;
+    try {
+      worker = await this.spawnWarm(model, effort);
+      this.booting.add(worker);
+      /**
+       * 等它真正加载完再入池。进程刚 spawn 时写进去的请求，仍然要陪它把
+       * 「Node 加载 + 拉配置 + 鉴权」走完（实测总耗时恒定在 4.2 秒左右）；
+       * 空转 2.5 秒后再发，请求本身才只要 2 秒。
+       */
+      const readyMs = Math.max(0, this.options.warmReadyMs ?? WARM_READY_MS);
+      if (readyMs) await new Promise((resolve) => setTimeout(resolve, readyMs));
+      if (worker.closed) return;
+      const list = this.warm.get(worker.key) ?? [];
+      list.push(worker);
+      this.warm.set(worker.key, list);
+    } catch {
+      // 预热失败不影响功能：下一次请求会退回现场启动并如实报错。
+    } finally {
+      if (worker) this.booting.delete(worker);
+      this.warming -= 1;
+    }
+  }
+
+  /** 取一个干净的预热进程。取走即从池中摘掉（它马上就不再干净了）。 */
+  private takeWarm(model: string, effort: string): WarmWorker | null {
+    const key = `${model}|${effort}`;
+    const list = this.warm.get(key);
+    if (!list?.length) return null;
+    const worker = list.shift()!;
+    if (!list.length) this.warm.delete(key);
+    if (worker.closed) return this.takeWarm(model, effort);
+    worker.lastUsedAt = Date.now();
+    return worker;
+  }
+
+  private reapIdle(): void {
+    const now = Date.now();
+    for (const [key, list] of this.warm) {
+      const keep: WarmWorker[] = [];
+      for (const worker of list) {
+        if (worker.closed) continue;
+        if (now - worker.lastUsedAt > WARM_IDLE_MS) {
+          this.kill(worker);
+          continue;
+        }
+        keep.push(worker);
+      }
+      if (keep.length) this.warm.set(key, keep);
+      else this.warm.delete(key);
+    }
+  }
+
+  private kill(worker: WarmWorker): void {
+    if (worker.closed) return;
+    worker.closed = true;
+    worker.onLine = null;
+    worker.onExit = null;
+    try {
+      worker.reader.close();
+    } catch {
+      /* 已经关了 */
+    }
+    try {
+      worker.child.stdin.end();
+    } catch {
+      /* 已经断了 */
+    }
+    /**
+     * 先让 stdin 的关闭落地，再发信号。`--print --input-format stream-json` 收到 EOF 会
+     * 自己退出；立刻 SIGTERM 会让它连收尾都来不及（实测连 stdin 的 end 事件都处理不到）。
+     * 300ms 后还没退就强推。
+     */
+    const term = setTimeout(() => {
+      try {
+        worker.child.kill("SIGTERM");
+      } catch {
+        /* 已经退了 */
+      }
+    }, 300);
+    term.unref?.();
+    const force = setTimeout(() => {
+      try {
+        worker.child.kill("SIGKILL");
+      } catch {
+        /* 已经退了 */
+      }
+    }, 3_000);
+    force.unref?.();
+  }
+
+  private destroyWorker(worker: WarmWorker): void {
+    this.kill(worker);
+  }
+
+  /** 起一个常驻进程。参数与 `runCold` 完全一致，只多一个流式输入。 */
+  private async spawnWarm(model: string, effort: string): Promise<WarmWorker> {
+    const workspace = await this.ensureWorkspace();
+    const args = [
+      "--print",
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--no-session-persistence",
+      "--permission-mode", "plan",
+      /**
+       * 给 2 轮，与一次性进程（`runCold` 里 auto-chat 传的 `maxTurns: 2`）一致。
+       * 提示词第一行要求模型先用 Skill 工具加载技能，那是第 1 轮；第 2 轮才产出 JSON。
+       * 写成 1 会让技能静默不生效 —— 回复还是能出来，但降档成"没读过方法论"。
+       */
+      "--max-turns", "2",
+      "--disallowedTools", CLI_DISALLOWED_TOOLS.join(",")
+    ];
+    if (effort) args.push("--effort", effort);
+    if (model) args.push("--model", model);
+
+    const child = spawn(this.binary(), args, {
+      cwd: workspace,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: this.childEnvironment()
+    }) as ChildProcessWithoutNullStreams;
+
+    const worker: WarmWorker = {
+      child,
+      reader: readline.createInterface({ input: child.stdout }),
+      key: `${model}|${effort}`,
+      lines: [],
+      stderr: "",
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      closed: false,
+      onLine: null,
+      onExit: null
+    };
+    child.stderr.on("data", (chunk: Buffer) => {
+      worker.stderr = `${worker.stderr}${chunk.toString("utf8")}`.slice(0, MAX_STDERR_BYTES);
+    });
+    worker.reader.on("line", (line) => {
+      worker.onLine?.(line);
+    });
+    const onGone = (): void => {
+      if (worker.closed) return;
+      worker.closed = true;
+      worker.onExit?.();
+    };
+    worker.reader.on("close", onGone);
+    child.on("error", onGone);
+    child.stdin.on("error", () => undefined);
+    return worker;
+  }
+
+  /**
+   * 在一个常驻进程上跑**一轮**。
+   *
+   * 输入是 stream-json 的一行 user 消息，输出读到 `result` 事件即收口 ——
+   * 不必等进程退出（老路径要等 close，白等一段收尾）。
+   */
+  private runOnWorker(worker: WarmWorker, input: CliRunOptions): Promise<CliRunResult> {
+    const timeoutMs = Math.max(5_000, input.timeoutMs ?? (this.options.timeoutSeconds ?? 90) * 1_000);
+    return new Promise<CliRunResult>((resolve, reject) => {
+      const started = Date.now();
+      worker.lines = [];
+      worker.stderr = "";
+      let settled = false;
+
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        input.signal?.removeEventListener("abort", onAbort);
+        worker.onLine = null;
+        worker.onExit = null;
+      };
+      const done = (finish: () => void): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        finish();
+      };
+      const fail = (message: string): void => {
+        done(() => reject(new Error(redact(message))));
+      };
+
+      const timer = setTimeout(() => {
+        try {
+          worker.child.kill("SIGKILL");
+        } catch {
+          /* 已经退了 */
+        }
+        done(() => reject(new Error(`本机 CLI 执行超过 ${Math.round(timeoutMs / 1_000)} 秒，已停止`)));
+      }, timeoutMs);
+      timer.unref?.();
+
+      const onAbort = (): void => {
+        try {
+          worker.child.kill("SIGTERM");
+        } catch {
+          /* 已经退了 */
+        }
+        done(() => reject(new Error("本机 CLI 任务已取消")));
+      };
+      if (input.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+
+      worker.onExit = () => {
+        fail(worker.stderr.trim() || "本机 CLI 进程提前退出（常见原因：CLI 未登录）");
+      };
+      worker.onLine = (line) => {
+        if (worker.lines.length < MAX_WARM_LINES) worker.lines.push(line);
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(line.trim()) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        if (String(event.type || "") !== "result") return;
+        const parsed = parseCliStream(worker.lines);
+        if (parsed.failed) {
+          fail(parsed.error || worker.stderr.trim() || "本机 CLI 返回失败");
+          return;
+        }
+        if (!parsed.text.trim()) {
+          // 退出码 0 但没有任何内容：CLI 未登录时就是这样（必须读 result 事件才发现）。
+          fail(worker.stderr.trim() || "本机 CLI 没有返回任何内容（常见原因：CLI 未登录）");
+          return;
+        }
+        done(() =>
+          resolve({
+            text: parsed.text,
+            model: parsed.model,
+            sessionId: parsed.sessionId,
+            durationMs: Date.now() - started,
+            timedOut: false
+          })
+        );
+      };
+
+      try {
+        const message = { type: "user", message: { role: "user", content: [{ type: "text", text: input.prompt }] } };
+        worker.child.stdin.write(`${JSON.stringify(message)}\n`);
+      } catch (error) {
+        fail(`本机 CLI 无法写入：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    });
+  }
+
+  /**
+   * 跑一次 CLI 任务。
+   *
+   * `warm` 打开时优先用预热好的干净进程（省掉约 4 秒冷启动），用完即弃并后台补位；
+   * 池空则现场起一个（等价于老行为，第一次请求不会更慢）。
+   */
   async run(input: CliRunOptions): Promise<CliRunResult> {
+    if (!this.options.warm) return this.runCold(input);
+    const model = sanitizeCliModel(input.model);
+    const effort = sanitizeCliEffort(input.effort);
+    const worker = this.takeWarm(model, effort) ?? (await this.spawnWarm(model, effort));
+    try {
+      return await this.runOnWorker(worker, input);
+    } finally {
+      this.destroyWorker(worker);
+      void this.ensureWarm(model, effort);
+    }
+  }
+
+  /** 一次性进程：老路径，保留给 `warm:false`（回测里的假 CLI 就是这种形态）。 */
+  private async runCold(input: CliRunOptions): Promise<CliRunResult> {
     const binary = this.binary();
     const timeoutMs = Math.max(5_000, input.timeoutMs ?? (this.options.timeoutSeconds ?? 90) * 1_000);
     const workspace = await this.ensureWorkspace(input.workspace);

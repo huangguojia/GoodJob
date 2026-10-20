@@ -17,6 +17,19 @@ const scrypt = promisify(scryptCallback);
 const TOKEN_ISSUER = "goodjob-crm";
 const TOKEN_AUDIENCE = "goodjob-crm-web";
 const TOKEN_TTL_SECONDS = 8 * 60 * 60;
+
+/**
+ * 插件（WhatsApp 扩展 / 本机插件控制台）专用令牌时长：一个月。
+ *
+ * 为什么单独开一档、而不是把上面那档直接改成一个月：网页端是**共享电脑上的长期会话**，
+ * 8 小时是它的合理边界；而扩展只在你自己的浏览器里、替你把消息读出来交给本机插件，
+ * 一天里断一次就得重输密码 —— 用户上线当天就撞了两次 401。
+ *
+ * 长令牌不等于「不可撤销」：`requireAuth` 每次请求都会比对账号状态与 `authVersion`
+ * （见 auth.ts 的 requireAuth），插件侧 `verifyCrmToken` 也校验 `exp`，
+ * 所以停用账号 / 改密 / 提权后，旧令牌会随 `authVersion` 变化立即失效。
+ */
+export const PLUGIN_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const EPHEMERAL_DEVELOPMENT_SECRET = randomBytes(48).toString("base64url");
 export const AUTH_COOKIE_NAME = "gj_session";
 export const CSRF_COOKIE_NAME = "gj_csrf";
@@ -108,7 +121,7 @@ export function publicUser(user: ReturnType<typeof getStore>["users"][number]): 
   };
 }
 
-export function signToken(user: SessionUser, context: { mfaVerified?: boolean } = {}): string {
+export function signToken(user: SessionUser, context: { mfaVerified?: boolean; ttlSeconds?: number } = {}): string {
   return jwt.sign(
     { ver: user.authVersion, mfa: context.mfaVerified === true },
     jwtSecret(),
@@ -116,7 +129,7 @@ export function signToken(user: SessionUser, context: { mfaVerified?: boolean } 
       subject: user.id,
       issuer: TOKEN_ISSUER,
       audience: TOKEN_AUDIENCE,
-      expiresIn: TOKEN_TTL_SECONDS,
+      expiresIn: context.ttlSeconds ?? TOKEN_TTL_SECONDS,
       jwtid: randomBytes(16).toString("hex"),
       algorithm: "HS256"
     }

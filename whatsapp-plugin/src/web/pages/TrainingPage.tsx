@@ -1,14 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Bot,
   BookOpen,
+  Check,
   CheckCircle2,
   Download,
   FileDown,
   GraduationCap,
   Library,
+  ListChecks,
   MessagesSquare,
   Play,
   Plus,
@@ -167,6 +169,10 @@ export function TrainingPage() {
   const [aiProviderId, setAiProviderId] = useState("");
   const [exportResult, setExportResult] = useState<TrainingExportClientResult>();
   const [deleteCandidate, setDeleteCandidate] = useState<TrainingProfile | null>(null);
+  /** 训练结果与「是否复用」分开记：复用时界面要说清楚「没花钱跑模型」，不能让人以为白等了。 */
+  const [trainOutcome, setTrainOutcome] = useState<{ profile: TrainingProfile; reused: boolean }>();
+  /** 训练是同步接口（CLI 提炼可能要几十秒），等待期间必须给出活着的时间反馈，不能只有一个转圈。 */
+  const [trainElapsed, setTrainElapsed] = useState(0);
 
   const profilesQuery = useQuery({ queryKey: queryKeys.trainingProfiles, queryFn: api.trainingProfiles });
   const providersQuery = useQuery({ queryKey: queryKeys.aiProviders, queryFn: api.aiProviders });
@@ -222,12 +228,26 @@ export function TrainingPage() {
       useAi,
       providerId: useAi && aiProviderId ? aiProviderId : undefined
     }),
-    onSuccess: (profile) => {
+    onSuccess: ({ profile, reused }) => {
       setProfileName("");
-      queryClient.setQueryData(queryKeys.trainingProfiles, (current: TrainingProfile[] | undefined) => [profile, ...(current ?? [])]);
+      if (!reused) {
+        queryClient.setQueryData(queryKeys.trainingProfiles, (current: TrainingProfile[] | undefined) => [profile, ...(current ?? [])]);
+      }
       void queryClient.invalidateQueries({ queryKey: queryKeys.trainingProfiles });
+      setTrainOutcome({ profile, reused });
     }
   });
+
+  // 训练等待计时：同步接口最长可能等几分钟（CLI 提炼），每秒报一次「还活着」。
+  useEffect(() => {
+    if (!trainMutation.isPending) {
+      setTrainElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setTrainElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [trainMutation.isPending]);
   const removeMutation = useMutation({
     mutationFn: api.deleteTrainingProfile,
     onSuccess: () => {
@@ -337,12 +357,15 @@ export function TrainingPage() {
           </div>
           <div className="training-actions">
             <button className="button primary" disabled={trainMutation.isPending || (useAi && !aiProviderId)} onClick={() => trainMutation.mutate()}>
-              {trainMutation.isPending ? <Spinner /> : <Wand2 size={16} />} 开始训练
+              {trainMutation.isPending ? <Spinner /> : <Wand2 size={16} />} {trainMutation.isPending ? `提炼中… ${trainElapsed}s` : "开始训练"}
             </button>
-            <span className="training-hint">训练不会修改或删除任何聊天记录。</span>
+            <span className="training-hint">训练不会修改或删除任何聊天记录。走 CLI / AI 提炼时可能需要几十秒。</span>
           </div>
           {trainMutation.error && <div className="notice error-notice"><AlertTriangle size={16} /><span>{trainMutation.error.message}</span></div>}
-          {trainMutation.data && <div className="notice success-notice"><CheckCircle2 size={16} /><span>已生成「{trainMutation.data.name}」：{trainMutation.data.sampleCount} 组话术样板，{trainMutation.data.conversationCount} 个会话。</span></div>}
+          {trainOutcome?.reused && <div className="notice"><CheckCircle2 size={16} /><span>输入与上次完全一致，已直接复用「{trainOutcome.profile.name}」，没有再调用模型。改时间范围或换个名字可以强制重训。</span></div>}
+          {trainOutcome && !trainOutcome.reused && (
+            <div className="notice success-notice"><CheckCircle2 size={16} /><span>已生成「{trainOutcome.profile.name}」：{trainOutcome.profile.sampleCount} 组话术样板，{trainOutcome.profile.conversationCount} 个会话。</span></div>
+          )}
         </article>
       </section>
 
@@ -362,7 +385,7 @@ export function TrainingPage() {
                     <div className="training-profile-title">
                       <strong>{profile.name}</strong>
                       <span className={`training-profile-status is-${profile.status}`}>{profile.status === "ready" ? "可用" : "样本不足"}</span>
-                      <span className={`training-profile-engine is-${profile.engine}`}>{profile.engine === "ai" ? `AI 提炼${profile.model ? ` · ${profile.model}` : ""}` : profile.engine === "web-import" ? "浏览器归档导入" : "规则提炼"}</span>
+                      <span className={`training-profile-engine is-${profile.engine}`}>{profile.engine === "cli" ? `CLI 提炼${profile.model ? ` · ${profile.model}` : ""}` : profile.engine === "ai" ? `AI 提炼${profile.model ? ` · ${profile.model}` : ""}` : profile.engine === "web-import" ? "浏览器归档导入" : "规则提炼"}</span>
                     </div>
                     <button className="icon-button danger" type="button" title="删除训练档案" aria-label={`删除 ${profile.name}`} disabled={removeMutation.isPending} onClick={() => setDeleteCandidate(profile)}><Trash2 size={16} /></button>
                   </header>
@@ -371,6 +394,7 @@ export function TrainingPage() {
                     <span><small>样本</small><b>{formatNumber(profile.sampleCount)}</b></span>
                     <span><small>问答对</small><b>{formatNumber(profile.exchangeCount)}</b></span>
                     <span><small>消息</small><b>{formatNumber(profile.messageCount)}</b></span>
+                    <span><small>被自动聊引用</small><b>{formatNumber(profile.hitCount)}</b>{profile.lastHitAt && <small>最近 {formatTime(profile.lastHitAt)}</small>}</span>
                     <span><small>训练时间</small><b>{formatTime(profile.trainedAt)}</b></span>
                   </div>
                   {profile.error && <div className="training-profile-warning"><AlertTriangle size={14} /><span>{profile.error}</span></div>}
@@ -570,6 +594,17 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
   const queryClient = useQueryClient();
   const libraryQuery = useQuery({ queryKey: queryKeys.trainingLibrary, queryFn: () => api.trainingLibrary() });
   const entries = libraryQuery.data ?? [];
+  /**
+   * 候选池单独取（`status=candidate`）。
+   *
+   * 默认列表与提示词同口径（只出 active），所以导入进来的样本在默认列表里**一条都看不到** ——
+   * 不给它们单开一块，用户导完 45 条档案会以为「导入失败了」。
+   */
+  const candidatesQuery = useQuery({
+    queryKey: queryKeys.trainingLibraryCandidates,
+    queryFn: () => api.trainingLibrary({ status: "candidate" })
+  });
+  const candidates = candidatesQuery.data ?? [];
 
   const [kind, setKind] = useState<TrainingLibraryKind>("qa");
   const [question, setQuestion] = useState("");
@@ -580,10 +615,53 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
   const [matchBody, setMatchBody] = useState("");
   const [notice, setNotice] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<TrainingLibraryEntry | null>(null);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
+  const [candidateFilter, setCandidateFilter] = useState("");
 
   const kindMeta = libraryKinds.find((item) => item.value === kind) ?? libraryKinds[0];
+  const kindLabel = (value: TrainingLibraryKind) => libraryKinds.find((item) => item.value === value)?.label ?? value;
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: queryKeys.trainingLibrary });
   const canSave = answer.trim().length > 0 && (kind !== "qa" || question.trim().length > 0);
+
+  /** 服务端一次最多收 20 条（`/training/library/confirm` 的 zod 上限），界面按同一个数拦住。 */
+  const MAX_CANDIDATE_BATCH = 20;
+  const visibleCandidates = useMemo(() => {
+    const keyword = candidateFilter.trim().toLowerCase();
+    if (!keyword) return candidates;
+    return candidates.filter((entry) =>
+      `${entry.question}\n${entry.answer}\n${entry.tags.join(" ")}`.toLowerCase().includes(keyword)
+    );
+  }, [candidates, candidateFilter]);
+  const allVisibleSelected = visibleCandidates.length > 0 && visibleCandidates.every((entry) => selectedCandidateIds.includes(entry.id));
+
+  const toggleCandidate = (id: string) => {
+    setSelectedCandidateIds((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      if (current.length >= MAX_CANDIDATE_BATCH) {
+        setNotice(`一次最多处理 ${MAX_CANDIDATE_BATCH} 条，先确认或丢弃已勾选的再继续`);
+        return current;
+      }
+      return [...current, id];
+    });
+  };
+  const toggleAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedCandidateIds((current) => current.filter((id) => !visibleCandidates.some((entry) => entry.id === id)));
+      return;
+    }
+    setSelectedCandidateIds(visibleCandidates.slice(0, MAX_CANDIDATE_BATCH).map((entry) => entry.id));
+    if (visibleCandidates.length > MAX_CANDIDATE_BATCH) {
+      setNotice(`已勾选前 ${MAX_CANDIDATE_BATCH} 条（一次上限），处理完再继续`);
+    }
+  };
+
+  /**
+   * 死条目：建了 90 天、一次都没被命中过。它占着提示词预算却不产生价值，
+   * 列表里给它排最前面并标出来，用户一眼能决定留还是清。
+   */
+  const STALE_ENTRY_MS = 90 * 86_400_000;
+  const isStaleEntry = (entry: TrainingLibraryEntry) =>
+    entry.hitCount === 0 && Date.now() - Date.parse(entry.createdAt) > STALE_ENTRY_MS;
 
   const createEntry = useMutation({
     mutationFn: () => api.saveTrainingLibraryEntry({
@@ -621,7 +699,25 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
   const importFromProfile = useMutation({
     mutationFn: () => api.importTrainingLibrary(importProfileId),
     onSuccess: (result) => {
-      setNotice(`导入完成：新增 ${result.created} 条，已存在 ${result.skipped} 条（共 ${result.total} 条样本）`);
+      setNotice(
+        result.created > 0
+          ? `导入完成：${result.created} 条进了候选池（确认后才进提示词），${result.skipped} 条已存在或清洗时被剔除`
+          : `没有新增：${result.skipped} 条已存在或清洗时被剔除（共 ${result.total} 条样本）`
+      );
+      invalidate();
+    }
+  });
+  /** 候选确认 / 丢弃：一次一份名单，走同一个接口（见 server/app.ts 的 /training/library/confirm）。 */
+  const reviewCandidates = useMutation({
+    mutationFn: ({ ids, action }: { ids: string[]; action: "confirm" | "drop" }) =>
+      api.reviewTrainingLibraryCandidates(ids, action),
+    onSuccess: (result, variables) => {
+      setSelectedCandidateIds([]);
+      setNotice(
+        variables.action === "confirm"
+          ? `已确认 ${result.changed} 条，自动回复从下一条消息起会用到它们`
+          : `已丢弃 ${result.changed} 条（留档，不会再被导入加回来）`
+      );
       invalidate();
     }
   });
@@ -631,7 +727,17 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
     onSuccess: (content) => download("training-library.md", content)
   });
 
-  const grouped = libraryKinds.map((item) => ({ meta: item, items: entries.filter((entry) => entry.kind === item.value) }));
+  // 死条目置顶：先把「90 天没被用过」的挑到组内最前面，其余按更新时间倒序 ——
+  // 否则它们会永远沉在几百条下面，谁都看不见。
+  const grouped = libraryKinds.map((item) => ({
+    meta: item,
+    items: entries
+      .filter((entry) => entry.kind === item.value)
+      .sort((left, right) => {
+        const staleDiff = Number(isStaleEntry(right)) - Number(isStaleEntry(left));
+        return staleDiff !== 0 ? staleDiff : Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+      })
+  }));
   const accountName = (id: string | null) => (id ? accounts.find((account) => account.id === id)?.name ?? "已删除账号" : "全部账号");
   const match = matchMutation.data;
 
@@ -641,9 +747,11 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
         <Library size={18} />
         <div>
           <h2>自动回复训练库</h2>
-          <p>专门喂给自动回复的语料库：标准问答对 / 口径片段 / 政策 / 禁用场景。自动回复**先用这里的口径，档案只做语感兜底**。</p>
+          <p>专门喂给自动回复的语料库：标准问答对 / 口径片段 / 政策 / 禁用场景。自动回复<strong>先用这里的口径，档案只做语感兜底</strong>。</p>
         </div>
-        <span className="run-health">{entries.length} 条</span>
+        <span className="run-health">
+          {entries.length} 条生效中{candidates.length > 0 ? ` · ${candidates.length} 条待确认` : ""}
+        </span>
       </header>
 
       <div className="library-form">
@@ -712,6 +820,63 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
         </div>
       </div>
 
+      {candidates.length > 0 && (
+        <div className="library-candidates">
+          <div className="library-tool-head">
+            <ListChecks size={15} />
+            <strong>候选确认</strong>
+            <span className="library-candidates-count">{candidates.length} 条待确认</span>
+          </div>
+          <p>
+            这些是机器从训练档案里抽出来的样本，<strong>还没进提示词</strong>。机器只做能判定对错的机械减法
+            （剔行首时间戳、附件名与体积、站内系统短语、纯占位、被截断的半句话），判断留给人：
+            确认后自动回复才会用它们，丢弃则留档、不会被下次导入又加回来。
+          </p>
+          <div className="library-tool-row">
+            <input
+              value={candidateFilter}
+              onChange={(event) => setCandidateFilter(event.target.value)}
+              placeholder="按问法 / 答法 / 标签筛选"
+            />
+            <button className="button compact" type="button" disabled={!visibleCandidates.length} onClick={toggleAllVisible}>
+              {allVisibleSelected ? "取消全选" : `全选前 ${Math.min(visibleCandidates.length, MAX_CANDIDATE_BATCH)} 条`}
+            </button>
+          </div>
+          <div className="library-candidate-list">
+            {visibleCandidates.map((entry) => (
+              <article className={`library-candidate ${selectedCandidateIds.includes(entry.id) ? "is-selected" : ""}`} key={entry.id}>
+                <label className="library-candidate-pick">
+                  <input type="checkbox" checked={selectedCandidateIds.includes(entry.id)} onChange={() => toggleCandidate(entry.id)} />
+                  <span className="library-candidate-kind">{kindLabel(entry.kind)}</span>
+                </label>
+                <div className="library-candidate-body">
+                  {entry.question && <p className="is-customer">{entry.question}</p>}
+                  <p className="is-agent">{entry.answer}</p>
+                  <div className="library-candidate-meta">
+                    {entry.tags.map((tag) => <span className="library-entry-scope" key={tag}>{tag}</span>)}
+                  </div>
+                </div>
+                <div className="library-candidate-actions">
+                  <button className="button compact" type="button" disabled={reviewCandidates.isPending} onClick={() => reviewCandidates.mutate({ ids: [entry.id], action: "confirm" })}>确认</button>
+                  <button className="button compact" type="button" disabled={reviewCandidates.isPending} onClick={() => reviewCandidates.mutate({ ids: [entry.id], action: "drop" })}>丢弃</button>
+                </div>
+              </article>
+            ))}
+            {visibleCandidates.length === 0 && <small>没有匹配的候选，换个关键词试试。</small>}
+          </div>
+          <div className="library-candidate-batch">
+            <button className="button primary" type="button" disabled={!selectedCandidateIds.length || reviewCandidates.isPending} onClick={() => reviewCandidates.mutate({ ids: selectedCandidateIds, action: "confirm" })}>
+              {reviewCandidates.isPending ? <Spinner /> : <Check size={15} />} 确认选中 {selectedCandidateIds.length} 条
+            </button>
+            <button className="button compact" type="button" disabled={!selectedCandidateIds.length || reviewCandidates.isPending} onClick={() => reviewCandidates.mutate({ ids: selectedCandidateIds, action: "drop" })}>
+              丢弃选中
+            </button>
+            <small>一次最多 {MAX_CANDIDATE_BATCH} 条；候选在确认前不参与检索。</small>
+          </div>
+          {reviewCandidates.error && <div className="notice error-notice"><AlertTriangle size={16} /><span>{reviewCandidates.error.message}</span></div>}
+        </div>
+      )}
+
       <div className="library-match">
         <div className="library-tool-head"><Search size={15} /><strong>命中体检</strong></div>
         <p>粘贴一句客户会说的话，看看自动回复实际会用到库里哪几条——不用真的发消息，调库最快的方式。</p>
@@ -741,8 +906,11 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
       </div>
 
       {libraryQuery.isLoading && <div className="center-loading"><Spinner /> 加载训练库</div>}
-      {!libraryQuery.isLoading && entries.length === 0 && (
+      {!libraryQuery.isLoading && entries.length === 0 && candidates.length === 0 && (
         <EmptyState icon={<Library size={22} />} title="训练库还是空的" description="自动回复在没有相近问法时只能留草稿；先把最常见的几个问法补进来。" />
+      )}
+      {!libraryQuery.isLoading && entries.length === 0 && candidates.length > 0 && (
+        <div className="notice"><ListChecks size={16} /><span>还没有生效的条目：{candidates.length} 条候选在上面的「候选确认」区里，确认后才会进提示词。</span></div>
       )}
       {grouped.filter((group) => group.items.length > 0).map((group) => (
         <div className="library-group" data-kind={group.meta.value} key={group.meta.value}>
@@ -757,6 +925,7 @@ function TrainingLibrarySection({ accounts, profiles }: { accounts: ChannelAccou
                     <span className="library-entry-scope">{accountName(entry.accountId)}</span>
                     {entry.priority !== 100 && <span className="library-entry-scope">优先级 {entry.priority}</span>}
                     {!entry.enabled && <span className="library-entry-source is-off">已停用</span>}
+                    {isStaleEntry(entry) && <span className="library-entry-source is-stale">建了 90 天没被用过，建议清理</span>}
                   </div>
                   <div className="library-entry-actions">
                     <button className="button compact" type="button" disabled={toggleEntry.isPending} onClick={() => toggleEntry.mutate(entry)}>{entry.enabled ? "停用" : "启用"}</button>

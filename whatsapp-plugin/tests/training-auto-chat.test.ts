@@ -15,6 +15,8 @@ import type {
   TrainingProfile
 } from "../src/shared/types";
 import { createAppRuntime, type AppRuntime } from "../src/server/app";
+import type { CliEngine } from "../src/server/services/cli-engine";
+import { TrainingService, buildRefinePromptParts } from "../src/server/services/training-service";
 import { inMemoryDatabasePaths } from "./helpers/test-database";
 import { createDatabase } from "../src/server/db/database";
 import { migrate } from "../src/server/db/migrate";
@@ -234,7 +236,7 @@ describe("Chat history training and auto chat", () => {
         .post("/api/v1/training/profiles")
         .send({ name: "欧洲客户话术", useAi: false })
         .expect(201);
-      profile = response.body as TrainingProfile;
+      profile = (response.body as { profile: TrainingProfile; reused: boolean }).profile;
 
       expect(profile.id).toMatch(/^trn_[0-9a-f]{16}$/u);
       expect(profile).toMatchObject({
@@ -280,6 +282,104 @@ describe("Chat history training and auto chat", () => {
     it("空名字被拒绝", async () => {
       const response = await api().post("/api/v1/training/profiles").send({ name: "   ", useAi: false }).expect(400);
       expect(response.body.code).toBeTruthy();
+    });
+
+    it("本机 CLI 可用时档案优先走 CLI 托管，提示词与 AI 通道同源", async () => {
+      const seenPrompts: string[] = [];
+      const fakeCli = {
+        status: async () => ({ available: true, binaryPath: "fake", model: "glm-5.3", checkedAt: new Date().toISOString() }),
+        run: async (input: { prompt: string }) => {
+          seenPrompts.push(input.prompt);
+          return {
+            text: JSON.stringify({
+              summary: "CLI 提炼的档案摘要",
+              tone: "简短直接",
+              guidelines: ["回复保持英文，先答问题再追问"],
+              signaturePhrases: ["I will prepare the quotation today"],
+              guardrails: []
+            }),
+            model: "glm-5.3",
+            sessionId: "fake-session",
+            durationMs: 12,
+            timedOut: false
+          };
+        }
+      } as unknown as CliEngine;
+      const service = new TrainingService(runtime.repository, undefined, fakeCli);
+      const { profile: trained } = await service.train("test-user", { name: "CLI 托管档案", useAi: false });
+
+      expect(trained.engine).toBe("cli");
+      expect(trained.model).toBe("glm-5.3");
+      expect(trained.summary).toBe("CLI 提炼的档案摘要");
+      expect(trained.error).toBeNull();
+      expect(trained.status).toBe("ready");
+      expect(seenPrompts).toHaveLength(1);
+      // CLI 的 prompt 必须来自与 AI 通道同一份 buildRefinePromptParts：system 与真实样本都在里面。
+      expect(seenPrompts[0]).toContain("reply-style profile");
+      expect(seenPrompts[0]).toContain("Thanks, Sofia. I will prepare the quotation today.");
+      // 直连构造的 service 不走 HTTP，档案已落共享库 —— 收尾清掉，别污染后面的列表断言。
+      await service.remove(trained.id, "test-user");
+    });
+
+    it("CLI 探测通过但调用失败时回落规则结果，并把失败如实写进 error", async () => {
+      const failingCli = {
+        status: async () => ({ available: true, binaryPath: "fake", model: "", checkedAt: new Date().toISOString() }),
+        run: async () => {
+          throw new Error("cli boom");
+        }
+      } as unknown as CliEngine;
+      const service = new TrainingService(runtime.repository, undefined, failingCli);
+      const { profile: trained } = await service.train("test-user", { name: "CLI 失败回落", useAi: false });
+
+      expect(trained.engine).toBe("rules");
+      expect(trained.error).toContain("CLI 提炼失败");
+      expect(trained.error).toContain("cli boom");
+      expect(trained.status).toBe("ready");
+      expect(trained.summary).toContain("基于 3 个会话、4 条消息、1 组问答提炼");
+      await service.remove(trained.id, "test-user");
+    });
+
+    it("同一输入重复训练直接复用上次档案，不再调用模型", async () => {
+      const first = await api().post("/api/v1/training/profiles").send({ name: "指纹复用档案", useAi: false }).expect(201);
+      const firstProfile = (first.body as { profile: TrainingProfile }).profile;
+
+      const second = await api().post("/api/v1/training/profiles").send({ name: "指纹复用档案", useAi: false }).expect(200);
+      const secondBody = second.body as { profile: TrainingProfile; reused: boolean };
+      expect(secondBody.reused).toBe(true);
+      expect(secondBody.profile.id).toBe(firstProfile.id);
+
+      // 范围变了 = 输入变了 → 必须重训，不许拿旧结果糊弄。
+      const third = await api().post("/api/v1/training/profiles").send({ name: "指纹复用档案", useAi: false, from: "2020-01-01" }).expect(201);
+      const thirdBody = third.body as { profile: TrainingProfile; reused: boolean };
+      expect(thirdBody.reused).toBe(false);
+      expect(thirdBody.profile.id).not.toBe(firstProfile.id);
+
+      await api().delete(`/api/v1/training/profiles/${firstProfile.id}`).expect(204);
+      await api().delete(`/api/v1/training/profiles/${thirdBody.profile.id}`).expect(204);
+    });
+
+    it("提炼提示词对出境样本做脱敏（链接/邮箱/号码/百分比/长数字）", async () => {
+      const parts = buildRefinePromptParts({
+        accountId: null,
+        accountName: null,
+        style: { tone: "", guidelines: [], signaturePhrases: [], languages: [], averageLength: 0, emojiRate: 0 },
+        examples: [{
+          conversationId: "c1",
+          occurredAt: "2026-01-01T00:00:00Z",
+          inbound: "Call me at +8613800000000 or sales@example.com, see https://example.com/x",
+          reply: "We can offer 5000 pcs at 30% off."
+        }],
+        stats: { conversations: 1, messages: 2, exchanges: 1 }
+      });
+      expect(parts.user).not.toContain("+8613800000000");
+      expect(parts.user).not.toContain("sales@example.com");
+      expect(parts.user).not.toContain("https://example.com");
+      expect(parts.user).not.toContain("5000");
+      expect(parts.user).toContain("[号码]");
+      expect(parts.user).toContain("[邮箱]");
+      expect(parts.user).toContain("[链接]");
+      expect(parts.user).toContain("[百分比]");
+      expect(parts.user).toContain("[数字]");
     });
   });
 
@@ -396,6 +496,11 @@ describe("Chat history training and auto chat", () => {
       expect(draft.reason).toContain("draft 模式只生成草稿");
       expect(draft.confidence).toBeGreaterThanOrEqual(0.6);
       expect(await outboundBodies(message.conversationId)).toHaveLength(0);
+
+      // 档案使用回流：真正用档案生成出回复就 +1 —— 界面上的「被自动聊引用」靠它。
+      const hitProfile = (await api().get(`/api/v1/training/profiles/${profile.id}`).expect(200)).body as TrainingProfile;
+      expect(hitProfile.hitCount).toBeGreaterThanOrEqual(1);
+      expect(hitProfile.lastHitAt).toBeTruthy();
     });
 
     it("同一轮重复运行不会重复生成草稿", async () => {
@@ -746,10 +851,10 @@ describe("Chat history training and auto chat", () => {
     };
 
     const trainOn = async (name: string, conversationId: string): Promise<TrainingProfile> =>
-      (await api()
+      ((await api()
         .post("/api/v1/training/profiles")
         .send({ name, useAi: false, conversationIds: [conversationId] })
-        .expect(201)).body as TrainingProfile;
+        .expect(201)).body as { profile: TrainingProfile }).profile;
 
     /** 不用 AI Provider 的强模式：命中话术库且过门槛就真的发出去。 */
     const enableAutoReply = async (profileId: string, overrides: Record<string, unknown> = {}): Promise<void> => {

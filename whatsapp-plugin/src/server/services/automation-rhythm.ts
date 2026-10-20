@@ -5,21 +5,8 @@ import { ConversationIntelligenceService } from "./conversation-intelligence.js"
 // 原先这里自带一份，与 crm-context.ts 各自签发时，issuer/audience/TTL 一漂移就是
 // 「一条通道能用、另一条 401」这种极难查的故障。
 import { crmIdentityToken, normalizePhone } from "./crm-client.js";
-
-function localDate(timezone: string, value: Date = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
-}
-
-function nextDaily(hour: number, minute: number, timezone: string): string {
-  const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-  const start = Date.now() + 60_000;
-  for (let offset = 0; offset <= 48 * 60; offset += 1) {
-    const candidate = new Date(start + offset * 60_000);
-    const parts = Object.fromEntries(formatter.formatToParts(candidate).map((part) => [part.type, part.value]));
-    if (Number(parts.hour) === hour && Number(parts.minute) === minute) return candidate.toISOString();
-  }
-  return new Date(start + 24 * 3_600_000).toISOString();
-}
+// 日期函数抽到 time-zone.ts：跟进同步也要「按业务员时区算今天」，两份实现迟早会漂。
+import { localDate, nextDaily } from "./time-zone.js";
 
 interface CrmCustomer {
   id: string;
@@ -36,6 +23,7 @@ export class AutomationRhythmService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private ownerTick: ((ownerUserId: string) => Promise<void>) | null = null;
+  private followupSync: ((ownerUserId: string) => Promise<void>) | null = null;
   constructor(
     private readonly repository: Repository,
     private readonly intelligence: ConversationIntelligenceService,
@@ -51,6 +39,17 @@ export class AutomationRhythmService {
    */
   setOwnerTick(handler: (ownerUserId: string) => Promise<void>): void {
     this.ownerTick = handler;
+  }
+
+  /**
+   * 注册跟进同步（WhatsApp 对话 → CRM 客户跟进）。同样用晚绑定注入，理由与 `setOwnerTick` 一致。
+   *
+   * 它**不受本服务 `enabled` 开关约束**：跟进同步有自己的开关
+   * （`automation_settings.followup_sync_enabled`），两件事互不牵连 ——
+   * 关掉「节奏中心」不该顺手把客户跟进同步也停掉。
+   */
+  setFollowupSync(handler: (ownerUserId: string) => Promise<void>): void {
+    this.followupSync = handler;
   }
 
   async start(): Promise<void> {
@@ -120,6 +119,19 @@ export class AutomationRhythmService {
         const crm = await this.checkCrm(owner);
         if (!crm.ok) continue;
         await this.reconcileCrmTodos(owner);
+        // 跟进同步刻意排在 `settings.enabled` 闸门**之前**：它有自己的开关，而且
+        // 失败必须被单独记下（它的运行记录在 followup_sync_runs 里），不能和节奏中心混在一起。
+        if (this.followupSync) {
+          try {
+            await this.followupSync(owner);
+          } catch (error) {
+            console.error("[communication-automation]", {
+              event: "followup_sync_failed",
+              ownerUserId: owner,
+              error: error instanceof Error ? error.message : "unknown error"
+            });
+          }
+        }
         const settings = await this.repository.getAutomationSettings(owner);
         if (!settings.enabled) continue;
         const dueAnalysis = !settings.nextAnalysisAt || new Date(settings.nextAnalysisAt).getTime() <= Date.now();

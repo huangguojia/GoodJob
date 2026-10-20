@@ -1722,7 +1722,11 @@ function conversionCustomerActivityFromRow(
     content: String(row.content || ""),
     operatorId: String(row.operator_id || ""),
     nextReminder: String(row.next_reminder || ""),
-    createdAt: iso(row.created_at)
+    createdAt: iso(row.created_at),
+    // 编辑留痕（2026-10-14）。转换流程读出来的记录也要带上，
+    // 否则同一条 activity 走不同路径读出来字段不一致。
+    updatedAt: row.updated_at ? iso(row.updated_at) : undefined,
+    editedBy: row.edited_by ? String(row.edited_by) : undefined
   };
 }
 

@@ -76,15 +76,23 @@ export function scoreText(queryTokens: string[], candidate: string): TextScore {
 
 /** 外贸高频问法域的中英等价词组。pattern 测原文，terms 是等价写法（中英都要有）。 */
 const TRADE_TERM_EXPANSIONS: Array<{ pattern: RegExp; terms: string[] }> = [
-  { pattern: /\bmoq\b|起订|最小订|最小量/iu, terms: ["moq", "minimum order", "起订量", "最小起订"] },
-  { pattern: /lead\s?time|货期|交期|交货期|生产周期/iu, terms: ["lead time", "delivery time", "交期", "货期"] },
-  { pattern: /\bprice\b|\bpricing\b|报价|价格|多少钱|单价/iu, terms: ["price", "quotation", "报价", "价格"] },
+  { pattern: /\bmoq\b|minimum\s+order|起订|最小订|最小量|起订量/iu, terms: ["moq", "minimum order", "起订量", "最小起订"] },
+  { pattern: /lead\s?time|货期|交期|交货期|生产周期/iu, terms: ["lead time", "delivery time", "交期", "货期", "生产周期"] },
+  // `how much / cost / rate` 是客户问价最常见、但旧词典漏掉的三种说法：
+  // 它们不含 "price" 也不含「价格」，于是整句扩展为空，短问法直接 0 命中。
+  // `quote / quotation / quoting` 必须留在**问价**组里：旧写法把它们单独归到「报价单」组，
+  // 于是 "Can you give me a quotation for the TR700?" 只扩出 quote/报价单，扩不到 price，
+  // TR700 价格条目共同特征为 0，反而被「你想买什么」这类泛问抢答（10/20 自测实测）。
+  { pattern: /\bprice\b|\bpricing\b|\bhow much\b|\bcosts?\b|\brates?\b|\bquote|\bquotation|\bquoting\b|报价|价格|多少钱|单价|价钱|价目/iu, terms: ["price", "quotation", "quote", "报价", "价格"] },
   { pattern: /\bsample[s]?\b|样品|打样/iu, terms: ["sample", "样品", "打样"] },
   { pattern: /catalog|brochure|leaflet|目录|画册|彩页/iu, terms: ["catalog", "brochure", "目录", "画册"] },
-  { pattern: /shipping|freight|运费|海运|空运/iu, terms: ["shipping", "freight", "运费"] },
-  { pattern: /payment|付款|支付|账期|定金|deposit/iu, terms: ["payment", "deposit", "付款", "定金"] },
-  { pattern: /discount|cheaper|折扣|便宜|优惠/iu, terms: ["discount", "折扣", "优惠"] },
-  { pattern: /certificat|certificate|认证|证书|ce\b|rohs/iu, terms: ["certificate", "certification", "认证", "证书"] },
+  { pattern: /shipping|freight|运费|海运|空运/iu, terms: ["shipping", "freight", "运费", "海运", "空运"] },
+  { pattern: /payment|付款|支付|账期|定金|deposit/iu, terms: ["payment", "deposit", "付款", "定金", "账期"] },
+  { pattern: /discount|cheaper|折扣|便宜|优惠/iu, terms: ["discount", "折扣", "优惠", "便宜"] },
+  // ⚠️ `ce` 必须有左边界：旧写法 `ce\b` 会命中 "pri**ce**"、"servi**ce**"、"sin**ce**" 的结尾，
+  // 于是问价被悄悄扩展成「认证/证书」，查询特征数翻倍、相似度被稀释到门槛以下 ——
+  // 这是「price? 永远 0 命中」的一半原因（另一半是 2 特征门槛）。
+  { pattern: /certificat|certificate|认证|证书|\bce\b|rohs/iu, terms: ["certificate", "certification", "认证", "证书"] },
   { pattern: /warrant|质保|保修|担保/iu, terms: ["warranty", "质保", "保修"] },
   { pattern: /customs|清关|报关|关税/iu, terms: ["customs", "报关", "清关"] },
   { pattern: /packag|packing|包装|装箱|纸箱/iu, terms: ["packing", "package", "包装", "装箱"] },
@@ -92,7 +100,9 @@ const TRADE_TERM_EXPANSIONS: Array<{ pattern: RegExp; terms: string[] }> = [
   { pattern: /deliver|发货|到货|送达/iu, terms: ["delivery", "发货", "到货"] },
   { pattern: /after.?sales|售后|维保/iu, terms: ["after-sales", "售后"] },
   { pattern: /\bagent\b|\bdistributor\b|代理|经销商/iu, terms: ["agent", "distributor", "代理", "经销商"] },
-  { pattern: /\boem\b|\bodm\b|贴牌|代工|定制/iu, terms: ["oem", "odm", "贴牌", "代工"] },
+  // `定制` 在 pattern 里、却不在 terms 里：客户问 "can you customize?" 时扩不出 oem，
+  // 中文库里写「支持定制吗」也反向对不上 —— 两处都断，补进 terms 才通。
+  { pattern: /\boem\b|\bodm\b|贴牌|代工|定制/iu, terms: ["oem", "odm", "贴牌", "代工", "定制"] },
   { pattern: /material|材质|材料|用什么料/iu, terms: ["material", "材质", "材料"] },
   { pattern: /\bsize\b|尺寸|规格尺寸|多大/iu, terms: ["size", "尺寸"] },
   { pattern: /color|colour|颜色/iu, terms: ["color", "颜色"] },
@@ -101,14 +111,58 @@ const TRADE_TERM_EXPANSIONS: Array<{ pattern: RegExp; terms: string[] }> = [
 ];
 
 /**
+ * 低区分度特征词（虚词 / 客套词 / 通用疑问词）。
+ *
+ * 为什么需要：`Please quote your best FOB price for 200 pcs` 与一条「请拍仪表上的二维码」
+ * 的历史回复共享 please / your / best / for —— 光靠虚词就凑够两个特征，排序被整条带跑。
+ *
+ * **不从 `tokenize` 里删**：切词口径要稳定（话术库与训练库共用，测试也锁着这个口径），
+ * 这里只在排序与短问法判定时把它们当"不算数"的词处理。
+ */
+const STOP_TERMS = new Set([
+  "please", "kindly", "thanks", "thank", "hello", "dear", "sir", "madam",
+  "the", "and", "for", "with", "your", "yours", "you", "our", "ours", "we",
+  "what", "whats", "how", "much", "are", "is", "was", "were", "can", "could",
+  "would", "will", "this", "that", "these", "those", "have", "has", "had",
+  "from", "about", "into", "best", "good", "great", "ok", "okay", "yes",
+  "not", "any", "some", "send", "gave", "give", "tell", "let", "know",
+  "need", "want", "looking", "look", "get", "got", "make", "made", "just",
+  "now", "then", "there", "here", "also", "me", "my", "mine", "it", "its",
+  "be", "been", "do", "does", "did", "if", "or", "per",
+  "多少", "是多", "什么", "怎么", "么样", "可以", "你们", "我们", "他们",
+  "这个", "那个", "哪个", "请问", "一下", "是否", "有没", "没有", "就是",
+  "还是", "如果", "大概", "左右", "需要", "想要", "一个", "一些", "的话"
+]);
+
+/** 贸易域强特征词：词典里所有等价写法的切词结果。短问法放宽门槛时只认这些词。 */
+const DOMAIN_TERMS = new Set(
+  TRADE_TERM_EXPANSIONS.flatMap((rule) => rule.terms.flatMap((term) => tokenize(term)))
+);
+
+/** 这个词是不是「说了等于没说」的虚词。 */
+export function isStopTerm(token: string): boolean {
+  return STOP_TERMS.has(token);
+}
+
+/** 这个词是不是贸易域强特征（price / 报价 / moq / 交期 ……）。 */
+export function isDomainTerm(token: string): boolean {
+  return DOMAIN_TERMS.has(token);
+}
+
+/**
  * 把查询的 token 集按词典扩出等价词。
  * 返回 `original`（原样返回）与 `expanded`（与原词不重复）。
  *
  * 扩展词与原词**同权计分**（不是半权）：半权下旗舰场景「英文 MOQ → 中文起订量」
  * 只有 2 个 bigram × 0.5 = 1.0，过不了 `MIN_QA_MATCHED_TOKENS=2` 的门槛，词典等于白做。
- * 误召回由另外两道闸挡住：① 单条扩展词命中 1 < 2，天然过不了共同特征门槛；
- * ② 相似度分母把扩展词也算进去（querySize = 原词数 + 扩展词数）——扩展词越多，
- * 相似度被稀释得越狠，随便蹭词典的候选过不了 `MIN_QA_SIMILARITY`。
+ * 误召回由另外两道闸挡住：① 相似度分母把扩展词也算进去（querySize = 原词数 + 扩展词数）
+ * ——扩展词越多，相似度被稀释得越狠，随便蹭词典的候选过不了 `MIN_QA_SIMILARITY`；
+ * ② 单条扩展词命中只有 1 个共同特征，默认过不了 `MIN_QA_MATCHED_TOKENS=2`。
+ *
+ * ⚠️ 第 ② 条有**跨语言例外**（10/20 自测后加）：中文按相邻两字切，一个概念只贡献
+ * 1~2 个 bigram，英文问 "warranty" 恰好只对上「质保」一个词。死守 2 个特征等于
+ * 「库里有答案但永远不回」。例外只开在 `rankQa` 的跨语言分支，且要求命中**词典扩展词 +
+ * 贸易域强特征 + 条目是问法**三件事同时成立，纯中文对纯中文的既有行为一个字不变。
  */
 export function expandTokens(tokens: string[], originalText: string): { original: string[]; expanded: string[] } {
   const text = String(originalText ?? "").normalize("NFKC").toLowerCase();

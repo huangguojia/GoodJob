@@ -547,6 +547,140 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS training_library_owner_kind_idx ON training_library_entries(owner_user_id, kind, enabled);
       CREATE INDEX IF NOT EXISTS training_library_fingerprint_idx ON training_library_entries(owner_user_id, fingerprint);
     `
+  },
+  {
+    version: 16,
+    name: "training_library_status",
+    sql: `
+      -- 存量条目保持 active：它们已经是「在用」的语料，不是候选。
+      -- 闸门装在导入路径上（importFromProfile → candidate），不装在迁移上。
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+      CREATE INDEX IF NOT EXISTS training_library_owner_status_idx ON training_library_entries(owner_user_id, status);
+    `
+  },
+  {
+    version: 17,
+    name: "followup_sync",
+    sql: `
+      -- WhatsApp 对话 → CRM 客户跟进自动同步的运行记录（docs/WHATSAPP-FOLLOWUP-SYNC-DESIGN.md §3.6）。
+      -- run_date 上的 UNIQUE 是幂等第一层：同一天手动重跑是更新这一行，不是再插一行。
+      CREATE TABLE IF NOT EXISTS followup_sync_runs (
+        id text PRIMARY KEY,
+        owner_user_id text NOT NULL,
+        run_date date NOT NULL,
+        trigger text NOT NULL DEFAULT 'scheduled',
+        status text NOT NULL DEFAULT 'running',
+        timezone text NOT NULL DEFAULT 'Asia/Shanghai',
+        conversations_scanned integer NOT NULL DEFAULT 0,
+        message_count integer NOT NULL DEFAULT 0,
+        customers_matched integer NOT NULL DEFAULT 0,
+        activities_written integer NOT NULL DEFAULT 0,
+        leads_created integer NOT NULL DEFAULT 0,
+        leads_existing integer NOT NULL DEFAULT 0,
+        skipped integer NOT NULL DEFAULT 0,
+        ambiguous integer NOT NULL DEFAULT 0,
+        engine text NOT NULL DEFAULT 'none',
+        model text,
+        notification_sent integer NOT NULL DEFAULT 0,
+        error text,
+        summary text NOT NULL DEFAULT '',
+        started_at timestamptz NOT NULL,
+        finished_at timestamptz,
+        updated_at timestamptz NOT NULL,
+        UNIQUE(owner_user_id, run_date)
+      );
+      CREATE INDEX IF NOT EXISTS followup_sync_runs_owner_date_idx ON followup_sync_runs(owner_user_id, run_date DESC);
+      CREATE TABLE IF NOT EXISTS followup_sync_items (
+        id text PRIMARY KEY,
+        run_id text NOT NULL REFERENCES followup_sync_runs(id) ON DELETE CASCADE,
+        owner_user_id text NOT NULL,
+        conversation_key text NOT NULL,
+        contact_name text NOT NULL DEFAULT '',
+        contact_phone text NOT NULL DEFAULT '',
+        kind text NOT NULL DEFAULT 'skipped',
+        status text NOT NULL DEFAULT 'skipped',
+        customer_id text,
+        lead_id text,
+        activity_id text,
+        message_count integer NOT NULL DEFAULT 0,
+        summary text NOT NULL DEFAULT '',
+        error text,
+        created_at timestamptz NOT NULL,
+        UNIQUE(run_id, conversation_key)
+      );
+      CREATE INDEX IF NOT EXISTS followup_sync_items_run_idx ON followup_sync_items(run_id, created_at);
+      -- 默认 0 = 关闭。这条链会往 CRM 的 customerActivities 写数据，而那张表同时是
+      -- 业绩考核 followUpCount 的数据源，不能替用户默认打开。
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS followup_sync_enabled integer NOT NULL DEFAULT 0;
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS followup_sync_hour integer NOT NULL DEFAULT 19;
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS followup_sync_minute integer NOT NULL DEFAULT 0;
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS last_followup_sync_at timestamptz;
+      ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS next_followup_sync_at timestamptz;
+    `
+  },
+  {
+    version: 18,
+    name: "training_profile_feedback",
+    sql: `
+      -- 档案使用回流：自动聊每**真正用档案生成出回复**就 +1（跳过/失败的草稿不计）。
+      -- 没有它，「CLI 提炼的档案比规则的好不好」永远只是感觉，没有数据支撑。
+      ALTER TABLE training_profiles ADD COLUMN IF NOT EXISTS hit_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE training_profiles ADD COLUMN IF NOT EXISTS last_hit_at timestamptz;
+      -- 重复训练短路：同输入指纹直接复用上次档案，不再跑一遍模型。
+      ALTER TABLE training_profiles ADD COLUMN IF NOT EXISTS input_fingerprint text;
+    `
+  },
+  {
+    version: 19,
+    name: "training_library_observability",
+    sql: `
+      -- 「来源证明」需要三样现在没有的东西（docs/KNOWLEDGE-TRAINING-PLAN §P0）：
+      -- 1) verified：人有没有校订过。status=active 分不出「人工写的」与「机器导入后没人看过」，
+      --    而检索分层加权（P3）恰恰要区分这两者 —— 只靠 status 会把人做过的确认工作抹掉。
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS verified boolean NOT NULL DEFAULT false;
+      -- 2) adopted_count / last_adopted_at：命中 ≠ 有用。回复真发出去才算功劳，
+      --    没有这两列，界面只能展示「被检索到几次」，清理死条目时会误删真正在用的口径。
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS adopted_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS last_hit_at timestamptz;
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS last_adopted_at timestamptz;
+      -- 3) 草稿行记下「生成它时用到了库里哪几条」：采纳这个信号只在草稿发出的那一刻才知道，
+      --    不落在这里就永远没数据来源（历史 hit_count 一直偏低正是这个原因）。
+      ALTER TABLE auto_chat_drafts ADD COLUMN IF NOT EXISTS library_entry_ids_json text;
+      -- 存量回填：人工录入的条目本来就是人校订过的；导入来源的一律留 false（等人工确认再翻）。
+      UPDATE training_library_entries SET verified = true WHERE source = 'manual';
+    `
+  },
+  {
+    version: 20,
+    name: "training_knowledge_bases",
+    sql: `
+      -- CRM 训练成果的「知识库」这一层在插件侧的落点（与 MySQL 侧 v20 同构）。
+      -- 插件只存两样：条目属于哪个库（kb_id），以及账号启用了哪些库（subscriptions）。
+      -- 可见性由 CRM 判定（插件令牌没有 teamId），启用清单由 CRM 推送。
+      --
+      -- kb_id 默认空串 = 历史条目：没有库的概念，仍只对 owner 生效，行为与改动前一致。
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS kb_id varchar(191) NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS training_library_kb_idx ON training_library_entries(kb_id, enabled, status);
+
+      CREATE TABLE IF NOT EXISTS training_kb_subscriptions (
+        owner_user_id varchar(191) NOT NULL,
+        kb_id varchar(191) NOT NULL,
+        synced_at timestamptz NOT NULL,
+        PRIMARY KEY (owner_user_id, kb_id)
+      );
+    `
+  },
+  {
+    version: 21,
+    name: "training_library_source_ref",
+    sql: `
+      -- 出处随发布一起落到条目上：推荐/引用时能注明「哪个文件、哪一段」。
+      -- 这三列只服务**人看的出处展示**（引用卡片 / 训练端试问），不进提示词 —— 描述不是知识内容。
+      -- 默认空串 = 历史条目没有这个信息，行为与改动前完全一致。
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS source_title varchar(255) NOT NULL DEFAULT '';
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS source_anchor varchar(64) NOT NULL DEFAULT '';
+      ALTER TABLE training_library_entries ADD COLUMN IF NOT EXISTS source_note varchar(512) NOT NULL DEFAULT '';
+    `
   }
 ];
 

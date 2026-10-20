@@ -237,6 +237,9 @@ interface TrainingProfileRow {
   trained_at: string;
   created_at: string;
   updated_at: string;
+  hit_count: number | string;
+  last_hit_at: string | null;
+  input_fingerprint: string | null;
 }
 
 interface TrainingLibraryRow {
@@ -244,6 +247,7 @@ interface TrainingLibraryRow {
   owner_user_id: string;
   account_id: string | null;
   account_name: string | null;
+  kb_id: string | null;
   kind: TrainingLibraryEntry["kind"];
   question: string;
   answer: string;
@@ -251,8 +255,16 @@ interface TrainingLibraryRow {
   languages_json: string;
   priority: number | string;
   enabled: number | string | boolean;
+  status: TrainingLibraryEntry["status"];
   source: TrainingLibraryEntry["source"];
+  verified: number | string | boolean | null;
   hit_count: number | string;
+  adopted_count: number | string | null;
+  last_hit_at: string | null;
+  last_adopted_at: string | null;
+  source_title: string | null;
+  source_anchor: string | null;
+  source_note: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -301,6 +313,7 @@ interface AutoChatDraftRow {
   message_id: string | null;
   error: string | null;
   run_date: string;
+  library_entry_ids_json?: string | null;
   created_at: string;
   sent_at: string | null;
   updated_at: string;
@@ -545,7 +558,10 @@ function mapTrainingProfile(row: TrainingProfileRow): TrainingProfile {
     error: row.error,
     trainedAt: row.trained_at,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    hitCount: Number(row.hit_count ?? 0),
+    lastHitAt: row.last_hit_at ?? null,
+    inputFingerprint: row.input_fingerprint ?? null
   };
 }
 
@@ -566,12 +582,26 @@ function trainingLibrarySource(value: unknown): TrainingLibraryEntry["source"] {
   return candidate === "profile" || candidate === "conversation" ? candidate : "manual";
 }
 
+/**
+ * 条目状态兜底：缺列 / 脏值一律当 `active`。
+ *
+ * 这条兜底是**关键的向后兼容**：迁移给存量行填的就是 active，
+ * 万一某条读出来是空，也不能让它悄悄从提示词里消失。
+ */
+function trainingLibraryStatus(value: unknown): TrainingLibraryEntry["status"] {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  if (candidate === "candidate" || candidate === "archived") return candidate;
+  return "active";
+}
+
 function mapTrainingLibraryEntry(row: TrainingLibraryRow): TrainingLibraryEntry {
   return {
     id: row.id,
     ownerUserId: row.owner_user_id,
     accountId: row.account_id,
     accountName: row.account_name ?? null,
+    // 缺列（老库尚未迁移）时按空串兜底 = 历史条目，行为与改动前一致。
+    kbId: row.kb_id ?? "",
     kind: trainingLibraryKind(row.kind),
     question: row.question,
     answer: row.answer,
@@ -579,8 +609,20 @@ function mapTrainingLibraryEntry(row: TrainingLibraryRow): TrainingLibraryEntry 
     languages: parseJsonArray<string>(row.languages_json),
     priority: Number(row.priority ?? 100),
     enabled: toBoolean(row.enabled),
+    status: trainingLibraryStatus(row.status),
     source: trainingLibrarySource(row.source),
+    // verified 缺列（老库尚未迁移）时按 source 兜底：人工录入=校订过，导入的=没校订。
+    verified: row.verified === undefined || row.verified === null
+      ? trainingLibrarySource(row.source) === "manual"
+      : toBoolean(row.verified),
     hitCount: Number(row.hit_count ?? 0),
+    adoptedCount: Number(row.adopted_count ?? 0),
+    lastHitAt: row.last_hit_at ?? null,
+    lastAdoptedAt: row.last_adopted_at ?? null,
+    // 出处三件套（v21）：缺列（老库尚未迁移）时按空串兜底 = 历史条目，展示层按空处理。
+    sourceTitle: row.source_title ?? "",
+    sourceAnchor: row.source_anchor ?? "",
+    sourceNote: row.source_note ?? "",
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -633,6 +675,7 @@ function mapAutoChatDraft(row: AutoChatDraftRow): AutoChatDraft {  return {
     profileId: row.profile_id,
     messageId: row.message_id,
     error: row.error,
+    libraryEntryIds: parseJsonArray<string>(row.library_entry_ids_json ?? "").filter(Boolean),
     createdAt: row.created_at,
     sentAt: row.sent_at,
     updatedAt: row.updated_at
@@ -1270,7 +1313,9 @@ export class Repository {
       return {
         analysisIntervalHours: 6, intelligenceMode: "rules", intelligenceProviderId: null, dailyTodoHour: 9, dailyTodoMinute: 0, timezone: "Asia/Shanghai", enabled: true,
         lastAnalysisAt: null, nextAnalysisAt: new Date(Date.now() + 6 * 3600000).toISOString(), lastDailyTodoAt: null,
-        nextDailyTodoAt: null, lastRunStatus: "idle", lastRunSummary: "尚未运行", updatedAt: new Date().toISOString()
+        nextDailyTodoAt: null,
+        followupSyncEnabled: false, followupSyncHour: 19, followupSyncMinute: 0, lastFollowupSyncAt: null, nextFollowupSyncAt: null,
+        lastRunStatus: "idle", lastRunSummary: "尚未运行", updatedAt: new Date().toISOString()
       };
     }
     const value = (key: string): string | null => {
@@ -1286,6 +1331,11 @@ export class Repository {
       dailyTodoMinute: Number(row.daily_todo_minute ?? 0), timezone: String(row.timezone ?? "Asia/Shanghai"),
       enabled: Boolean(Number(row.enabled ?? 1)), lastAnalysisAt: value("last_analysis_at"), nextAnalysisAt: value("next_analysis_at"),
       lastDailyTodoAt: value("last_daily_todo_at"), nextDailyTodoAt: value("next_daily_todo_at"),
+      // 跟进同步：老行没有这几列时（未跑过 v17 迁移）按「关闭 + 19:00」兜底，与出厂默认一致。
+      followupSyncEnabled: Boolean(Number(row.followup_sync_enabled ?? 0)),
+      followupSyncHour: Number(row.followup_sync_hour ?? 19),
+      followupSyncMinute: Number(row.followup_sync_minute ?? 0),
+      lastFollowupSyncAt: value("last_followup_sync_at"), nextFollowupSyncAt: value("next_followup_sync_at"),
       lastRunStatus: (String(row.last_run_status ?? "idle") as import("../../shared/types.js").AutomationSettings["lastRunStatus"]),
       lastRunSummary: String(row.last_run_summary ?? ""), updatedAt: value("updated_at") ?? new Date().toISOString()
     };
@@ -1308,6 +1358,210 @@ export class Repository {
       ? `UPDATE automation_settings SET last_run_status=$2,last_run_summary=$3,last_analysis_at=$4,next_analysis_at=$5,last_daily_todo_at=$6,next_daily_todo_at=$7,updated_at=$8 WHERE id=$1`
       : `UPDATE automation_settings SET last_run_status=$2,last_run_summary=$3,last_analysis_at=$4,next_analysis_at=$5,last_daily_todo_at=$6,next_daily_todo_at=$7,updated_at=$8 WHERE id=$1`,
       [id, values.status, values.summary, values.lastAnalysisAt ? dbTime(values.lastAnalysisAt) : current.lastAnalysisAt ? dbTime(current.lastAnalysisAt) : null, values.nextAnalysisAt ? dbTime(values.nextAnalysisAt) : current.nextAnalysisAt ? dbTime(current.nextAnalysisAt) : null, values.lastDailyTodoAt ? dbTime(values.lastDailyTodoAt) : current.lastDailyTodoAt ? dbTime(current.lastDailyTodoAt) : null, values.nextDailyTodoAt ? dbTime(values.nextDailyTodoAt) : current.nextDailyTodoAt ? dbTime(current.nextDailyTodoAt) : null, dbTime(new Date().toISOString())]);
+  }
+
+  // ------------------------------------------------------------ 跟进同步记录 ----
+
+  /**
+   * 只改跟进同步那几列，**不动** `last_run_status` / `last_run_summary`。
+   *
+   * 为什么不复用 `saveAutomationRun`：那两个字段是「节奏中心整体最近一次运行」的展示位，
+   * 被跟进同步覆盖掉之后，用户看到「节奏中心：成功」但日常待办其实没跑，会判断错。
+   * 跟进同步自己的状态由 `followup_sync_runs.status` 承担。
+   */
+  async saveFollowupSyncSettings(ownerUserId: string | undefined, input: { enabled: boolean; hour: number; minute: number; nextAt: string | null }): Promise<void> {
+    const id = ownerUserId ? `settings_${ownerUserId}` : "default";
+    await this.database.query(
+      `UPDATE automation_settings SET followup_sync_enabled=$2,followup_sync_hour=$3,followup_sync_minute=$4,next_followup_sync_at=$5,updated_at=$6 WHERE id=$1`,
+      [id, input.enabled ? 1 : 0, input.hour, input.minute, input.nextAt ? dbTime(input.nextAt) : null, dbTime(new Date().toISOString())]
+    );
+  }
+
+  /** 记录一次同步的时间戳。`nextFollowupSyncAt` 传 null 表示「交给下一轮 tick 重新计算」。 */
+  async updateFollowupSyncState(ownerUserId: string | undefined, values: { lastFollowupSyncAt?: string | null; nextFollowupSyncAt?: string | null }): Promise<void> {
+    const current = await this.getAutomationSettings(ownerUserId);
+    const id = ownerUserId ? `settings_${ownerUserId}` : "default";
+    const last = values.lastFollowupSyncAt === undefined ? current.lastFollowupSyncAt : values.lastFollowupSyncAt;
+    const next = values.nextFollowupSyncAt === undefined ? current.nextFollowupSyncAt : values.nextFollowupSyncAt;
+    await this.database.query(
+      `UPDATE automation_settings SET last_followup_sync_at=$2,next_followup_sync_at=$3,updated_at=$4 WHERE id=$1`,
+      [id, last ? dbTime(last) : null, next ? dbTime(next) : null, dbTime(new Date().toISOString())]
+    );
+  }
+
+  /**
+   * 认领「今天这次同步」。**同一天手动重跑是更新这一行，不是再插一行** ——
+   * 这正是 `UNIQUE(owner_user_id, run_date)` 存在的意义：用户连点两次「立即同步」，
+   * 记录列表里仍只有一条当天记录，不会出现「哪条算数」的歧义。
+   *
+   * 刻意用「先查再更/插」而不是 `ON CONFLICT` / `ON DUPLICATE KEY`：两种方言的 upsert
+   * 语法不同，而这里一天只跑一次，多一次往返远比多一份方言分支划算。
+   */
+  async claimFollowupSyncRun(input: { ownerUserId: string; runDate: string; trigger: "scheduled" | "manual"; timezone: string }): Promise<import("../../shared/types.js").FollowupSyncRun> {
+    const timestamp = dbTime(new Date().toISOString());
+    // `trigger` 在 PG 里可用、在 MySQL 里是不可用词，所以列名要分方言 —— 与 `automation_runs` 同一套约定。
+    const triggerColumn = this.database.kind === "mysql" ? "trigger_type" : "trigger";
+    const existing = await this.database.query<{ id: string }>(
+      `SELECT id FROM followup_sync_runs WHERE owner_user_id=$1 AND run_date=$2 LIMIT 1`,
+      [input.ownerUserId, input.runDate]
+    );
+    const id = existing.rows[0]?.id ?? `followup_sync_${randomUUID()}`;
+    if (existing.rows[0]) {
+      await this.database.query(
+        `UPDATE followup_sync_runs SET ${triggerColumn}=$2,status='running',timezone=$3,conversations_scanned=0,message_count=0,customers_matched=0,
+           activities_written=0,leads_created=0,leads_existing=0,skipped=0,ambiguous=0,engine='none',model=NULL,notification_sent=0,
+           error=NULL,summary='',started_at=$4,finished_at=NULL,updated_at=$4
+         WHERE id=$1`,
+        [id, input.trigger, input.timezone, timestamp]
+      );
+    } else {
+      await this.database.query(
+        `INSERT INTO followup_sync_runs(id,owner_user_id,run_date,${triggerColumn},status,timezone,summary,started_at,updated_at)
+         VALUES($1,$2,$3,$4,'running',$5,'',$6,$6)`,
+        [id, input.ownerUserId, input.runDate, input.trigger, input.timezone, timestamp]
+      );
+    }
+    return (await this.getFollowupSyncRun(id, input.ownerUserId))!;
+  }
+
+  async getFollowupSyncRun(id: string, ownerUserId?: string | null): Promise<import("../../shared/types.js").FollowupSyncRun | null> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM followup_sync_runs WHERE id=$1 AND ($2::text IS NULL OR owner_user_id=$2) LIMIT 1`,
+      [id, ownerUserId ?? null]
+    );
+    return result.rows[0] ? this.mapFollowupSyncRun(result.rows[0]) : null;
+  }
+
+  async listFollowupSyncRuns(ownerUserId: string, limit = 20): Promise<import("../../shared/types.js").FollowupSyncRun[]> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM followup_sync_runs WHERE owner_user_id=$1 ORDER BY run_date DESC LIMIT $2`,
+      [ownerUserId, Math.min(90, Math.max(1, limit))]
+    );
+    return result.rows.map((row) => this.mapFollowupSyncRun(row));
+  }
+
+  async updateFollowupSyncRun(id: string, patch: Partial<Pick<import("../../shared/types.js").FollowupSyncRun, "status" | "conversationsScanned" | "messageCount" | "customersMatched" | "activitiesWritten" | "leadsCreated" | "leadsExisting" | "skipped" | "ambiguous" | "engine" | "model" | "notificationSent" | "error" | "summary" | "finishedAt">>): Promise<void> {
+    const current = await this.getFollowupSyncRun(id);
+    if (!current) return;
+    const next = { ...current, ...patch };
+    await this.database.query(
+      `UPDATE followup_sync_runs SET status=$2,conversations_scanned=$3,message_count=$4,customers_matched=$5,activities_written=$6,
+         leads_created=$7,leads_existing=$8,skipped=$9,ambiguous=$10,engine=$11,model=$12,notification_sent=$13,error=$14,summary=$15,
+         finished_at=$16,updated_at=$17
+       WHERE id=$1`,
+      [
+        id, next.status, next.conversationsScanned, next.messageCount, next.customersMatched, next.activitiesWritten,
+        next.leadsCreated, next.leadsExisting, next.skipped, next.ambiguous, next.engine, next.model,
+        next.notificationSent ? 1 : 0, next.error, next.summary,
+        next.finishedAt ? dbTime(next.finishedAt) : null, dbTime(new Date().toISOString())
+      ]
+    );
+  }
+
+  /** 明细行按 `(run_id, conversation_key)` 覆盖写：重跑同一天不会把同一会话记两遍。 */
+  async saveFollowupSyncItem(input: Omit<import("../../shared/types.js").FollowupSyncItem, "id" | "createdAt">): Promise<void> {
+    const timestamp = dbTime(new Date().toISOString());
+    const existing = await this.database.query<{ id: string }>(
+      `SELECT id FROM followup_sync_items WHERE run_id=$1 AND conversation_key=$2 LIMIT 1`,
+      [input.runId, input.conversationKey]
+    );
+    if (existing.rows[0]) {
+      await this.database.query(
+        `UPDATE followup_sync_items SET contact_name=$2,contact_phone=$3,kind=$4,status=$5,customer_id=$6,lead_id=$7,activity_id=$8,
+           message_count=$9,summary=$10,error=$11 WHERE id=$1`,
+        [existing.rows[0].id, input.contactName, input.contactPhone, input.kind, input.status, input.customerId, input.leadId, input.activityId, input.messageCount, input.summary, input.error]
+      );
+      return;
+    }
+    await this.database.query(
+      `INSERT INTO followup_sync_items(id,run_id,owner_user_id,conversation_key,contact_name,contact_phone,kind,status,customer_id,lead_id,activity_id,message_count,summary,error,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [`followup_item_${randomUUID()}`, input.runId, input.ownerUserId, input.conversationKey, input.contactName, input.contactPhone,
+        input.kind, input.status, input.customerId, input.leadId, input.activityId, input.messageCount, input.summary, input.error, timestamp]
+    );
+  }
+
+  async listFollowupSyncItems(runId: string, ownerUserId?: string | null): Promise<import("../../shared/types.js").FollowupSyncItem[]> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM followup_sync_items WHERE run_id=$1 AND ($2::text IS NULL OR owner_user_id=$2) ORDER BY created_at,contact_phone LIMIT 500`,
+      [runId, ownerUserId ?? null]
+    );
+    return result.rows.map((row) => this.mapFollowupSyncItemRow(row));
+  }
+
+  /**
+   * 按 CRM activityId 反查同步明细（「跟进/旅程上点图标看对话原文」的定位键）。
+   * 同一 activityId 理论上只落一条（重跑是改写不是新写），仍取最新一条兜底。
+   */
+  async findFollowupSyncItemByActivity(activityId: string, ownerUserId?: string | null): Promise<import("../../shared/types.js").FollowupSyncItem | null> {
+    const result = await this.database.query<Record<string, unknown>>(
+      `SELECT * FROM followup_sync_items WHERE activity_id=$1 AND ($2::text IS NULL OR owner_user_id=$2) ORDER BY created_at DESC LIMIT 1`,
+      [activityId, ownerUserId ?? null]
+    );
+    return result.rows.length ? this.mapFollowupSyncItemRow(result.rows[0]) : null;
+  }
+
+  private mapFollowupSyncItemRow(row: Record<string, unknown>): import("../../shared/types.js").FollowupSyncItem {
+    const iso = (value: unknown): string | null => {
+      if (value == null) return null;
+      const parsed = value instanceof Date ? value : new Date(String(value));
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
+    };
+    return {
+      id: String(row.id), runId: String(row.run_id),
+      ownerUserId: row.owner_user_id == null ? null : String(row.owner_user_id),
+      conversationKey: String(row.conversation_key ?? ""),
+      contactName: String(row.contact_name ?? ""), contactPhone: String(row.contact_phone ?? ""),
+      kind: String(row.kind ?? "skipped") as import("../../shared/types.js").FollowupSyncItem["kind"],
+      status: String(row.status ?? "skipped") as import("../../shared/types.js").FollowupSyncItem["status"],
+      customerId: row.customer_id == null ? null : String(row.customer_id),
+      leadId: row.lead_id == null ? null : String(row.lead_id),
+      activityId: row.activity_id == null ? null : String(row.activity_id),
+      messageCount: Number(row.message_count ?? 0),
+      summary: String(row.summary ?? ""), error: row.error == null ? null : String(row.error),
+      createdAt: iso(row.created_at) ?? new Date().toISOString()
+    };
+  }
+
+  /**
+   * 引擎列的历史值兼容：`rules`（把客户原话拼成摘要的规则兜底）已经取消，
+   * 读到旧值一律归成 `none` —— 否则界面会显示一个已经不存在的档位，比显示「未配置模型」更糊涂。
+   */
+  private normalizeFollowupSyncEngine(value: unknown): import("../../shared/types.js").FollowupSyncEngine {
+    const raw = String(value ?? "none");
+    return raw === "cli" || raw === "ai" ? raw : "none";
+  }
+
+  private mapFollowupSyncRun(row: Record<string, unknown>): import("../../shared/types.js").FollowupSyncRun {
+    const iso = (value: unknown): string | null => {
+      if (value == null) return null;
+      const parsed = value instanceof Date ? (value as Date) : new Date(String(value));
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
+    };
+    return {
+      id: String(row.id),
+      ownerUserId: row.owner_user_id == null ? null : String(row.owner_user_id),
+      runDate: iso(row.run_date)?.slice(0, 10) ?? String(row.run_date ?? ""),
+      trigger: String(row.trigger_type ?? row.trigger ?? "scheduled") as import("../../shared/types.js").FollowupSyncRun["trigger"],
+      status: String(row.status ?? "running") as import("../../shared/types.js").FollowupSyncRun["status"],
+      timezone: String(row.timezone ?? ""),
+      conversationsScanned: Number(row.conversations_scanned ?? 0),
+      messageCount: Number(row.message_count ?? 0),
+      customersMatched: Number(row.customers_matched ?? 0),
+      activitiesWritten: Number(row.activities_written ?? 0),
+      leadsCreated: Number(row.leads_created ?? 0),
+      leadsExisting: Number(row.leads_existing ?? 0),
+      skipped: Number(row.skipped ?? 0),
+      ambiguous: Number(row.ambiguous ?? 0),
+      engine: this.normalizeFollowupSyncEngine(row.engine),
+      model: row.model == null ? null : String(row.model),
+      notificationSent: Boolean(Number(row.notification_sent ?? 0)),
+      error: row.error == null ? null : String(row.error),
+      summary: String(row.summary ?? ""),
+      startedAt: iso(row.started_at) ?? new Date().toISOString(),
+      finishedAt: iso(row.finished_at),
+      updatedAt: iso(row.updated_at) ?? new Date().toISOString()
+    };
   }
 
   async claimAutomationDelivery(ownerUserId: string, followupId: string, runDate: string, deliveryType: string): Promise<boolean> {
@@ -2290,11 +2544,14 @@ export class Repository {
       input.error,
       dbTime(input.trainedAt),
       timestamp,
-      timestamp
+      timestamp,
+      input.hitCount ?? 0,
+      input.lastHitAt ? dbTime(input.lastHitAt) : null,
+      input.inputFingerprint ?? null
     ];
-    const columns = "(id,owner_user_id,account_id,name,status,engine,model,sample_count,exchange_count,conversation_count,message_count,languages_json,tone,summary,guidelines_json,signature_phrases_json,guardrails_json,examples_json,source_from,source_to,error,trained_at,created_at,updated_at)";
-    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)";
-    const updates = "account_id=$3,name=$4,status=$5,engine=$6,model=$7,sample_count=$8,exchange_count=$9,conversation_count=$10,message_count=$11,languages_json=$12,tone=$13,summary=$14,guidelines_json=$15,signature_phrases_json=$16,guardrails_json=$17,examples_json=$18,source_from=$19,source_to=$20,error=$21,trained_at=$22,updated_at=$24";
+    const columns = "(id,owner_user_id,account_id,name,status,engine,model,sample_count,exchange_count,conversation_count,message_count,languages_json,tone,summary,guidelines_json,signature_phrases_json,guardrails_json,examples_json,source_from,source_to,error,trained_at,created_at,updated_at,hit_count,last_hit_at,input_fingerprint)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)";
+    const updates = "account_id=$3,name=$4,status=$5,engine=$6,model=$7,sample_count=$8,exchange_count=$9,conversation_count=$10,message_count=$11,languages_json=$12,tone=$13,summary=$14,guidelines_json=$15,signature_phrases_json=$16,guardrails_json=$17,examples_json=$18,source_from=$19,source_to=$20,error=$21,trained_at=$22,updated_at=$24,hit_count=$25,last_hit_at=$26,input_fingerprint=$27";
     await this.database.query(
       this.database.kind === "mysql"
         ? `INSERT INTO training_profiles${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
@@ -2316,6 +2573,17 @@ export class Repository {
     return true;
   }
 
+  /**
+   * 档案使用回流：自动聊真正用这份档案生成出回复就 +1。
+   * 调用方（auto-chat）是 fire-and-forget，所以这里只管把 SQL 打出去，不做重试。
+   */
+  async recordTrainingProfileHit(id: string, ownerUserId: string): Promise<void> {
+    await this.database.query(
+      "UPDATE training_profiles SET hit_count=hit_count+1, last_hit_at=$3 WHERE id=$1 AND owner_user_id=$2",
+      [id, ownerUserId, dbTime(now())]
+    );
+  }
+
   // -------------------------------------------------------------------------
   // 训练库（自动回复的专门语料库）
   // -------------------------------------------------------------------------
@@ -2328,7 +2596,16 @@ export class Repository {
    */
   async listTrainingLibraryEntries(
     ownerUserId: string,
-    filter: { kinds?: string[]; enabledOnly?: boolean; accountId?: string | null } = {}
+    filter: {
+      kinds?: string[];
+      enabledOnly?: boolean;
+      accountId?: string | null;
+      /**
+       * 状态过滤。缺省 = 只出 `active`（提示词与界面列表的**默认口径**）。
+       * 传 `"all"` 才会带出 candidate / archived —— 训练页的「候选确认」区用它看全量。
+       */
+      status?: TrainingLibraryEntry["status"] | "all";
+    } = {}
   ): Promise<TrainingLibraryEntry[]> {
     const values: unknown[] = [ownerUserId];
     const conditions = ["p.owner_user_id=$1"];
@@ -2340,6 +2617,11 @@ export class Repository {
       conditions.push(`p.kind IN (${placeholders})`);
     }
     if (filter.enabledOnly) conditions.push("p.enabled=1");
+    if (filter.status && filter.status !== "all") {
+      conditions.push(`p.status=$${values.push(filter.status)}`);
+    } else if (!filter.status) {
+      conditions.push("p.status='active'");
+    }
     if (filter.accountId) {
       conditions.push(`(p.account_id IS NULL OR p.account_id=$${values.push(filter.accountId)})`);
     }
@@ -2351,6 +2633,127 @@ export class Repository {
       values
     );
     return result.rows.map(mapTrainingLibraryEntry);
+  }
+
+  /**
+   * 出稿用的语料集合：按账号的「启用知识库清单」取，并**如实回报被清单挡掉多少条**。
+   *
+   * 规则（与 CRM 的可见性判据配套，插件不重复判可见性 —— 令牌里没有 teamId）：
+   *  - `configured=false`（这个账号从没有任何订阅行）= **兼容口径**：自己的语料全用。
+   *    历史 53 条 `kb_id=''` 的条目走的正是这条路 —— 加了知识库这一层，
+   *    绝不能让别人（或自己）的出稿突然没语料可用。
+   *  - `configured=true` 且清单非空 = 严格按清单：`(自己的未分组条目) ∪ (清单里各库的条目)`。
+   *    清单里可以是自己的库，也可以是别人公开后自己勾选的库 —— 这就是"分享"生效的地方。
+   *  - `configured=true` 且清单为空（只写了哨兵行 ""）= 只要自己的**未分组**条目。
+   *    这一档最容易写错（三目只判 `subscribed.length` 就会并进第一档），
+   *    结果就是「我已经把这个知识库关掉了，它的语料还在出稿」。
+   *
+   * 为什么一次查完并带 `in_scope` 标记而不是查两遍：可见性规则只写一遍，
+   * 且"被挡掉几条"这个数字必须是**同一次快照**算出来的，否则界面上的两个数会对不上。
+   */
+  async listResolvableTrainingLibraryEntries(
+    ownerUserId: string,
+    options: { enabledKbIds: string[]; configured: boolean; accountId?: string | null }
+  ): Promise<{ entries: TrainingLibraryEntry[]; skippedByScope: number }> {
+    const values: unknown[] = [ownerUserId];
+    const subscribed = options.configured
+      ? [...new Set(options.enabledKbIds.filter(Boolean))]
+      : [];
+    const subPlaceholders = subscribed.map((id) => `$${values.push(id)}`).join(",");
+    // 「自己的历史条目」= 空 kb_id 且属于我；「清单里的库」= kb_id 命中订阅集合。
+    //
+    // ⚠️ 三个状态必须分开算，尤其**不能**把「已配置但一个都不启用」并到「从未配置」上：
+    //    - 从未配置（configured=false）→ `p.owner_user_id=$1`，自己的语料全用（兼容口径）；
+    //    - 已配置 + 有清单 → 自己的**未分组**条目 ∪ 清单里各库的条目；
+    //    - 已配置 + 列表为空（哨兵行 ""）→ **只有自己的未分组条目**。
+    //    第三种曾经错误地落进第一个分支（三目只判了 subscribed.length），结果是
+    //    「我把这个知识库关掉了，它里面的语料照样在出稿」—— 实测在验收脚本里抓到的：
+    //    零启用时 `considered` 把带 kb_id 的自有语料也算进去了。
+    const inScope = !options.configured
+      ? `p.owner_user_id=$1`
+      : subscribed.length
+        ? `((p.kb_id='' AND p.owner_user_id=$1) OR p.kb_id IN (${subPlaceholders}))`
+        : `(p.kb_id='' AND p.owner_user_id=$1)`;
+    // 候选集：只取"本来就可能与我有关"的行，避免把全库拉出来。
+    const candidateSet = subscribed.length
+      ? `(p.owner_user_id=$1 OR p.kb_id IN (${subPlaceholders}))`
+      : `p.owner_user_id=$1`;
+    const conditions = ["p.enabled=1", "p.status='active'", candidateSet];
+    if (options.accountId) {
+      conditions.push(`(p.account_id IS NULL OR p.account_id=$${values.push(options.accountId)})`);
+    }
+    const result = await this.database.query<TrainingLibraryRow & { in_scope: number | string }>(
+      `SELECT p.*, a.name AS account_name, CASE WHEN ${inScope} THEN 1 ELSE 0 END AS in_scope
+         FROM training_library_entries p
+         LEFT JOIN channel_accounts a ON a.id=p.account_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY p.priority DESC, p.updated_at DESC`,
+      values
+    );
+    const entries: TrainingLibraryEntry[] = [];
+    let skippedByScope = 0;
+    for (const row of result.rows) {
+      if (Number(row.in_scope ?? 0) === 1) entries.push(mapTrainingLibraryEntry(row));
+      else skippedByScope += 1;
+    }
+    return { entries, skippedByScope };
+  }
+
+  /**
+   * 覆盖式写入启用清单（CRM 是唯一写入方，每次都推全量）。
+   *
+   * 全量替换而不是增量合并：CRM 侧"取消勾选"表现为少一个 id，
+   * 增量合并永远删不掉东西，用户会发现自己关不掉一个知识库。
+   *
+   * **零启用要写成一行哨兵（kb_id=''），不能写成零行**：零行代表"从未配置"
+   * （走"自己的语料全用"的兼容口径），如果零启用也写成零行，
+   * 用户"一个都不要"的选择会被解读成"全部都要" —— 这是方向相反的错误。
+   * 空串不是合法的知识库 id，所以它不会与真实库冲突。
+   */
+  async replaceTrainingKbSubscriptions(ownerUserId: string, kbIds: string[]): Promise<string[]> {
+    const unique = [...new Set(kbIds.map((id) => String(id ?? "").trim()).filter(Boolean))];
+    const timestamp = dbTime(now());
+    await this.database.query("DELETE FROM training_kb_subscriptions WHERE owner_user_id=$1", [ownerUserId]);
+    for (const kbId of unique.length ? unique : [""]) {
+      await this.database.query(
+        "INSERT INTO training_kb_subscriptions(owner_user_id,kb_id,synced_at) VALUES($1,$2,$3)",
+        [ownerUserId, kbId, timestamp]
+      );
+    }
+    return unique;
+  }
+
+  /**
+   * 读启用清单原始行。
+   *
+   * 返回 `[]` = 从未配置（兼容口径）；返回 `[""]` = 已配置但**一个都不启用**；
+   * 返回 `["kb_x", ...]` = 启用这些库。三个状态由调用方按同一口径解释，别在这里归一。
+   */
+  async listTrainingKbSubscriptionRows(ownerUserId: string): Promise<string[]> {
+    const result = await this.database.query<{ kb_id: string }>(
+      "SELECT kb_id FROM training_kb_subscriptions WHERE owner_user_id=$1 ORDER BY kb_id",
+      [ownerUserId]
+    );
+    return result.rows.map((row) => String(row.kb_id ?? ""));
+  }
+
+  /**
+   * 给已存在的条目补上知识库归属（只补空值，不覆盖已有归属）。
+   *
+   * 为什么需要单独一个方法：发布路径撞指纹时是"已存在就直接返回"，那次返回**不写库**。
+   * 于是本次改动之前发布的条目（`kb_id=''`）即使被重新发布，也永远补不上归属 ——
+   * 而"未分组"在我的口径里始终参与出稿，用户就会遇到"这个库我关了，可它的语料还在用"。
+   */
+  async assignTrainingLibraryEntryKb(id: string, ownerUserId: string, kbId: string): Promise<boolean> {
+    if (!kbId) return false;
+    // 先读后写，与 setTrainingLibraryStatus 同姿态：三种后端对"受影响行数"的暴露不一致。
+    const existing = await this.getTrainingLibraryEntry(id, ownerUserId);
+    if (!existing || existing.kbId) return false;
+    await this.database.query(
+      "UPDATE training_library_entries SET kb_id=$1, updated_at=$2 WHERE id=$3 AND owner_user_id=$4",
+      [kbId, dbTime(now()), id, ownerUserId]
+    );
+    return true;
   }
 
   async getTrainingLibraryEntry(id: string, ownerUserId?: string): Promise<TrainingLibraryEntry | null> {
@@ -2380,6 +2783,9 @@ export class Repository {
       input.id,
       input.ownerUserId,
       input.accountId,
+      // kb_id 也交给写入方：服务层知道"这次保存属于哪个库"，仓库层不自作推断。
+      // ⚠️ 位置必须与下面的列清单**严格同序**（错位会把 kind 当 kb_id 写进去）。
+      input.kbId || "",
       input.kind,
       input.question,
       input.answer,
@@ -2387,15 +2793,23 @@ export class Repository {
       JSON.stringify(input.languages),
       input.priority,
       input.enabled ? 1 : 0,
+      trainingLibraryStatus(input.status),
       input.source,
       input.fingerprint,
       input.hitCount,
+      // verified 与命中/采纳计数一起进列清单：写入方（服务层）已经算好「这条算不算校订过」，
+      // 仓库层只负责落库，不再自己推断 —— 两处各推一次必然有一天不一致。
+      input.verified ? 1 : 0,
+      // 出处三件套（v21）：发布这条语料时它来自哪个文件、哪一段、来源说明。
+      input.sourceTitle || "",
+      input.sourceAnchor || "",
+      input.sourceNote || "",
       timestamp,
       timestamp
     ];
-    const columns = "(id,owner_user_id,account_id,kind,question,answer,tags_json,languages_json,priority,enabled,source,fingerprint,hit_count,created_at,updated_at)";
-    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)";
-    const updates = "account_id=$3,kind=$4,question=$5,answer=$6,tags_json=$7,languages_json=$8,priority=$9,enabled=$10,source=$11,fingerprint=$12,hit_count=$13,updated_at=$15";
+    const columns = "(id,owner_user_id,account_id,kb_id,kind,question,answer,tags_json,languages_json,priority,enabled,status,source,fingerprint,hit_count,verified,source_title,source_anchor,source_note,created_at,updated_at)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)";
+    const updates = "account_id=$3,kb_id=$4,kind=$5,question=$6,answer=$7,tags_json=$8,languages_json=$9,priority=$10,enabled=$11,status=$12,source=$13,fingerprint=$14,hit_count=$15,verified=$16,source_title=$17,source_anchor=$18,source_note=$19,updated_at=$21";
     await this.database.query(
       this.database.kind === "mysql"
         ? `INSERT INTO training_library_entries${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
@@ -2405,6 +2819,44 @@ export class Repository {
     const saved = await this.getTrainingLibraryEntry(input.id);
     if (!saved) throw new Error("Training library entry was not persisted");
     return saved;
+  }
+
+  /**
+   * 批量改候选状态（候选确认 / 丢弃）。
+   *
+   * `status` 与 `enabled` **必须一起改**：检索路径读的是 `enabled=1`，列表默认口径读的是
+   * `status='active'`。只改一个的话「确认」看起来什么都发生了 —— 条目既不出现在默认列表、
+   * 也进不了提示词，人工确认这道闸门就白装了。
+   *
+   * 先读后写而不是数 affectedRows：三种后端（pglite / postgres / mysql）
+   * 对「受影响行数」的暴露并不一致，pglite 干脆没有；而且「本来就已是目标状态」
+   * 不该算进本次改动 —— 读一次就能同时解决这两件事，代价是一次 ≤20 条的查询。
+   *
+   * `confirm` 顺带把 `verified=1` 落下去：**「人点过确认」这件事必须留下痕迹**，
+   * 否则检索层（P3 分层加权）分不出「人工校订过的口径」与「机器导入、没人看过」。
+   * 只翻 status/enabled 而丢掉这个信号，等于把人的工作白做了。
+   */
+  async setTrainingLibraryStatus(
+    ownerUserId: string,
+    ids: string[],
+    status: TrainingLibraryEntry["status"],
+    enabled: boolean
+  ): Promise<number> {
+    let changed = 0;
+    for (const id of new Set(ids.filter(Boolean))) {
+      const existing = await this.getTrainingLibraryEntry(id, ownerUserId);
+      if (!existing) continue;
+      const verified = status === "active" ? true : existing.verified;
+      if (existing.status === status && existing.enabled === enabled && existing.verified === verified) continue;
+      await this.database.query(
+        "UPDATE training_library_entries SET status=$1, enabled=$2, verified=$3, updated_at=$4 WHERE id=$5 AND owner_user_id=$6",
+        // enabled 在库里是 0/1 的整数列（见 saveTrainingLibraryEntry）：直接送布尔值
+        // 会被 pglite/postgres 判成「integer 列收到 boolean」而 500。
+        [status, enabled ? 1 : 0, verified ? 1 : 0, dbTime(now()), id, ownerUserId]
+      );
+      changed += 1;
+    }
+    return changed;
   }
 
   async deleteTrainingLibraryEntry(id: string, ownerUserId?: string): Promise<boolean> {
@@ -2418,13 +2870,17 @@ export class Repository {
   }
 
   /** 命中计数：只在真正被用上时加，用于界面按「有没有被用过」排序和清理死条目。 */
-  async bumpTrainingLibraryHits(ids: string[]): Promise<void> {
+  async bumpTrainingLibraryHits(ids: string[], options: { adopted?: boolean } = {}): Promise<void> {
     const unique = [...new Set(ids.filter(Boolean))];
     if (!unique.length) return;
     const placeholders = unique.map((_, index) => `$${index + 1}`).join(",");
+    const timestamp = dbTime(now());
+    const next = unique.length + 1;
     await this.database.query(
-      `UPDATE training_library_entries SET hit_count=hit_count+1 WHERE id IN (${placeholders})`,
-      unique
+      `UPDATE training_library_entries
+          SET hit_count=hit_count+1, last_hit_at=$${next}${options.adopted ? `, adopted_count=adopted_count+1, last_adopted_at=$${next}` : ""}
+        WHERE id IN (${placeholders})`,
+      [...unique, timestamp]
     );
   }
 
@@ -2639,13 +3095,15 @@ export class Repository {
     profileId: string | null;
     runDate: string;
     error?: string | null;
+    /** 本条草稿用到的训练库条目 id（用于「真发出去」时回流采纳计数）。 */
+    libraryEntryIds?: string[];
   }): Promise<AutoChatDraft> {
     const id = randomUUID();
     const timestamp = dbTime(now());
-    const columns = "(id,owner_user_id,account_id,conversation_id,inbound_message_id,inbound_body,body,edited,status,mode,confidence,reason,engine,model,profile_id,message_id,error,run_date,created_at,sent_at,updated_at)";
-    const placeholders = "($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,NULL,$17)";
+    const columns = "(id,owner_user_id,account_id,conversation_id,inbound_message_id,inbound_body,body,edited,status,mode,confidence,reason,engine,model,profile_id,message_id,error,run_date,created_at,sent_at,updated_at,library_entry_ids_json)";
+    const placeholders = "($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,NULL,$17,$18)";
     // 同一个入站消息只保留一条草稿：重复运行会覆盖上一轮的结论（例如「已跳过」变成新的「待确认」）。
-    const updates = "inbound_body=$6,body=$7,edited=0,status=$8,mode=$9,confidence=$10,reason=$11,engine=$12,model=$13,profile_id=$14,message_id=NULL,error=$15,run_date=$16,created_at=$17,sent_at=NULL,updated_at=$17";
+    const updates = "inbound_body=$6,body=$7,edited=0,status=$8,mode=$9,confidence=$10,reason=$11,engine=$12,model=$13,profile_id=$14,message_id=NULL,error=$15,run_date=$16,created_at=$17,sent_at=NULL,updated_at=$17,library_entry_ids_json=$18";
     await this.database.query(
       this.database.kind === "mysql"
         ? `INSERT INTO auto_chat_drafts${columns} VALUES${placeholders} ON DUPLICATE KEY UPDATE ${updates}`
@@ -2667,7 +3125,8 @@ export class Repository {
         input.profileId,
         input.error ?? null,
         input.runDate,
-        timestamp
+        timestamp,
+        JSON.stringify((input.libraryEntryIds ?? []).filter(Boolean).slice(0, 20))
       ]
     );
     const saved = await this.findAutoChatDraftByInbound(input.conversationId, input.inboundMessageId);

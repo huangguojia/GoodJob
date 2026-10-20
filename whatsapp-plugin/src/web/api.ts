@@ -16,13 +16,14 @@ import type {
   Translation,
   TranslationPreference
 } from "@shared/types";
-import type { AutomationDelivery, AutomationRun, AutomationRunResult, AutomationSettings } from "@shared/types";
+import type { AutomationDelivery, AutomationRun, AutomationRunResult, AutomationSettings, FollowupSyncItem, FollowupSyncRun, FollowupSyncRunResult } from "@shared/types";
 import type { AutoChatDraft, AutoChatDraftStatus, AutoChatRunSummary, AutoChatSettings, CliEngineStatus, TrainingExportFormat, TrainingProfile } from "@shared/types";
 import type {
   TrainingLibraryEntry,
   TrainingLibraryImportResult,
   TrainingLibraryKind,
-  TrainingLibraryMatchResult
+  TrainingLibraryMatchResult,
+  TrainingLibraryStatus
 } from "@shared/types";
 
 /** 训练库条目的入参：问答对必须有 question，其余三类只要求 answer。 */
@@ -310,6 +311,12 @@ class ApiClient {
   runAutomation = () => this.request<AutomationRunResult>("/v1/automation/run", { method: "POST" });
   automationRuns = (limit = 12) => this.request<AutomationRun[]>(`/v1/automation/runs?limit=${limit}`);
   automationDeliveries = (limit = 30) => this.request<AutomationDelivery[]>(`/v1/automation/deliveries?limit=${limit}`);
+  // ---- 跟进同步（WhatsApp 对话 → CRM 客户跟进）----
+  updateFollowupSyncSettings = (input: { enabled: boolean; hour: number; minute: number }) =>
+    this.request<AutomationSettings>("/v1/automation/followup-sync/settings", { method: "PUT", body: JSON.stringify(input) });
+  runFollowupSync = () => this.request<FollowupSyncRunResult>("/v1/automation/followup-sync/run", { method: "POST" });
+  followupSyncRuns = (limit = 10) => this.request<FollowupSyncRun[]>(`/v1/automation/followup-sync/runs?limit=${limit}`);
+  followupSyncRunItems = (runId: string) => this.request<FollowupSyncItem[]>(`/v1/automation/followup-sync/runs/${runId}`);
   previewWhatsAppHistory = (input: { content: string; dateOrder: "dmy" | "mdy" }) => this.request<WhatsAppHistoryPreview>("/v1/imports/whatsapp-text/preview", { method: "POST", body: JSON.stringify(input) });
   importWhatsAppHistory = (input: { accountId: string; phone: string; displayName: string; customerSender: string; content: string; dateOrder: "dmy" | "mdy" }) => this.request<WhatsAppHistoryImportResult>("/v1/imports/whatsapp-text", { method: "POST", body: JSON.stringify(input) });
   updateIntegrationPreference = (input: Pick<IntegrationPreference, "strategy" | "defaultProvider">) =>
@@ -388,14 +395,20 @@ class ApiClient {
   exportTrainingData = (input: TrainingScope & { format: TrainingExportFormat }) =>
     this.request<TrainingExportClientResult>("/v1/training/export", { method: "POST", body: JSON.stringify(input) });
   trainProfile = (input: TrainingScope & { name: string; useAi?: boolean; providerId?: string }) =>
-    this.request<TrainingProfile>("/v1/training/profiles", { method: "POST", body: JSON.stringify(input) });
+    this.request<{ profile: TrainingProfile; reused: boolean }>("/v1/training/profiles", { method: "POST", body: JSON.stringify(input) });
   deleteTrainingProfile = (id: string) => this.request<void>(`/v1/training/profiles/${id}`, { method: "DELETE" });
 
-  /** 训练库（自动回复的专用语料库）。 */
-  trainingLibrary = (options: { kinds?: TrainingLibraryKind[]; enabledOnly?: boolean } = {}) => {
+  /**
+   * 训练库（自动回复的专用语料库）。
+   *
+   * ⚠️ `status` 缺省 = **只出 active**（与提示词同口径）。导入进来的样本是 `candidate`，
+   * 不传 status 是看不到它们的 —— 候选区必须显式 `status: "candidate"` 或 `"all"`。
+   */
+  trainingLibrary = (options: { kinds?: TrainingLibraryKind[]; enabledOnly?: boolean; status?: "all" | TrainingLibraryStatus } = {}) => {
     const query = new URLSearchParams();
     if (options.kinds?.length) query.set("kind", options.kinds.join(","));
     if (options.enabledOnly) query.set("enabled", "true");
+    if (options.status) query.set("status", options.status);
     const suffix = query.toString();
     return this.request<TrainingLibraryEntry[]>(`/v1/training/library${suffix ? `?${suffix}` : ""}`);
   };
@@ -404,6 +417,15 @@ class ApiClient {
   updateTrainingLibraryEntry = (id: string, input: TrainingLibraryInput) =>
     this.request<TrainingLibraryEntry>(`/v1/training/library/${id}`, { method: "PATCH", body: JSON.stringify(input) });
   deleteTrainingLibraryEntry = (id: string) => this.request<void>(`/v1/training/library/${id}`, { method: "DELETE" });
+  /**
+   * 候选批量确认 / 丢弃（一次 ≤20）。
+   * `confirm` → active 且启用（从这一刻进提示词）；`drop` → 归档留痕（不再被下次导入加回来）。
+   */
+  reviewTrainingLibraryCandidates = (ids: string[], action: "confirm" | "drop") =>
+    this.request<{ changed: number; status: TrainingLibraryStatus }>("/v1/training/library/confirm", {
+      method: "POST",
+      body: JSON.stringify({ ids, action })
+    });
   /** 幂等导入：同一条问答已经存在时只累加 skipped，不会重复入库。 */
   importTrainingLibrary = (profileId: string) =>
     this.request<TrainingLibraryImportResult>("/v1/training/library/import", { method: "POST", body: JSON.stringify({ profileId }) });

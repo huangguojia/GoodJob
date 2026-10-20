@@ -104,6 +104,64 @@ const CRM_CUSTOMERS = {
   ]
 };
 
+/**
+ * 目录快照的假响应（文件中心的治理视图）。
+ *
+ * `CATALOG_MARKER` 落在 fingerprint 里：用来证明插件把 CRM 的响应**原样**带回来了，
+ * 而不是自己拼了一份看起来像的。`corePool + longTailPool == published` 这条恒等式
+ * 在假数据里也必须成立 —— 否则用例本身就在教一套错误口径。
+ */
+const CATALOG_MARKER = "CATALOG-MARKER-9f3a";
+const CATALOG = {
+  revision: {
+    generatedAt: "2026-10-14T08:00:00.000Z",
+    latestUpdatedAt: "2026-10-14T07:59:00.000Z",
+    total: 411,
+    fingerprint: `419:411:2:7:4:${CATALOG_MARKER}`
+  },
+  vocabulary: {
+    categories: [{ value: "规格书", usageCount: 12 }],
+    tags: [{ value: "led", usageCount: 30 }]
+  },
+  governance: {
+    total: 419,
+    published: 411,
+    draft: 5,
+    review: 1,
+    archived: 2,
+    verified: 7,
+    unverified: 404,
+    corePool: 7,
+    longTailPool: 404,
+    missingLink: 4,
+    orphans: 0,
+    qualityFlags: { 缺少说明: 415 },
+    byCategory: [{ category: "规格书", total: 12, verified: 2, missingLink: 0 }]
+  },
+  items: [
+    {
+      id: FILE_ID,
+      title: FILE_TITLE,
+      category: "规格书",
+      tags: ["led"],
+      description: "600x600 LED panel, 40W, 4000K",
+      fileType: "pdf",
+      version: "v2",
+      status: "published",
+      verified: true,
+      pool: "core",
+      hasExternalLink: true,
+      qualityFlags: [],
+      accessCount: 4,
+      author: "张三",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-10-14T07:59:00.000Z"
+    }
+  ],
+  truncated: 0,
+  warnings: []
+};
+
 describe("资源推荐：插件 ↔ CRM ↔ CLI 的闭环", () => {
   let runtime: AppRuntime;
   let httpServer: Server;
@@ -274,6 +332,11 @@ process.stdin.on("end", () => {
               accessId: "rae_test_1"
             })
           );
+          return;
+        }
+        if (url.pathname === "/api/agent/resources/catalog") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(CATALOG));
           return;
         }
         if (url.pathname === "/api/agent/resources/feedback") {
@@ -489,6 +552,54 @@ process.stdin.on("end", () => {
     }
     expect(feedbackCalls).toHaveLength(1);
     expect(feedbackCalls[0].body).toMatchObject({ conversationKey: "wa:+491234567890" });
+  });
+
+  it("目录快照：以业务员身份取文件中心治理视图，词表 / 两池 / 质量标记都带出来，且一个 URL 都没有", async () => {
+    crmDown = false;
+    crmCalls.length = 0;
+    const response = await api()
+      .get("/api/v1/resources/catalog?since=2026-10-01T00:00:00.000Z&limit=200")
+      .expect(200);
+    const result = response.body as {
+      revision: { latestUpdatedAt: string; fingerprint: string };
+      vocabulary: { categories: Array<{ value: string }> };
+      governance: { published: number; corePool: number; longTailPool: number; draft: number };
+      items: Array<{ id: string; verified: boolean; pool: string }>;
+    };
+
+    // 原样带回：marker 在 fingerprint 里，插件不可能自己拼出这一串。
+    expect(result.revision.fingerprint).toContain(CATALOG_MARKER);
+    expect(result.revision.latestUpdatedAt).toBe("2026-10-14T07:59:00.000Z");
+    // 草稿也进治理计数（才催得动），而两池相加必须等于已发布（同一份数据不能算出两个结论）
+    expect(result.governance.draft).toBe(5);
+    expect(result.governance.corePool + result.governance.longTailPool).toBe(result.governance.published);
+    expect(result.vocabulary.categories[0].value).toBe("规格书");
+    // 两池归属一路带到这里 —— 在此之前插件的类型声明里连字段都没有，整个丢掉
+    expect(result.items[0].verified).toBe(true);
+    expect(result.items[0].pool).toBe("core");
+
+    // 目录同样不许出现任何 URL：hasExternalLink 只说"有没有"，不说"是什么"
+    expect(JSON.stringify(response.body)).not.toContain("http");
+    expect(JSON.stringify(response.body)).not.toContain(SHARE_CODE);
+
+    const catalogCalls = crmCalls.filter((call) => call.path.startsWith("/api/agent/resources/catalog"));
+    expect(catalogCalls).toHaveLength(1);
+    expect(catalogCalls[0].method).toBe("GET");
+    expect(catalogCalls[0].authorized).toBe(true);
+    expect(catalogCalls[0].subject).toBe(OWNER);
+    expect(catalogCalls[0].path).toContain("since=2026-10-01");
+    expect(catalogCalls[0].path).toContain("limit=200");
+  });
+
+  it("目录快照上游挂掉时给 502 + 真实原因，绝不伪装成空目录", async () => {
+    crmDown = true;
+    try {
+      const response = await api().get("/api/v1/resources/catalog").expect(502);
+      // 「空」和「取不到」必须能分开：原因句要真的带出来，而不是一句 Internal server error
+      expect(String((response.body as { error: string }).error)).toContain("503");
+    } finally {
+      crmDown = false;
+    }
   });
 
   it("CRM 挂掉时回复照常出，资料区只出一句原因", async () => {

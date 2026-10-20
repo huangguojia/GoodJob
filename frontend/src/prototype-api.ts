@@ -648,11 +648,25 @@ interface DevelopmentEmailStageInfo {
 }
 
 /** 开发信技能：这封信的依据（背调 / 收件人角色 / 缺什么） */
+interface DevelopmentEmailPersonalizationInfo {
+  hook: string;
+  relevance: string;
+  subjectAngle: string;
+  ask: string;
+  factsUsed: Array<{ label: string; value: string }>;
+  angles: string[];
+  trace: string[];
+  difference: string;
+  personalized: boolean;
+}
+
 interface DevelopmentEmailBriefInfo {
   role: { key: string; label: string; authority: string; emphasis: string };
   evidence: string[];
   missing: string[];
-  angles: Array<{ keyword: string; angle: string }>;
+  angles: Array<{ keyword: string; angle: string; short?: string }>;
+  /** 千人千面的依据；老后端可能没有这个字段，渲染时按可空处理 */
+  personalization?: DevelopmentEmailPersonalizationInfo;
   researchUsed: boolean;
   researchId: string;
   researchScore: number | null;
@@ -664,6 +678,9 @@ interface DevelopmentEmailBriefInfo {
 interface DevelopmentEmailQuality {
   ok: boolean;
   issues: string[];
+  /** 正文是否真的引用了背调（后端判定，不靠猜） */
+  researchUsed?: boolean;
+  researchSignals?: string[];
 }
 
 interface CustomerActivity {
@@ -3585,6 +3602,13 @@ interface AppState {
   closedDealKeyword: string;
   closedDealStatus: string;
   closedDealMonth: string;
+  dealArchive: Deal[];
+  dealArchiveTotal: number;
+  dealArchiveCounts: { won: number; lost: number };
+  dealArchivePage: number;
+  dealArchiveKeyword: string;
+  dealArchiveStage: string;
+  dealArchiveMonth: string;
   selectedDealId: string | null;
   pipelineStageFilter: string;
   pipelineSearch: string;
@@ -3795,6 +3819,13 @@ const state: AppState = {
   closedDealKeyword: "",
   closedDealStatus: "all",
   closedDealMonth: "",
+  dealArchive: [],
+  dealArchiveTotal: 0,
+  dealArchiveCounts: { won: 0, lost: 0 },
+  dealArchivePage: 1,
+  dealArchiveKeyword: "",
+  dealArchiveStage: "all",
+  dealArchiveMonth: "",
   selectedDealId: null,
   pipelineStageFilter: "询盘",
   pipelineSearch: "",
@@ -4148,6 +4179,7 @@ const viewLabels: Record<string, string> = {
   leaderboard: "排行",
   reports: "报表",
   knowledge: "资料维护",
+  "kb-training": "知识库训练",
   exam: "在线考试",
   "question-bank": "题库维护",
   wecom: "企业微信",
@@ -8729,6 +8761,7 @@ interface ExchangeMessageView {
   durationMs: number | null;
   errorMessage: string;
   leadId: string;
+  sourceIp: string;
   createdAt: string;
 }
 
@@ -8833,12 +8866,13 @@ function renderExchange() {
       <td>${directionLabel}</td>
       <td>${escapeHtml(item.endpointName || "—")}</td>
       <td>${escapeHtml(item.topic || "—")}</td>
+      <td>${escapeHtml(item.sourceIp || "—")}</td>
       <td>${statusBadge}${leadBadge ? ` ${leadBadge}` : ""}</td>
       <td>${item.httpStatus ?? "—"}</td>
       <td>${item.durationMs != null ? `${item.durationMs}ms` : "—"}</td>
       <td><button class="btn tiny" type="button" data-exchange-detail="${escapeHtml(item.id)}">详情</button></td>
     </tr>`;
-  }).join("") : `<tr><td colspan="8" class="empty-cell">暂无报文。配置对接方后点「发送报文」，或把接收地址交给对方系统，收发都会记录在这里。</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty-cell">暂无报文。配置对接方后点「发送报文」，或把接收地址交给对方系统，收发都会记录在这里。</td></tr>`;
 
   qsa<HTMLButtonElement>("[data-exchange-send]", endpointBox).forEach((button) => button.addEventListener("click", () => {
     const endpoint = exchangeEndpoints.find((item) => item.id === button.dataset.exchangeSend);
@@ -9016,7 +9050,7 @@ async function openExchangeMessageDetail(messageId: string) {
     const message = result.message;
     const detail = `<div class="exchange-msg-detail">
       <div><div class="exchange-detail-head"><b>基本信息</b></div>
-        <pre>${escapeHtml(`方向：${message.direction === "outbound" ? "发出 → 对方" : "对方 → 接收"}\n对接方：${message.endpointName || "—"}\n主题：${message.topic || "—"}\n${message.method} ${message.url}\n状态：${message.status === "ok" ? "成功" : message.status === "failed" ? "失败" : "已接收"} · HTTP ${message.httpStatus ?? "—"} · ${message.durationMs != null ? `${message.durationMs}ms` : "—"}${message.leadId ? `\n建线索：${message.leadId}${message.status === "received" ? "（收到的报文已自动进入线索）" : ""}` : ""}${message.errorMessage ? `\n错误：${message.errorMessage}` : ""}`)}</pre></div>
+        <pre>${escapeHtml(`方向：${message.direction === "outbound" ? "发出 → 对方" : "对方 → 接收"}\n对接方：${message.endpointName || "—"}\n来源 IP：${message.sourceIp || "—"}\n主题：${message.topic || "—"}\n${message.method} ${message.url}\n状态：${message.status === "ok" ? "成功" : message.status === "failed" ? "失败" : "已接收"} · HTTP ${message.httpStatus ?? "—"} · ${message.durationMs != null ? `${message.durationMs}ms` : "—"}${message.leadId ? `\n建线索：${message.leadId}${message.status === "received" ? "（收到的报文已自动进入线索）" : ""}` : ""}${message.errorMessage ? `\n错误：${message.errorMessage}` : ""}`)}</pre></div>
       <div><div class="exchange-detail-head"><b>请求头</b><button class="btn" type="button" data-exchange-copy="${escapeHtml(message.id)}" data-copy-part="request-headers">复制</button></div><pre>${escapeHtml(prettyJsonText(message.requestHeadersJson))}</pre></div>
       <div><div class="exchange-detail-head"><b>请求体（我方报文）</b><button class="btn" type="button" data-exchange-copy="${escapeHtml(message.id)}" data-copy-part="request-body">复制</button></div><pre>${escapeHtml(prettyJsonText(message.requestBody))}</pre></div>
       <div><div class="exchange-detail-head"><b>响应头</b></div><pre>${escapeHtml(prettyJsonText(message.responseHeadersJson))}</pre></div>
@@ -9781,6 +9815,7 @@ const viewPermissionRequirements: Record<string, string> = {
   "approval-workflows": "approval.workflow.manage",
   inbox: "message.read",
   knowledge: "training.read",
+  "kb-training": "training.read",
   exam: "training.read",
   "question-bank": "training.manage",
   "sales-distillation": "training.read",
@@ -11971,13 +12006,22 @@ function renderLeadFunnel(summary: DashboardSummary) {
     funnel.innerHTML = `<div class="todo-history-empty">线索漏斗数据更新中</div>`;
     return;
   }
+  // 图表配色统一由 CSS 变量驱动：这样换主题/换工作台方案时，折线与阶段点会跟着变，
+  // 不再出现「靛蓝工作台里躺着一条荧光黄曲线」这种脱节。变量定义见 index.html 的
+  // #dashboard.dashboard-v2 令牌块，各设计方案的覆盖文件可再行覆盖。
+  const themeColor = (name: string, fallback: string) =>
+    (getComputedStyle(funnel).getPropertyValue(name) || "").trim() || fallback;
   const colors: Record<string, string> = {
-    entered: "#70e1dc",
-    pending: "#f0a84f",
-    valid: "#dfe104",
-    customer: "#9adf73",
-    deal: "#ff6b8a"
+    entered: themeColor("--gj-funnel-entered", "#c7d2fe"),
+    pending: themeColor("--gj-funnel-pending", "#a5b4fc"),
+    valid: themeColor("--gj-funnel-valid", "#818cf8"),
+    customer: themeColor("--gj-funnel-customer", "#6366f1"),
+    deal: themeColor("--gj-funnel-deal", "#4f46e5")
   };
+  const funnelLineColor = themeColor("--gj-funnel-line", "#6366f1");
+  const funnelLabelColor = themeColor("--gj-funnel-label", "#1b2231");
+  // 折线数据点的描边环：浅色底上取卡片色（形成留白环），深色底上取深底色。
+  const funnelMarkerRing = themeColor("--gj-funnel-marker-ring", "#ffffff");
   funnel.innerHTML = `
     <div class="lead-funnel-chart-wrap">
       <div class="lead-funnel-chart" data-lead-funnel-chart role="img" aria-label="线索从进入系统、清洗到转为客户和商机的真实转化曲线"></div>
@@ -11986,7 +12030,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
     <div class="lead-funnel-stage-list" aria-label="线索漏斗阶段">
       ${data.stages.map((stage, index) => `
         <button type="button" class="lead-funnel-stage-row" data-lead-funnel-key="${escapeHtml(stage.key)}" aria-label="${escapeHtml(stage.label)} ${stage.count} 条，占进入系统 ${stage.conversionRate}%">
-          <span class="lead-funnel-stage-dot" style="--stage-color:${colors[stage.key] || "#70e1dc"}" aria-hidden="true"></span>
+          <span class="lead-funnel-stage-dot" style="--stage-color:${colors[stage.key] || funnelLineColor}" aria-hidden="true"></span>
           <span>${escapeHtml(stage.label)}</span>
           <small>${index === 0 ? "总量" : `${stage.conversionRate}%`}</small>
         </button>
@@ -12056,7 +12100,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
         connectNulls: true,
         lineStyle: {
           width: 2,
-          color: "#dfe104",
+          color: funnelLineColor,
           cap: "round",
           shadowBlur: 0,
           shadowColor: "transparent"
@@ -12069,7 +12113,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
           show: true,
           position: "top",
           distance: 7,
-          color: "#fafafa",
+          color: funnelLabelColor,
           fontSize: 13,
           fontWeight: 700,
           formatter: (params: { value: number }) => String(params.value)
@@ -12079,7 +12123,7 @@ function renderLeadFunnel(summary: DashboardSummary) {
           focus: "self",
           itemStyle: {
             borderWidth: 3,
-            borderColor: "#dfe104",
+            borderColor: funnelLineColor,
             shadowBlur: 0,
             shadowColor: "transparent"
           }
@@ -12091,9 +12135,9 @@ function renderLeadFunnel(summary: DashboardSummary) {
           label: stage.label,
           conversionRate: stage.conversionRate,
           itemStyle: {
-            color: colors[stage.key] || "#70e1dc",
+            color: colors[stage.key] || funnelLineColor,
             borderWidth: 2,
-            borderColor: "#09090b",
+            borderColor: funnelMarkerRing,
             shadowBlur: 0,
             shadowColor: "transparent"
           }
@@ -13314,6 +13358,24 @@ function renderLeads() {
     const id = button.dataset.openLead || "";
     if (id) void openLead(id);
   }));
+  qsa<HTMLElement>("tr[data-lead-id]", tbody).forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (isContactDockRowAction(event.target)) return;
+      const lead = activeLeads.find((item) => item.id === row.dataset.leadId);
+      if (lead) selectLeadForContact(lead);
+    });
+  });
+  qsa<HTMLElement>("[data-lead-id]", cards).forEach((card) => {
+    card.addEventListener("click", (event) => {
+      if (isContactDockRowAction(event.target)) return;
+      const lead = activeLeads.find((item) => item.id === card.dataset.leadId);
+      if (lead) selectLeadForContact(lead);
+    });
+  });
+  refreshContactDock("leads", (id) => {
+    const lead = [...state.leads, ...state.leadTrash].find((item) => item.id === id);
+    return lead ? leadContactDockSubject(lead) : null;
+  });
   qsa<HTMLButtonElement>("[data-lead-row-action]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
     const lead = activeLeads.find((item) => item.id === button.dataset.leadRowId);
     if (!lead) return;
@@ -13974,7 +14036,8 @@ function renderCustomers(customers: Customer[]) {
   const modeSelect = qs<HTMLSelectElement>("#customerViewModeSelect");
   if (modeSelect) modeSelect.value = mode;
   customerMapController?.setActive(mapActive);
-  if (boardActive) { renderCustomerBoard(); return; }
+  // 看板视图里的卡片不参与「点行出联系条」，切过去就等于把这条状态收掉（切回来也要重新点）。
+  if (boardActive) { hideContactDock("customers"); renderCustomerBoard(); return; }
   const visibleCustomers = filteredCustomers(customers);
   const { pageCount, start, rows: pageCustomers } = customerPageRows(visibleCustomers);
   renderCustomerPagination(visibleCustomers.length, pageCount, start);
@@ -14010,6 +14073,14 @@ function renderCustomers(customers: Customer[]) {
     if (!customer) return;
     row.dataset.customerId = customer.id;
     row.classList.toggle("selected", customer.id === (state.selectedCustomerId || customers[0]?.id));
+    row.addEventListener("click", (event) => {
+      if (isContactDockRowAction(event.target)) return;
+      selectCustomerForContact(customer);
+    });
+  });
+  refreshContactDock("customers", (id) => {
+    const customer = state.customers.find((item) => item.id === id);
+    return customer ? customerContactDockSubject(customer) : null;
   });
   qsa<HTMLButtonElement>("[data-open-customer]", qs("#customers")!).forEach((button) => button.addEventListener("click", () => {
     const customer = customers.find((item) => item.id === button.dataset.openCustomer);
@@ -14061,6 +14132,10 @@ function renderCustomers(customers: Customer[]) {
   qsa<HTMLElement>("[data-customer-mobile-id]", qs("#customerMobileList")!).forEach((card) => {
     const customer = state.customers.find((item) => item.id === card.dataset.customerMobileId);
     if (!customer) return;
+    card.addEventListener("click", (event) => {
+      if (isContactDockRowAction(event.target)) return;
+      selectCustomerForContact(customer);
+    });
     qs<HTMLButtonElement>("[data-customer-mobile-whatsapp]", card)?.addEventListener("click", () => {
       void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
     });
@@ -14120,12 +14195,20 @@ function renderCustomerPool() {
   qsa<HTMLElement>("[data-pool-customer-id]", qs("#customer-pool")!).forEach((row) => {
     const customer = state.publicCustomers.find((item) => item.id === row.dataset.poolCustomerId);
     if (!customer) return;
+    row.addEventListener("click", (event) => {
+      if (isContactDockRowAction(event.target)) return;
+      selectPoolCustomerForContact(customer);
+    });
     qs<HTMLButtonElement>("[data-pool-whatsapp]", row)?.addEventListener("click", () => {
       void openWhatsAppForContact({ phone: customerContactDetails(customer).whatsapp, displayName: customer.contact || customer.company });
     });
     qs<HTMLButtonElement>("[data-pool-claim]", row)?.addEventListener("click", (event) => {
       void claimCustomerFromPool(customer.id, event.currentTarget as HTMLButtonElement);
     });
+  });
+  refreshContactDock("customer-pool", (id) => {
+    const customer = state.publicCustomers.find((item) => item.id === id);
+    return customer ? poolCustomerContactDockSubject(customer) : null;
   });
 }
 
@@ -14202,6 +14285,9 @@ function renderCustomerBulkBar(customers: Customer[]) {
   if (!toolbar) return;
   const selectedCount = state.selectedCustomerIds.length;
   const allSelected = customers.length > 0 && customers.every((customer) => state.selectedCustomerIds.includes(customer.id));
+  // 联系条挂在这条工具条的右端，内容由 renderCustomers 末尾的 refreshContactDock 负责重绘。
+  // 这里整块重写 innerHTML 会把它一起冲掉 —— 先摘下来、写完再放回去，避免每次列重渲染都重建节点（会闪）。
+  const dock = contactDockElement("customers");
   toolbar.innerHTML = `
     <label class="customer-select-all"><input type="checkbox" data-select-all-customers ${allSelected ? "checked" : ""}>全选</label>
     <span class="filter">已选 ${selectedCount} 个客户</span>
@@ -14209,6 +14295,7 @@ function renderCustomerBulkBar(customers: Customer[]) {
     <button class="btn danger" data-bulk-delete-customers ${selectedCount ? "" : "disabled"}>批量删除</button>
     <button class="btn">批量导出</button>
   `;
+  if (dock) toolbar.appendChild(dock);
   qs<HTMLInputElement>("[data-select-all-customers]", toolbar)?.addEventListener("change", (event) => {
     const pageIds = new Set(customers.map((customer) => customer.id));
     state.selectedCustomerIds = (event.currentTarget as HTMLInputElement).checked
@@ -14569,11 +14656,14 @@ async function openWhatsAppForContact(input: { phone: string; displayName: strin
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/* 联系通道图标。通用通道（邮箱 / 电话）走 24 网格描边，与全站线性图标同密度。
+   WhatsApp / 微信是品牌标识，用官方 glyph 实心绘制 —— 自绘“近似泡泡”在 16px 下会被一眼看成画错了；
+   实心块天然更重，故用 --glyph-k 按视觉高度配重（微信 glyph 宽高比 1.46:1，天然横长，需单独放大）。 */
 function customerContactIcon(channel: "email" | "phone" | "whatsapp" | "wechat") {
-  if (channel === "email") return `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`;
-  if (channel === "phone") return `<svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.3 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"/></svg>`;
-  if (channel === "whatsapp") return `<svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9 9 0 0 1-4.2-1.1L3 20l1.3-4.4A8.5 8.5 0 1 1 21 11.5z"/><path d="M8.7 8.4c.5 3 2.2 4.7 5.2 5.2"/></svg>`;
-  return `<svg viewBox="0 0 24 24"><path d="M8.5 5C5.5 5 3 7 3 9.5c0 1.5.9 2.9 2.3 3.7L5 15l2.1-1c.5.1.9.1 1.4.1 3 0 5.5-2 5.5-4.5S11.5 5 8.5 5z"/><path d="M15.5 10c3 0 5.5 2 5.5 4.5 0 1.5-.9 2.9-2.3 3.7L19 20l-2.1-1c-.5.1-.9.1-1.4.1-3 0-5.5-2-5.5-4.5"/></svg>`;
+  if (channel === "email") return `<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.99 5.73a2 2 0 0 1-2.02 0L2 7"/></svg>`;
+  if (channel === "phone") return `<svg viewBox="0 0 24 24"><path d="M13.83 16.57a1 1 0 0 0 1.21-.3l.36-.47A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.47.35a1 1 0 0 0-.29 1.23 14 14 0 0 0 6.39 6.39"/></svg>`;
+  if (channel === "whatsapp") return `<svg viewBox="0 0 24 24" class="contact-brand-glyph" style="--glyph-k:.9"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/></svg>`;
+  return `<svg viewBox="0 0 24 24" class="contact-brand-glyph" style="--glyph-k:1.12"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348ZM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18Zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18Zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03Zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982Zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982Z"/></svg>`;
 }
 
 function researchButtonIcon() {
@@ -14906,6 +14996,16 @@ function renderDevelopmentEmailPage() {
   const generateButtonHtml = mailSource === "cli"
     ? `<button class="btn" type="button" data-mail-generate ${developmentEmailLoading ? "disabled" : ""}>${researchButtonIcon()}${developmentEmailLoading ? "CLI 生成中" : "本机 CLI 生成"}</button>`
     : `<button class="btn" type="button" data-mail-ai ${developmentEmailLoading ? "disabled" : ""}>${researchButtonIcon()}${developmentEmailLoading ? "AI 生成中" : readiness.aiReady ? readiness.aiGenerated ? "AI 重新生成" : "AI 生成" : "配置 AI"}</button>`;
+  // 「这封信从哪来」：模板 / AI / CLI 必须一句话说清，不能只显示一个模型名
+  const mailOriginLabel = /^固定模板/u.test(draft.engine)
+    ? "固定模板（阶段蓝图 + 已留档事实，不联网编造）"
+    : /CLI/u.test(draft.engine)
+      ? `本机 CLI · ${draft.engine}`
+      : `AI 模型 · ${draft.engine}`;
+  const mailPersonalization = briefInfo?.personalization || null;
+  const mailFactsUsed = mailPersonalization?.factsUsed || [];
+  // 以后端判定为准：正文里真的出现了背调信号才算"用了背调"
+  const mailResearchUsed = Boolean(qualityInfo?.researchUsed ?? briefInfo?.researchUsed);
   box.innerHTML = `
     <header class="mail-studio-header">
       <div class="research-identity"><button class="customer-page-back" type="button" data-mail-back title="返回" aria-label="返回"><svg viewBox="0 0 24 24"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button><div><h1>${escapeHtml(draft.recipientCompany)}</h1><span>开发信</span></div></div>
@@ -14945,19 +15045,36 @@ function renderDevelopmentEmailPage() {
         <section class="mail-brief" aria-label="开发信依据">
           <div class="mail-brief-head">
             <span>开发信依据</span>
-            ${stageInfo ? badge(`当前阶段 · ${stageInfo.label}`, stageInfo.canSend ? "amber" : "red") : ""}
+            <span class="mail-brief-badges">
+              ${stageInfo ? badge(`当前阶段 · ${stageInfo.label}`, stageInfo.canSend ? "amber" : "red") : ""}
+              ${briefInfo ? (mailPersonalization?.personalized ? badge("千人千面 · 已生效", "green") : badge("千人千面 · 未生效", "red")) : ""}
+            </span>
           </div>
+          <p class="mail-brief-origin">这封由 <b>${escapeHtml(mailOriginLabel)}</b> 写成${stageInfo ? `，按阶段「${escapeHtml(stageInfo.label)}」` : ""}${briefInfo ? `，对<b>${escapeHtml(briefInfo.role.label)}</b>说话` : ""}。</p>
           ${stageInfo ? `<p class="mail-brief-objective">${escapeHtml(stageInfo.objective)}</p>` : ""}
-          ${stageInfo && stageInfo.objective ? `<p class="mail-brief-note">切入角度：${escapeHtml(stageInfo.angle)}</p>` : ""}
-          ${briefInfo ? `<p class="mail-brief-note">对谁说：<b>${escapeHtml(briefInfo.role.label)}</b> — ${escapeHtml(briefInfo.role.authority)}</p>` : ""}
-          ${briefInfo && briefInfo.researchUsed
-            ? `<p class="mail-brief-note">已引用背调：${escapeHtml(briefInfo.researchEngine || "本系统背调")}${typeof briefInfo.researchScore === "number" ? ` · 评分 ${briefInfo.researchScore}` : ""}${briefInfo.researchCreatedAt ? ` · ${escapeHtml(formatDateTime(briefInfo.researchCreatedAt))}` : ""}${briefInfo.researchVerdict ? ` · ${escapeHtml(briefInfo.researchVerdict)}` : ""}</p>`
-            : `<p class="mail-brief-note is-warn">尚未引用背调结果，建议先跑一次 AI 背调再写信</p>`}
+          ${briefInfo ? `<p class="mail-brief-note">对<b>${escapeHtml(briefInfo.role.label)}</b>说话：${escapeHtml(briefInfo.role.authority)}</p>` : ""}
+          ${mailResearchUsed
+            ? `<p class="mail-brief-note">已引用背调：${escapeHtml(briefInfo?.researchEngine || "本系统背调")}${typeof briefInfo?.researchScore === "number" ? ` · 评分 ${briefInfo.researchScore}` : ""}${briefInfo?.researchCreatedAt ? ` · ${escapeHtml(formatDateTime(briefInfo.researchCreatedAt))}` : ""}${briefInfo?.researchVerdict ? ` · ${escapeHtml(briefInfo.researchVerdict)}` : ""}</p>`
+            : briefInfo?.researchUsed
+              ? `<p class="mail-brief-note is-warn">有背调留档${briefInfo.researchEngine ? `（${escapeHtml(briefInfo.researchEngine)}）` : ""}，但这封正文没用上——按当前阶段写信即可。</p>`
+              : `<p class="mail-brief-note is-warn">尚无背调留档：这一封只能按阶段蓝图加业务关键词写，换掉公司名就能发给下一家。</p>`}
+          ${mailFactsUsed.length && mailPersonalization?.personalized
+            ? `<div class="mail-brief-facts">${mailFactsUsed.map((fact) => `<span class="mail-brief-chip" title="${escapeHtml(fact.value)}">${escapeHtml(fact.label)}</span>`).join("")}</div>`
+            : mailFactsUsed.length
+              ? `<p class="mail-brief-note">手上有这些背调素材（${escapeHtml(mailFactsUsed.map((fact) => fact.label).join("、"))}），但没写进这封。</p>`
+              : ""}
+          ${mailPersonalization && mailPersonalization.angles.length
+            ? `<p class="mail-brief-note">${mailPersonalization.personalized ? "应用角度" : "可切入角度（未用上）"}：${escapeHtml(mailPersonalization.angles.join(" · "))}</p>`
+            : ""}
+          ${mailPersonalization ? `<p class="mail-brief-diff">${escapeHtml(mailPersonalization.difference)}</p>` : ""}
           ${briefInfo && briefInfo.evidence.length ? `<p class="mail-brief-note">依据来源：${escapeHtml(briefInfo.evidence.join("、"))}</p>` : ""}
           ${briefInfo && briefInfo.missing.length ? `<p class="mail-brief-note is-warn">待补齐：${escapeHtml(briefInfo.missing.join("、"))}</p>` : ""}
           ${qualityInfo && qualityInfo.issues.length
             ? `<ul class="mail-brief-issues">${qualityInfo.issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>`
             : qualityInfo ? `<p class="mail-brief-note is-ok">发送前自检：通过</p>` : ""}
+          ${briefInfo && !briefInfo.researchUsed
+            ? `<div class="mail-brief-action"><button class="btn" type="button" data-mail-research ${developmentEmailLoading ? "disabled" : ""}>先跑背调，再按背调重写</button><span>背调会留档；之后这封为什么这么写就有据可查。</span></div>`
+            : ""}
         </section>` : ""}
         <label class="mail-subject-field"><span>主题</span><input id="developmentEmailSubject" value="${escapeHtml(draft.subject)}"></label>
         <label class="mail-body-field"><span>正文</span><textarea id="developmentEmailBody">${escapeHtml(draft.body)}</textarea></label>
@@ -15010,6 +15127,7 @@ function renderDevelopmentEmailPage() {
   qsa<HTMLButtonElement>("[data-mail-scenario]", box).forEach((button) => button.addEventListener("click", () => {
     void switchDevelopmentEmailScenario(button.dataset.mailScenario as DevelopmentEmailScenario);
   }));
+  qs<HTMLButtonElement>("[data-mail-research]", box)?.addEventListener("click", () => void researchThenWriteDevelopmentEmail());
   qs<HTMLButtonElement>("[data-mail-send]", box)?.addEventListener("click", () => {
     if (developmentEmailChannel === "whatsapp") void sendDevelopmentWhatsAppFromStudio();
     else void sendDevelopmentEmailFromStudio();
@@ -15066,6 +15184,47 @@ function applyDevelopmentEmailDraftResponse(result: DevelopmentEmailDraftRespons
   if (result.readiness) developmentEmailReadiness = result.readiness;
   if (result.companyProfile) developmentEmailCompanyProfile = result.companyProfile;
   return true;
+}
+
+/**
+ * 「先跑背调，再按背调重写」。
+ *
+ * 之前这一步是断的：面板上写着"建议先跑一次背调"，但没有任何入口 ——
+ * 业务员得自己跳到背调页找同一家公司再点一次，回来还得重新生成。
+ * 这里一次点完：背调跑完会留档，重新取草稿时 useResearch 自然引用到它。
+ */
+async function researchThenWriteDevelopmentEmail() {
+  const subject = developmentEmailSubject;
+  if (!subject || developmentEmailLoading) return;
+  developmentEmailLoading = true;
+  developmentEmailLastError = "";
+  renderDevelopmentEmailPage();
+  try {
+    const result = await api<{
+      research: { id?: string } | null;
+      pending?: boolean;
+      engineJob?: AiEngineJobView;
+      runnerName?: string;
+      engine?: string;
+    }>("/api/ai-background-research", {
+      method: "POST",
+      body: JSON.stringify({ entityType: subject.entityType, entityId: subject.entityId })
+    });
+    let research = result.research;
+    if (result.pending && result.engineJob) {
+      const payload = await awaitAiEngineJob(result.engineJob) as { research?: { id?: string } | null };
+      research = payload.research || null;
+    }
+    if (!research) throw new Error("背调没有返回结果，请稍后重试");
+    developmentEmailLoading = false;
+    await generateDevelopmentEmailDraftPage(false);
+    toast("已按新背调重写");
+  } catch (error) {
+    developmentEmailLoading = false;
+    developmentEmailLastError = error instanceof Error ? error.message : "背调失败";
+    toast(developmentEmailLastError, "error");
+    renderDevelopmentEmailPage();
+  }
 }
 
 async function generateDevelopmentEmailDraftPage(requireAi = false) {
@@ -15688,6 +15847,240 @@ function launchCustomerContact(customer: Customer, channel: "email" | "phone" | 
   toast("企业微信联系适配器已预留，通讯接口接入后可直接发起联系");
 }
 
+/* ===== 列表页「快捷联系条」（客户 / 线索 / 客户公池共用） =====
+ * 用户需求：在这三处列表里点某一行后，把该行的联系方式浮到该页筛选 / 批量操作条的右端
+ * （批量导出右侧那片空位）——邮箱 / 电话 / WhatsApp / 微信，点击直接跳转，不必先打开详情抽屉。
+ * 形态上刻意「去按钮化」：只有图标 + 文字，无外框、无底色、无关闭按钮；
+ * 选择只改行高亮、不打开抽屉；内容签名不变时跳过重绘，避免筛选 / 翻页触发列表重渲染时闪动重播动画。 */
+type ContactDockChannel = "email" | "phone" | "whatsapp" | "wechat";
+
+interface ContactDockSubject {
+  name: string;
+  meta?: string;
+  email?: string;
+  phone?: string;
+  whatsapp?: string;
+  wechat?: string;
+  /** 该渠道没有值时的处理：客户走维护弹窗，线索 / 公池只提示 */
+  onMissing?: (channel: ContactDockChannel) => void;
+}
+
+const CONTACT_DOCK_CHANNELS: ContactDockChannel[] = ["email", "phone", "whatsapp", "wechat"];
+
+const CONTACT_DOCK_LABEL: Record<ContactDockChannel, string> = {
+  email: "邮箱",
+  phone: "电话",
+  whatsapp: "WhatsApp",
+  wechat: "微信"
+};
+
+/* 联系条挂到该页「筛选 / 批量操作条」的右端（批量导出右侧那片空位），而不是表格上方另起一块横幅 */
+const CONTACT_DOCK_HOSTS: Record<string, { view: string; container: string }> = {
+  customers: { view: "#customers", container: "#customerBulkToolbar" },
+  leads: { view: "#leads", container: ".lead-filter-row" },
+  "customer-pool": { view: "#customer-pool", container: ".customer-pool-toolbar" }
+};
+
+/** 当前选中的行。存模块级而不是只存在 DOM 上 —— 客户页批量工具条会整块重写 innerHTML，
+ *  联系条得跟着活下来；同时用签名判断内容没变就跳过重绘，避免列表重渲染时闪动。 */
+const contactDockSelection: Record<string, { id: string; signature: string } | undefined> = {};
+
+function contactDockValue(subject: ContactDockSubject, channel: ContactDockChannel) {
+  if (channel === "email") return String(subject.email || "").trim();
+  if (channel === "phone") return String(subject.phone || "").trim();
+  if (channel === "whatsapp") {
+    return whatsAppEntryHref(subject.whatsapp || "") ? normalizeWhatsAppPhone(subject.whatsapp || "") : "";
+  }
+  return String(subject.wechat || "").trim();
+}
+
+function launchContactDockChannel(subject: ContactDockSubject, channel: ContactDockChannel) {
+  const value = contactDockValue(subject, channel);
+  if (!value) {
+    if (subject.onMissing) subject.onMissing(channel);
+    else toast(`该联系人还没有${CONTACT_DOCK_LABEL[channel]}，先补齐再联系`);
+    return;
+  }
+  if (channel === "email") {
+    window.location.href = `mailto:${value}?subject=${encodeURIComponent(`GoodJob CRM · ${subject.name}`)}`;
+    return;
+  }
+  if (channel === "phone") {
+    window.location.href = `tel:${value.replace(/[^+\d]/g, "")}`;
+    return;
+  }
+  if (channel === "whatsapp") {
+    void openWhatsAppForContact({ phone: value, displayName: subject.name });
+    return;
+  }
+  void navigator.clipboard?.writeText(value)
+    .then(() => toast(`微信号 ${value} 已复制，去微信添加或搜索即可`))
+    .catch(() => toast(`微信号：${value}（复制失败，请手动记录）`));
+}
+
+function contactDockHostView(hostKey: string) {
+  const host = CONTACT_DOCK_HOSTS[hostKey];
+  return host ? qs<HTMLElement>(host.view) : null;
+}
+
+function contactDockElement(hostKey: string) {
+  const view = contactDockHostView(hostKey);
+  return view ? qs<HTMLElement>(`.contact-dock[data-contact-dock="${hostKey}"]`, view) : null;
+}
+
+/**
+ * 联系条只认「当前这一屏里真的渲染出来的那一行」。
+ *
+ * 换标签（未成交 / 已成交）、换筛选、翻页、搜索之后，先前点的那一行可能已经不在列表里了，
+ * 这时候联系条必须跟着消失 —— 否则界面上会出现「一个客户都没点，却挂着上一次点的那行的联系方式」，
+ * 而且会让人以为这条联系方式属于眼下看到的列表（用户口径 2026-10-14：不点客户就不显示）。
+ */
+const CONTACT_DOCK_ROW_SELECTOR: Record<string, (subjectId: string) => string> = {
+  customers: (id) => `#customers tbody tr[data-customer-id="${CSS.escape(id)}"], #customerMobileList [data-customer-mobile-id="${CSS.escape(id)}"]`,
+  leads: (id) => `#leadsTableBody tr[data-lead-id="${CSS.escape(id)}"], #leadMobileList [data-lead-id="${CSS.escape(id)}"]`,
+  "customer-pool": (id) => `#customerPoolTableBody tr[data-pool-customer-id="${CSS.escape(id)}"], #customerPoolMobileList [data-pool-customer-id="${CSS.escape(id)}"]`
+};
+
+function contactDockRowRendered(hostKey: string, subjectId: string) {
+  const view = contactDockHostView(hostKey);
+  const selector = CONTACT_DOCK_ROW_SELECTOR[hostKey];
+  return Boolean(view && selector && qs<HTMLElement>(selector(subjectId), view));
+}
+
+function contactDockSignature(subject: ContactDockSubject) {
+  return CONTACT_DOCK_CHANNELS.map((channel) => contactDockValue(subject, channel)).join("\u0001");
+}
+
+/** 渲染联系条：只放图标 + 文字（无外框、无底色、无关闭按钮），落到宿主筛选条的最右端 */
+function renderContactDockContent(hostKey: string, subject: ContactDockSubject, subjectId: string) {
+  const view = contactDockHostView(hostKey);
+  if (!view) return;
+  const container = qs<HTMLElement>(CONTACT_DOCK_HOSTS[hostKey].container, view);
+  if (!container) {
+    const orphan = contactDockElement(hostKey);
+    if (orphan) orphan.hidden = true;
+    return;
+  }
+  const signature = contactDockSignature(subject);
+  const previous = contactDockSelection[hostKey];
+  const unchanged = previous?.id === subjectId && previous.signature === signature;
+  contactDockSelection[hostKey] = { id: subjectId, signature };
+  let dock = contactDockElement(hostKey);
+  if (!dock) {
+    dock = document.createElement("div");
+    dock.className = "contact-dock";
+    dock.dataset.contactDock = hostKey;
+    dock.setAttribute("role", "group");
+    dock.setAttribute("aria-label", "快捷联系");
+  }
+  if (dock.parentElement !== container) container.appendChild(dock);
+  dock.hidden = false;
+  if (unchanged && dock.childElementCount > 0) return;
+  dock.innerHTML = CONTACT_DOCK_CHANNELS.map((channel) => {
+    const value = contactDockValue(subject, channel);
+    const label = CONTACT_DOCK_LABEL[channel];
+    return `<button class="contact-dock-action ${value ? "is-ready" : "is-empty"}" type="button" data-contact-dock-channel="${channel}" title="${escapeHtml(value ? `${label}：${value}` : `${label}未维护，点击补充`)}">${customerContactIcon(channel)}<span>${escapeHtml(label)}</span></button>`;
+  }).join("");
+  qsa<HTMLButtonElement>("[data-contact-dock-channel]", dock).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      launchContactDockChannel(subject, (button.dataset.contactDockChannel || "email") as ContactDockChannel);
+    });
+  });
+}
+
+function showContactDock(hostKey: string, subjectId: string, subject: ContactDockSubject) {
+  renderContactDockContent(hostKey, subject, subjectId);
+}
+
+/** 列表重渲染后按 id 重新取数，让已展开的联系条跟着最新资料走（对象已不存在、或那一行已不在当前列表里，则收起） */
+function refreshContactDock(hostKey: string, resolve: (id: string) => ContactDockSubject | null) {
+  const selection = contactDockSelection[hostKey];
+  if (!selection) return;
+  const subject = resolve(selection.id);
+  if (!subject || !contactDockRowRendered(hostKey, selection.id)) {
+    hideContactDock(hostKey);
+    return;
+  }
+  renderContactDockContent(hostKey, subject, selection.id);
+}
+
+function hideContactDock(hostKey: string) {
+  contactDockSelection[hostKey] = undefined;
+  const dock = contactDockElement(hostKey);
+  if (!dock) return;
+  dock.hidden = true;
+  dock.innerHTML = "";
+}
+
+/** 客户（未成交 / 已成交）列表行 → 联系条数据 */
+function customerContactDockSubject(customer: Customer): ContactDockSubject {
+  const contacts = customerContactDetails(customer);
+  return {
+    name: customer.company,
+    meta: [customer.country, customer.contact, customer.ownerName || "未分配"].filter(Boolean).join(" · "),
+    email: contacts.email,
+    phone: contacts.phone,
+    whatsapp: contacts.whatsapp,
+    wechat: contacts.wechat,
+    onMissing: (channel) => {
+      toast(`请先补充客户${CONTACT_DOCK_LABEL[channel]}，再发起联系`);
+      openCustomerModal(customer);
+    }
+  };
+}
+
+function selectCustomerForContact(customer: Customer) {
+  state.selectedCustomerId = customer.id;
+  qsa<HTMLElement>("#customers tbody tr").forEach((row) => row.classList.toggle("selected", row.dataset.customerId === customer.id));
+  showContactDock("customers", customer.id, customerContactDockSubject(customer));
+}
+
+/** 线索列表行 → 联系条数据（线索只有一列电话，WhatsApp 复用该号码，与线索详情一致） */
+function leadContactDockSubject(lead: Lead): ContactDockSubject {
+  return {
+    name: lead.company,
+    meta: [lead.contact || "联系人待补充", lead.country || "国家待补充", lead.stage].filter(Boolean).join(" · "),
+    email: lead.email || "",
+    phone: lead.phone || "",
+    whatsapp: lead.phone || "",
+    wechat: lead.wechat || "",
+    onMissing: (channel) => toast(`该线索还没有${CONTACT_DOCK_LABEL[channel]}，可在线索详情里补充`)
+  };
+}
+
+function selectLeadForContact(lead: Lead) {
+  state.selectedLeadId = lead.id;
+  qsa<HTMLElement>("#leadsTableBody tr[data-lead-id]").forEach((row) => row.classList.toggle("selected", row.dataset.leadId === lead.id));
+  showContactDock("leads", lead.id, leadContactDockSubject(lead));
+}
+
+/** 客户公池行 → 联系条数据（未领取的客户只能看与联系，不能改资料） */
+function poolCustomerContactDockSubject(customer: Customer): ContactDockSubject {
+  const contacts = customerContactDetails(customer);
+  return {
+    name: customer.company,
+    meta: [customer.country, customer.contact || "联系人待维护", customer.previousOwnerName || "原负责人未记录"].filter(Boolean).join(" · "),
+    email: contacts.email,
+    phone: contacts.phone,
+    whatsapp: contacts.whatsapp,
+    wechat: contacts.wechat,
+    onMissing: (channel) => toast(`该公池客户还没有${CONTACT_DOCK_LABEL[channel]}，领取后可在客户资料里补充`)
+  };
+}
+
+function selectPoolCustomerForContact(customer: Customer) {
+  const view = qs<HTMLElement>("#customer-pool");
+  if (view) qsa<HTMLElement>("[data-pool-customer-id]", view).forEach((row) => row.classList.toggle("selected", row.dataset.poolCustomerId === customer.id));
+  showContactDock("customer-pool", customer.id, poolCustomerContactDockSubject(customer));
+}
+
+/** 行点击守卫：行内的按钮 / 勾选框 / 链接有自己的动作，不触发「选中 + 出联系条」 */
+function isContactDockRowAction(target: EventTarget | null) {
+  const node = target instanceof HTMLElement ? target : null;
+  return Boolean(node?.closest("button, a, input, select, label, textarea"));
+}
+
 function renderCustomerDetailPage(customer?: Customer) {
   const box = qs<HTMLElement>("#customerDetailPage");
   if (!box) return;
@@ -15755,10 +16148,10 @@ function renderCustomerDetailPage(customer?: Customer) {
           <div class="customer-contact-row"><span>其它渠道</span><b>${escapeHtml(current.contactRemark || "未维护")}</b><small>${current.contactRemark ? "已登记备注" : "可补充 LinkedIn / 微信等"}</small></div>
         </div>
         <div class="customer-contact-actions">
-          <button class="customer-contact-action ${contacts.email ? "is-ready" : ""}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
-          <button class="customer-contact-action ${contacts.phone ? "is-ready" : ""}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
+          <button class="customer-contact-action ${contacts.email ? "is-ready" : "is-empty"}" type="button" data-customer-contact="email">${customerContactIcon("email")}<span>邮件${contacts.email ? "" : " · 待维护"}</span></button>
+          <button class="customer-contact-action ${contacts.phone ? "is-ready" : "is-empty"}" type="button" data-customer-contact="phone">${customerContactIcon("phone")}<span>电话${contacts.phone ? "" : " · 待维护"}</span></button>
           <button class="customer-contact-action ${whatsappHref ? "is-ready" : "is-empty"}" type="button" data-customer-contact="whatsapp" ${whatsAppEntryAttrs(contacts.whatsapp)}>${customerContactIcon("whatsapp")}<span>WhatsApp · ${whatsappHref ? "直接沟通" : "未维护"}</span></button>
-          <button class="customer-contact-action ${contacts.wechat ? "is-ready" : ""}" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>微信 · ${contacts.wechat ? "点击复制" : "未维护"}</span></button>
+          <button class="customer-contact-action ${contacts.wechat ? "is-ready" : "is-empty"}" type="button" data-customer-contact="wechat">${customerContactIcon("wechat")}<span>微信 · ${contacts.wechat ? "点击复制" : "未维护"}</span></button>
         </div>
       </section>
 
@@ -15778,6 +16171,11 @@ function renderCustomerDetailPage(customer?: Customer) {
         <div class="communication-insight-loading"><span class="loading-dot"></span><b>正在读取即刻沟通客户画像</b><small>只读同步，不会发送任何消息</small></div>
       </section>
 
+      <section class="customer-page-section full customer-page-journey">
+        <div class="customer-page-section-head"><div><h2>客户旅程</h2><p>建档、沟通、商机到成交的触点时间轴，WhatsApp 自动同步的跟进同样上墙</p></div></div>
+        <div id="customerPageJourneyTimeline"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">加载中...</div></div>
+      </section>
+
       <section class="customer-page-section full" id="customerDevEmailHistory">
         <div class="customer-page-section-head"><div><h2>开发信历史</h2><p>发出去的每一封开发信与客户的反馈记录</p></div><button class="btn" type="button" data-cust-email-journey>查看完整过程</button></div>
         <div class="communication-insight-loading"><span class="loading-dot"></span><b>正在读取开发信历史</b><small>发送、打开、回复与退信记录都会归档在这里</small></div>
@@ -15790,6 +16188,7 @@ function renderCustomerDetailPage(customer?: Customer) {
             <time>${escapeHtml(formatDateTime(activity.createdAt))}</time>
             <div><b>${escapeHtml(customerActivityLabel(activity.type))} · ${escapeHtml(activity.operatorName || "未知操作人")}</b><span>${escapeHtml(activity.content)}</span></div>
             <small>${activity.nextReminder ? `下次：${escapeHtml(activity.nextReminder)}` : "未设置下次提醒"}</small>
+            ${activityHasTranscript(activity) && activity.id ? `<button class="btn" type="button" data-activity-transcript="${escapeHtml(activity.id)}" data-activity-name="${escapeHtml(current.contact || current.company)}" title="查看当天对话记录">${customerContactIcon("whatsapp")} 对话</button>` : ""}
           </article>`).join("") : `<div class="customer-page-empty">暂无跟进记录。新增首条联系记录后会在这里形成时间线。</div>`}</div>
       </section>
     </div>
@@ -15805,6 +16204,8 @@ function renderCustomerDetailPage(customer?: Customer) {
   qs<HTMLButtonElement>("[data-customer-page-journey]", box)?.addEventListener("click", () =>
     void openOutreachCustomerJourney("customer", current.id, current.company, "customer-detail"));
   qsa<HTMLButtonElement>("[data-customer-page-follow]", box).forEach((button) => button.addEventListener("click", () => addFollowRecord(current)));
+  qsa<HTMLButtonElement>("[data-activity-transcript]", box).forEach((button) => button.addEventListener("click", () =>
+    void openWhatsappTranscriptModal(button.dataset.activityTranscript || "", button.dataset.activityName || "客户")));
   qs<HTMLButtonElement>("[data-customer-page-pipeline]", box)?.addEventListener("click", () => activateNavView("pipeline"));
   qsa<HTMLButtonElement>("[data-cust-email-journey]", box).forEach((button) => button.addEventListener("click", () =>
     void openOutreachCustomerJourney("customer", current.id, current.company, "customer-detail")));
@@ -15813,6 +16214,7 @@ function renderCustomerDetailPage(customer?: Customer) {
   });
   void loadCustomerCommunicationInsights(current);
   void loadCustomerDevEmailHistory(current);
+  renderCustomerJourney(current, qs<HTMLElement>("#customerPageJourneyTimeline", box));
 }
 
 /** 客户详情页内嵌「开发信历史」：复用 outreach-journey 档案接口，按客户聚合已发邮件 */
@@ -16631,40 +17033,113 @@ function bindJourneyTooltipGlobals() {
   window.addEventListener("resize", hideJourneyTooltip);
 }
 
-function renderCustomerJourney(customer: Customer) {
-  const container = qs<HTMLElement>("#customerJourneyTimeline");
+/* 客户旅程节点图标（线性描边，24×24）。
+ *
+ * 为什么不用 emoji：emoji 是彩色位图，会盖掉节点自身的 --node-color，
+ * 且形状/基线在不同系统字体下不一致 —— 整条时间轴看着像贴了一排贴纸。
+ * 描边图标用 currentColor 取色，颜色完全由节点语义决定，粗细也统一。
+ *
+ * 表要覆盖两类 type：客户跟进（customerActivityLabel 的 6 种）与
+ * 商机事件（dealEventLabel 的 12 种）。**任一遗漏都会静默退化成同一个图标** ——
+ * 此前 updated / stage / follow_up / payment / document / archived 六种就没登记，
+ * 商机时间轴上一眼全是「备注」图标。
+ */
+const JOURNEY_GLYPHS: Record<string, string> = {
+  users: '<path d="M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.5"/><path d="M21 20v-1.5a4 4 0 0 0-3-3.87"/><path d="M15.5 4.1a3.5 3.5 0 0 1 0 7"/>',
+  pencil: '<path d="M4 20h4L19.5 8.5a2.12 2.12 0 0 0-3-3L5 17z"/><path d="m14.5 6.5 3 3"/>',
+  plusCircle: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+  flag: '<path d="M5 3v18"/><path d="M5 4h13l-2.5 4L18 12H5"/>',
+  calendarCheck: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 9.5h17"/><path d="m9.5 14.5 1.8 1.8 3.6-3.8"/>',
+  tag: '<path d="M3 3h8l10 10-8 8L3 11z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  package: '<path d="M20.5 7.8v8.4a2 2 0 0 1-1 1.74l-6.5 3.7a2 2 0 0 1-2 0l-6.5-3.7a2 2 0 0 1-1-1.74V7.8a2 2 0 0 1 1-1.74l6.5-3.7a2 2 0 0 1 2 0l6.5 3.7a2 2 0 0 1 1 1.74Z"/><path d="m3.6 6.9 8.4 4.8 8.4-4.8"/><path d="M12 21.5v-9.8"/>',
+  exchange: '<path d="M4 8h13l-3.5-3.5"/><path d="M20 16H7l3.5 3.5"/>',
+  banknote: '<rect x="2.5" y="6.5" width="19" height="11" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>',
+  file: '<path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8z"/><path d="M14 3v5h5"/><path d="M9 13.5h6M9 17h4"/>',
+  trophy: '<path d="M6 3h12v6a6 6 0 0 1-12 0z"/><path d="M6 5H4.2a1.8 1.8 0 0 0 0 3.6H6"/><path d="M18 5h1.8a1.8 1.8 0 0 1 0 3.6H18"/><path d="M12 15v4"/><path d="M8 21h8"/>',
+  xCircle: '<circle cx="12" cy="12" r="8.5"/><path d="m14.8 9.2-5.6 5.6M9.2 9.2l5.6 5.6"/>',
+  archive: '<rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8.5"/><path d="M10 12.5h4"/>'
+};
+
+function journeyGlyph(name: string) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${JOURNEY_GLYPHS[name] || JOURNEY_GLYPHS.pencil}</svg>`;
+}
+
+/**
+ * 「跟进/旅程 → 查看对话」弹层：从 CRM 后端代理读插件会话库里的当天文字版。
+ * 原文不落 CRM 库，所以这里是**按需拉取**——图标点了才请求，拉不到就如实说原因。
+ */
+async function openWhatsappTranscriptModal(activityId: string, contactName: string) {
+  openModal(`对话记录 · ${contactName}`, `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">正在读取对话文字版…</div>`, `<button class="btn" type="button" data-modal-close>关闭</button>`);
+  try {
+    const transcript = await api<{ runDate: string; timezone: string; contactName: string; contactPhone: string; messages: Array<{ direction: "inbound" | "outbound"; occurredAt: string; body: string; kind: string }> }>(`/api/whatsapp/followup-transcript/${encodeURIComponent(activityId)}`);
+    const bubbles = transcript.messages.map((message) => {
+      const outbound = message.direction === "outbound";
+      const time = Number.isFinite(Date.parse(message.occurredAt)) ? new Date(message.occurredAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      return `<div style="display:flex;justify-content:${outbound ? "flex-end" : "flex-start"};">
+        <div style="max-width:78%;padding:8px 12px;border-radius:12px;${outbound ? "background:var(--brand);color:#fff;border-bottom-right-radius:4px;" : "background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px;"} font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;">${escapeHtml(message.body)}</div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);text-align:${outbound ? "right" : "left"};margin-top:-6px;">${time}${outbound ? " · 我方" : ""}</div>`;
+    }).join("");
+    const body = `
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">同步日期 ${escapeHtml(transcript.runDate)}（${escapeHtml(transcript.timezone)}） · ${transcript.messages.length} 条消息 · 附件以 [文件] 占位，媒体内容不在文字版里</div>
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto;padding:4px 6px;">${bubbles || `<div style="text-align:center;color:var(--muted);padding:24px;">这一天没有可显示的消息</div>`}</div>`;
+    openModal(`对话记录 · ${contactName}`, body, `<button class="btn" type="button" data-modal-close>关闭</button>`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "读取失败";
+    openModal(`对话记录 · ${contactName}`, `<div style="padding:24px;text-align:center;color:var(--danger);font-size:13px;">${escapeHtml(message)}</div>`, `<button class="btn" type="button" data-modal-close>关闭</button>`);
+  }
+}
+
+/** WhatsApp 自动同步的跟进才有对话原文可看（手工写的 WhatsApp 跟进没有会话导入）。 */
+function activityHasTranscript(activity: { type: string; content: string }): boolean {
+  return activity.type === "whatsapp" && activity.content.startsWith("[WhatsApp 自动同步");
+}
+
+function renderCustomerJourney(customer: Customer, host?: HTMLElement | null) {
+  // 容器可传入：客户全景页与客户抽屉各自持有自己的时间轴节点，
+  // 两块 DOM 可能同时挂在文档里，绝不能共用一个全局 id 去查找。
+  const container = host || qs<HTMLElement>("#customerJourneyTimeline");
   if (!container) return;
   bindJourneyTooltipGlobals();
   const activities = customer.activities || [];
   const deals = customerRelatedDeals(customer);
   const dealEvents = state.dealEvents.filter((e) => deals.some((d) => d.id === e.dealId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  type JourneyNode = { type: string; icon: string; label: string; date: string; detail: string; color: string };
+  type JourneyNode = { type: string; icon: string; label: string; date: string; detail: string; color: string; activityId: string; hasTranscript: boolean };
   const nodes: JourneyNode[] = [];
 
+  // 联系类四个渠道直接复用全站唯一的 customerContactIcon()，保证同一个 WhatsApp
+  // 在联系方式条与旅程里长得一样；其余用 journeyGlyph()。
   const journeyIcons: Record<string, { icon: string; color: string }> = {
-    call: { icon: "📞", color: "var(--brand)" },
-    email: { icon: "✉️", color: "var(--amber)" },
-    whatsapp: { icon: "💬", color: "var(--green)" },
-    wechat: { icon: "💚", color: "var(--green)" },
-    meeting: { icon: "🤝", color: "var(--brand)" },
-    note: { icon: "📝", color: "var(--muted)" },
-    quote: { icon: "📄", color: "var(--amber)" },
-    sample: { icon: "📦", color: "var(--rose)" },
-    negotiation: { icon: " handshake", color: "var(--brand)" },
-    won: { icon: "🎉", color: "var(--green)" },
-    lost: { icon: "❌", color: "var(--rose)" },
-    created: { icon: "🆕", color: "var(--muted)" },
+    call: { icon: customerContactIcon("phone"), color: "var(--brand)" },
+    email: { icon: customerContactIcon("email"), color: "var(--amber)" },
+    whatsapp: { icon: customerContactIcon("whatsapp"), color: "var(--green)" },
+    wechat: { icon: customerContactIcon("wechat"), color: "var(--aqua)" },
+    meeting: { icon: journeyGlyph("users"), color: "var(--brand)" },
+    note: { icon: journeyGlyph("pencil"), color: "var(--muted)" },
+    created: { icon: journeyGlyph("plusCircle"), color: "var(--aqua)" },
+    updated: { icon: journeyGlyph("refresh"), color: "var(--muted)" },
+    stage: { icon: journeyGlyph("flag"), color: "var(--brand)" },
+    follow_up: { icon: journeyGlyph("calendarCheck"), color: "var(--brand)" },
+    quote: { icon: journeyGlyph("tag"), color: "var(--amber)" },
+    sample: { icon: journeyGlyph("package"), color: "var(--rose)" },
+    negotiation: { icon: journeyGlyph("exchange"), color: "var(--brand)" },
+    payment: { icon: journeyGlyph("banknote"), color: "var(--green)" },
+    document: { icon: journeyGlyph("file"), color: "var(--amber)" },
+    won: { icon: journeyGlyph("trophy"), color: "var(--green)" },
+    lost: { icon: journeyGlyph("xCircle"), color: "var(--rose)" },
+    archived: { icon: journeyGlyph("archive"), color: "var(--muted)" }
   };
 
   for (const activity of activities) {
     const config = journeyIcons[activity.type] || journeyIcons.note;
-    nodes.push({ type: activity.type, icon: config.icon, label: customerActivityLabel(activity.type), date: activity.createdAt, detail: activity.content, color: config.color });
+    nodes.push({ type: activity.type, icon: config.icon, label: customerActivityLabel(activity.type), date: activity.createdAt, detail: activity.content, color: config.color, activityId: activity.id || "", hasTranscript: activityHasTranscript(activity) });
   }
   for (const event of dealEvents) {
     const config = journeyIcons[event.type] || journeyIcons.note;
     const deal = deals.find((d) => d.id === event.dealId);
-    nodes.push({ type: event.type, icon: config.icon, label: dealEventLabel(event.type), date: event.createdAt, detail: `${deal?.title || ""}: ${event.content}`, color: config.color });
+    nodes.push({ type: event.type, icon: config.icon, label: dealEventLabel(event.type), date: event.createdAt, detail: `${deal?.title || ""}: ${event.content}`, color: config.color, activityId: "", hasTranscript: false });
   }
   nodes.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -16680,7 +17155,7 @@ function renderCustomerJourney(customer: Customer) {
     <div class="journey-track">
       <div class="journey-line"></div>
       ${displayNodes.map((node, index) => `
-        <div class="journey-node" style="--delay:${index * 0.12}s" data-label="${escapeHtml(node.label)}" data-detail="${escapeHtml(node.detail)}" data-date="${escapeHtml(formatDateTime(node.date))}">
+        <div class="journey-node${index === displayNodes.length - 1 ? " is-latest" : ""}" style="--delay:${index * 0.12}s" data-label="${escapeHtml(node.label)}" data-detail="${escapeHtml(node.detail)}" data-date="${escapeHtml(formatDateTime(node.date))}"${node.hasTranscript && node.activityId ? ` data-transcript-activity="${escapeHtml(node.activityId)}" data-transcript-name="${escapeHtml(customer.contact || customer.company)}" title="点击查看当天对话记录"` : ""}>
           <div class="journey-dot" style="--node-color:${node.color}">${node.icon}</div>
           <span class="journey-label">${escapeHtml(node.label)}</span>
           <span class="journey-date">${escapeHtml(node.date.slice(5, 10))}</span>
@@ -16690,6 +17165,11 @@ function renderCustomerJourney(customer: Customer) {
   qsa<HTMLElement>(".journey-node", container).forEach((node) => {
     node.addEventListener("mouseenter", () => showJourneyTooltip(node));
     node.addEventListener("mouseleave", hideJourneyTooltip);
+    const transcriptId = node.dataset.transcriptActivity;
+    if (transcriptId) {
+      node.style.cursor = "pointer";
+      node.addEventListener("click", () => void openWhatsappTranscriptModal(transcriptId, node.dataset.transcriptName || "客户"));
+    }
   });
   requestAnimationFrame(() => {
     qsa<HTMLElement>(".journey-node", container).forEach((node) => node.classList.add("visible"));
@@ -16921,6 +17401,7 @@ function renderPipeline(deals: Deal[]) {
           <button class="btn primary deal-primary-action" data-move-deal>${dealPrimaryAction(deal.stage)}</button>
           <div class="deal-secondary-actions">
             <button type="button" class="btn" data-record-deal>记录进展</button>
+            <button type="button" class="btn" data-copy-deal>复制商机</button>
             ${deal.stage === "已联系" ? `<button type="button" class="btn" data-generate-deal-quotation>生成报价单</button>` : ""}
             ${["已报价", "样品", "谈判"].includes(deal.stage) ? `<button type="button" class="btn" data-print-deal-document>生成 PI</button>` : ""}
             ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button type="button" class="btn" data-generate-customs>生成报关资料</button>` : ""}
@@ -16943,6 +17424,9 @@ function renderPipeline(deals: Deal[]) {
   });
   qsa<HTMLButtonElement>("[data-record-deal]", strip).forEach((button) => {
     button.addEventListener("click", () => openDealEventModal(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
+  });
+  qsa<HTMLButtonElement>("[data-copy-deal]", strip).forEach((button) => {
+    button.addEventListener("click", (event) => void duplicateDeal(button.closest<HTMLElement>(".deal")?.dataset.dealId || "", event.currentTarget as HTMLButtonElement));
   });
   qsa<HTMLButtonElement>("[data-print-deal-document]", strip).forEach((button) => {
     button.addEventListener("click", () => void printDealDocument(button.closest<HTMLElement>(".deal")?.dataset.dealId || ""));
@@ -16977,15 +17461,21 @@ function renderPipelineSummary(activeDeals: Deal[]) {
   const todayCount = activeDeals.filter((deal) => deal.nextActionAt === today).length;
   const missing = activeDeals.filter((deal) => !deal.nextActionAt || !deal.expectedCloseAt).length;
   const currencies = [...new Set(activeDeals.map((deal) => deal.currency || "USD"))];
-  const amountLabel = currencies.length === 1
-    ? dealMoney(activeDeals.reduce((sum, deal) => sum + deal.amount, 0), currencies[0])
-    : `${currencies.length} 种币种，分币种查看`;
+  // 金额卡：单币种 → 数字 + 币种小字；多币种 → 币种数 + 「种币种」，长说明沉到 note 行，别挤数值位。
+  const singleCurrency = currencies.length === 1;
+  const amountValue = singleCurrency
+    ? Math.round(activeDeals.reduce((sum, deal) => sum + deal.amount, 0)).toLocaleString("en-US")
+    : String(currencies.length);
+  const amountUnit = singleCurrency ? currencies[0] : "种币种";
+  const amountNote = singleCurrency
+    ? (missing ? `${missing} 个日期待补齐` : "日期完整")
+    : `分币种查看 · ${missing ? `${missing} 个日期待补齐` : "日期完整"}`;
   box.innerHTML = [
-    ["活跃商机", `${activeDeals.length} 个`, "仅含待推进五阶段"],
-    ["动作逾期", `${overdue} 个`, overdue ? "优先处理已过期承诺" : "暂无逾期动作"],
-    ["今天到期", `${todayCount} 个`, "今天应完成的下一动作"],
-    ["在手金额", amountLabel, missing ? `${missing} 个日期待补齐` : "日期完整"]
-  ].map(([label, value, note]) => `<div class="pipeline-summary-item"><span>${label}</span><b>${value}</b><small>${note}</small></div>`).join("");
+    { label: "活跃商机", value: String(activeDeals.length), unit: "个", note: "仅含待推进五阶段", tone: "" },
+    { label: "动作逾期", value: String(overdue), unit: "个", note: overdue ? "优先处理已过期承诺" : "暂无逾期动作", tone: overdue ? "is-alert" : "" },
+    { label: "今天到期", value: String(todayCount), unit: "个", note: "今天应完成的下一动作", tone: todayCount ? "is-brand" : "" },
+    { label: "在手金额", value: amountValue, unit: amountUnit, note: amountNote, tone: "" }
+  ].map(({ label, value, unit, note, tone }) => `<div class="pipeline-summary-item ${tone}"><span>${label}</span><b>${value}${unit ? `<em>${unit}</em>` : ""}</b><small>${note}</small></div>`).join("");
 }
 
 function renderPipelineStageTabs(stages: string[], deals: Deal[]) {
@@ -17839,13 +18329,70 @@ async function moveDeal(id: string, nextStage: string) {
 
 async function archiveDeal(id: string) {
   const deal = state.deals.find((item) => item.id === id);
-  if (!deal) return;
-  const result = await api<{ deal: Deal }>(`/api/deals/${id}/archive`, { method: "POST" });
-  Object.assign(deal, result.deal);
-  if (state.selectedDealId === id) closeDealDrawer();
-  await refreshDealsData();
-  void refreshDashboardOnly();
-  toast("成交商机已归档");
+  if (!deal) {
+    toast("商机已不存在，请刷新后重试", "error");
+    return;
+  }
+  try {
+    const result = await api<{ deal: Deal }>(`/api/deals/${id}/archive`, { method: "POST" });
+    Object.assign(deal, result.deal);
+    if (state.selectedDealId === id) closeDealDrawer();
+    toast("成交商机已归档");
+    await refreshDealsData();
+    void refreshDashboardOnly();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "归档失败，请稍后重试", "error");
+  }
+}
+
+async function duplicateDeal(id: string, button: HTMLButtonElement | null = null) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) {
+    toast("商机已不存在，请刷新后重试", "error");
+    return;
+  }
+  if (button?.disabled) return;
+  setButtonPending(button, true, "复制商机", "复制中…");
+  try {
+    const result = await api<{ deal: Deal }>(`/api/deals/${encodeURIComponent(id)}/duplicate`, { method: "POST" });
+    toast(`已复制为「${result.deal.title}」，新商机在询盘阶段，时间线与单据不随复制`);
+    await refreshDealsData();
+    void refreshDashboardOnly();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "复制失败，请稍后重试", "error");
+    setButtonPending(button, false, "复制商机", "复制商机");
+  }
+}
+
+async function restoreDeal(id: string, button: HTMLButtonElement | null = null) {
+  const deal = state.deals.find((item) => item.id === id);
+  if (!deal) {
+    toast("商机已不存在，请刷新后重试", "error");
+    return;
+  }
+  if (button?.disabled) return;
+  const confirmed = await confirmAction({
+    title: "恢复归档商机",
+    message: `确定要把「${deal.title}」从归档拉回来吗？`,
+    consequences: [
+      "仅取消归档标记，商机回到关闭商机列表（待归档）",
+      "阶段保持不变，不重新进入推进管道",
+      "客户成交状态、佣金与报表等关联数据不变更"
+    ],
+    confirmLabel: "确认恢复"
+  });
+  if (!confirmed) return;
+  setButtonPending(button, true, "恢复", "恢复中…");
+  try {
+    const result = await api<{ deal: Deal }>(`/api/deals/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    Object.assign(deal, result.deal);
+    toast(`「${result.deal.title}」已恢复（仅取消归档）`);
+    await refreshDealsData();
+    if (state.selectedDealId === id) renderDealDrawer(id);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "恢复失败，请稍后重试", "error");
+    setButtonPending(button, false, "恢复", "恢复");
+  }
 }
 
 async function deleteDeal(id: string, button: HTMLButtonElement | null = null) {
@@ -17939,7 +18486,7 @@ async function refreshClosedDeals() {
     status: state.closedDealStatus,
     month: state.closedDealMonth
   });
-  const result = await api<{ deals: Deal[]; total: number; page: number; pageSize: number; counts: { won: number; lost: number; revisit: number } }>(`/api/deals/closed?${params.toString()}`);
+  const result = await api<{ deals: Deal[]; total: number; page: number; pageSize: number; counts: { won: number; lost: number; revisit: number; archived: number } }>(`/api/deals/closed?${params.toString()}`);
   state.closedDeals = result.deals;
   state.closedDealTotal = result.total;
   state.closedDealCounts = result.counts;
@@ -17950,16 +18497,25 @@ function renderArchivedDeals(deals: Deal[], total: number, page: number, pageSiz
   const box = qs<HTMLElement>("#pipeline-archived-deals");
   if (!box) return;
   const summary = qs<HTMLElement>("#pipelineClosedSummary");
-  if (summary) summary.textContent = `已成交 ${state.closedDealCounts.won} · 已丢单 ${state.closedDealCounts.lost} · 待复访 ${state.closedDealCounts.revisit}`;
+  if (summary) summary.textContent = `已成交 ${state.closedDealCounts.won} · 已丢单 ${state.closedDealCounts.lost} · 待复访 ${state.closedDealCounts.revisit} · 已归档 ${(state.closedDealCounts as { archived?: number }).archived || 0}`;
   box.innerHTML = deals.length ? deals.map((deal) => {
     const customer = state.customers.find((item) => item.id === deal.customerId);
     const product = dealItemsSummary(deal);
     const review = deal.stage === "丢单"
       ? `${deal.lostReasonCategory || "未分类"}：${deal.lostReason || "待补充复盘"}${deal.revisitAt ? ` · ${deal.revisitAt} 复访` : ""}`
       : `${deal.wonReason || "已成交"}${deal.archivedAt ? " · 已归档" : " · 待归档"}`;
-    return `<tr data-closed-deal-id="${escapeHtml(deal.id)}"><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(product)}</span></td><td>${dealMoney(deal.amount, deal.currency)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.closedAt || deal.archivedAt))}</td><td>${escapeHtml(review)}</td></tr>`;
+    return `<tr data-closed-deal-id="${escapeHtml(deal.id)}"><td><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(product)}</span></td><td>${dealMoney(deal.amount, deal.currency)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.closedAt || deal.archivedAt))}</td><td>${escapeHtml(review)}${deal.archivedAt ? ` <button type="button" class="btn" data-restore-deal="${escapeHtml(deal.id)}">恢复</button>` : ""}</td></tr>`;
   }).join("") : `<tr><td colspan="5" class="empty-cell">当前筛选下暂无关闭商机。</td></tr>`;
-  qsa<HTMLElement>("[data-closed-deal-id]", box).forEach((row) => row.addEventListener("click", () => openDealDrawer(row.dataset.closedDealId || "")));
+  qsa<HTMLElement>("[data-closed-deal-id]", box).forEach((row) => row.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    openDealDrawer(row.dataset.closedDealId || "");
+  }));
+  qsa<HTMLButtonElement>("[data-restore-deal]", box).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void restoreDeal(button.dataset.restoreDeal || "", event.currentTarget as HTMLButtonElement);
+    });
+  });
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const pageLabel = qs<HTMLElement>("#pipelineClosedPage");
   if (pageLabel) pageLabel.textContent = `第 ${page} / ${totalPages} 页 · ${total} 条`;
@@ -17967,6 +18523,78 @@ function renderArchivedDeals(deals: Deal[], total: number, page: number, pageSiz
   const next = qs<HTMLButtonElement>("#pipelineClosedNext");
   if (prev) prev.disabled = page <= 1;
   if (next) next.disabled = page >= totalPages;
+}
+
+/** 归档商机独立界面：status=archived + 可选成交结果细分，检索/翻页/拉回都在这一个界面完成。 */
+async function refreshDealArchive() {
+  const params = new URLSearchParams({
+    page: String(state.dealArchivePage),
+    pageSize: "10",
+    keyword: state.dealArchiveKeyword,
+    status: "archived",
+    stage: state.dealArchiveStage,
+    month: state.dealArchiveMonth
+  });
+  const result = await api<{ deals: Deal[]; total: number; page: number; pageSize: number; counts: { won: number; lost: number; revisit: number; archived: number } }>(`/api/deals/closed?${params.toString()}`);
+  state.dealArchive = result.deals;
+  state.dealArchiveTotal = result.total;
+  state.dealArchiveCounts = { won: result.counts.won, lost: result.counts.lost };
+  renderDealArchive(result.deals, result.total, result.page, result.pageSize);
+}
+
+function renderDealArchive(deals: Deal[], total: number, page: number, pageSize: number) {
+  const body = qs<HTMLElement>("#dealArchiveTableBody");
+  if (!body) return;
+  const summary = qs<HTMLElement>("#dealArchiveSummary");
+  if (summary) {
+    summary.innerHTML = `
+      <div><span class="stat-label">归档商机</span><b class="stat-value">${total}</b><span class="stat-note">当前筛选下的归档总数</span></div>
+      <div><span class="stat-label">已成交归档</span><b class="stat-value">${state.dealArchiveCounts.won}</b><span class="stat-note">恢复后阶段保持成交</span></div>
+      <div><span class="stat-label">已丢单归档</span><b class="stat-value">${state.dealArchiveCounts.lost}</b><span class="stat-note">恢复后阶段保持丢单</span></div>`;
+  }
+  body.innerHTML = deals.length ? deals.map((deal) => {
+    const customer = state.customers.find((item) => item.id === deal.customerId);
+    const product = dealItemsSummary(deal);
+    const review = deal.stage === "丢单"
+      ? `${deal.lostReasonCategory || "未分类"}：${deal.lostReason || "待补充复盘"}${deal.revisitAt ? ` · ${deal.revisitAt} 复访` : ""}`
+      : `${deal.wonReason || "已成交"}`;
+    return `<tr data-archive-deal-id="${escapeHtml(deal.id)}"><td class="deal-archive-deal"><b>${escapeHtml(deal.title)}</b><span>${escapeHtml(customer?.company || "客户待确认")} · ${escapeHtml(product)}</span></td><td>${dealMoney(deal.amount, deal.currency)}</td><td>${badge(deal.stage, deal.stage === "丢单" ? "red" : "green")}</td><td>${escapeHtml(formatDateTime(deal.closedAt || deal.archivedAt))}</td><td class="deal-archive-review">${escapeHtml(review)}</td><td><div class="deal-archive-actions"><button type="button" class="btn" data-archive-view="${escapeHtml(deal.id)}">查看</button><button type="button" class="btn" data-archive-restore="${escapeHtml(deal.id)}">恢复</button></div></td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty-cell">当前筛选下暂无归档商机。</td></tr>`;
+  qsa<HTMLElement>("[data-archive-deal-id]", body).forEach((row) => row.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    openArchivedDealInPipeline(row.dataset.archiveDealId || "");
+  }));
+  qsa<HTMLButtonElement>("[data-archive-view]", body).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openArchivedDealInPipeline(button.dataset.archiveView || "");
+    });
+  });
+  qsa<HTMLButtonElement>("[data-archive-restore]", body).forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void restoreDealFromArchive(button.dataset.archiveRestore || "", event.currentTarget as HTMLButtonElement);
+    });
+  });
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const pageLabel = qs<HTMLElement>("#dealArchivePage");
+  if (pageLabel) pageLabel.textContent = `第 ${page} / ${totalPages} 页 · ${total} 条`;
+  const prev = qs<HTMLButtonElement>("#dealArchivePrev");
+  const next = qs<HTMLButtonElement>("#dealArchiveNext");
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= totalPages;
+}
+
+/** 归档列表的「查看」：商机抽屉挂在商机管道视图里，先切过去再开。 */
+function openArchivedDealInPipeline(id: string) {
+  if (!id) return;
+  activateNavView("pipeline", () => openDealDrawer(id));
+}
+
+async function restoreDealFromArchive(id: string, button: HTMLButtonElement | null = null) {
+  await restoreDeal(id, button);
+  state.dealArchivePage = 1;
+  await refreshDealArchive().catch(() => undefined);
 }
 
 async function refreshDealsData(render = true) {
@@ -17991,7 +18619,8 @@ function dealEventLabel(type: string) {
     document: "单据记录",
     won: "确认成交",
     lost: "丢单复盘",
-    archived: "归档"
+    archived: "归档",
+    restored: "恢复归档"
   };
   return labels[type] || type;
 }
@@ -18042,6 +18671,8 @@ function renderDealDrawer(id: string) {
     <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
       ${closed ? "" : `<button class="btn primary" id="drawerAdvanceDealButton">${dealPrimaryAction(deal.stage)}</button><button class="btn" id="drawerRecordDealButton">记录进展</button><button class="btn" id="drawerEditDealButton">编辑</button>`}
+      ${closed && !deal.archivedAt ? `<button class="btn" id="drawerDuplicateDealButton">复制商机</button>` : ""}
+      ${deal.archivedAt ? `<button class="btn" id="drawerRestoreDealButton">恢复商机</button>` : ""}
       <button class="btn" id="drawerQuoteHistoryButton">报价历史</button>
       ${deal.stage === "已联系" ? `<button class="btn" id="drawerGenerateQuotationButton">生成报价单</button>` : ""}
       ${["已报价", "样品", "谈判", "成交"].includes(deal.stage) ? `<button class="btn" id="drawerPrintDealButton">${deal.stage === "成交" ? "生成 CI" : "生成 PI"}</button>` : ""}
@@ -18066,6 +18697,8 @@ function renderDealDrawer(id: string) {
   qs("#drawerPrintDealButton", drawer)?.addEventListener("click", () => void printDealDocument(deal.id));
   qs("#drawerGenerateCustomsButton", drawer)?.addEventListener("click", () => void generateCustomsDocument(deal.id));
   qs("#drawerArchiveDealButton", drawer)?.addEventListener("click", () => void archiveDeal(deal.id));
+  qs("#drawerDuplicateDealButton", drawer)?.addEventListener("click", (event) => void duplicateDeal(deal.id, event.currentTarget as HTMLButtonElement));
+  qs("#drawerRestoreDealButton", drawer)?.addEventListener("click", (event) => void restoreDeal(deal.id, event.currentTarget as HTMLButtonElement));
   qs("#drawerDeleteDealButton", drawer)?.addEventListener("click", (event) => void deleteDeal(deal.id, event.currentTarget as HTMLButtonElement));
   void loadDealWinProbability(deal.id);
 }
@@ -19648,7 +20281,9 @@ function renderMemoDetail(memo?: Memo) {
     const titleEditor = qs<HTMLInputElement>("#memoTitleEditor");
     const tagsEditor = qs<HTMLInputElement>("#memoTagsEditor");
     const contentEditor = qs<HTMLTextAreaElement>("#memoContentEditor");
-    if (titleEditor) titleEditor.value = "暂无备忘";
+    // 不要用 value 当提示：写进 value 的「暂无备忘」点击后不会消失，
+    // 也不可编辑（用户会以为里面已经有内容）。空着走 placeholder。
+    if (titleEditor) titleEditor.value = "";
     if (tagsEditor) tagsEditor.value = "";
     if (contentEditor) contentEditor.value = "";
     const draftRecovery = qs<HTMLElement>("#memoDraftRecovery");
@@ -24344,6 +24979,2175 @@ async function refreshKnowledgeAssets(showToast = false) {
     if (showToast) toast("文件中心已刷新");
   } catch (error) {
     toast(error instanceof Error ? error.message : "文件中心刷新失败", "error");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 知识库训练工作台（P1）：选资料 → 提炼入池 → 人工确认 → 发布到训练库 → 试问验证
+//
+// 三屏同页：左「选资料」跑批次，中「确认候选」做人工闸，右「试问」验真实命中。
+// `preselect` 由后端按纯函数算好（高置信 + 有出处 + 未碰商务红线），前端只照着勾 ——
+// 规则不在前端重算一遍，否则两边迟早不一致。
+// 候选列表走「批次详情」（一次拿到 counts + 全部候选），筛选在前端本地做：
+// P1 单批上限 100 条，本地过滤比多打一次带游标的往返更省事；
+// `GET /api/kb/training/candidates` 的游标分页留给 P2 的跨批次视图。
+// ---------------------------------------------------------------------------
+type KbCandidateKind = "qa" | "snippet" | "policy" | "forbidden";
+type KbCandidateStatus = "pending" | "approved" | "rejected" | "published";
+type KbRunStatus = "running" | "succeeded" | "partial" | "failed" | "cancelled";
+type KbEngine = "cli" | "ai" | "none";
+
+interface KbTrainingSourceRef {
+  type?: string;
+  assetId?: string;
+  title?: string;
+  version?: string;
+  anchor?: string;
+  /** 来源描述（选填，训练时自填），跟着出处一起显示 */
+  note?: string;
+}
+
+interface KbTrainingCandidate {
+  id: string;
+  runId: string;
+  kind: KbCandidateKind;
+  question: string;
+  answer: string;
+  tags: string[];
+  languages: string[];
+  confidence: number;
+  sourceType: string;
+  sourceRef: KbTrainingSourceRef | null;
+  rationale: string;
+  gapFlag: boolean;
+  status: KbCandidateStatus;
+  publishedEntryId: string;
+  reviewedAt: string;
+  createdAt: string;
+  preselect: boolean;
+}
+
+interface KbTrainingRunStats {
+  segments: number;
+  candidates: number;
+  duplicates: number;
+  skipped: number;
+  cliCalls: number;
+  invented: number;
+}
+
+interface KbTrainingProgress {
+  totalSegments: number;
+  processedSegments: number;
+  batches: number;
+  batchesDone: number;
+  stage: "collecting" | "extracting" | "done";
+  startedAt: string;
+  updatedAt: string;
+}
+
+interface KbTrainingRun {
+  id: string;
+  status: KbRunStatus;
+  engine: KbEngine;
+  model: string;
+  /** 本批成果归属的知识库。空串 = 本次改动之前的老批次（没有归属）。 */
+  kbId?: string;
+  stats: KbTrainingRunStats | null;
+  /** 运行中进度（老批次为 null）。没有它只能显示「运行中」，用户分不清在跑还是卡死。 */
+  progress?: KbTrainingProgress | null;
+  /** 这一批还有多少条没确认 —— 列表默认要跳到真正有活的那批。 */
+  pendingCount?: number;
+  /** 发起时的入参快照：失败后「填回资料」靠它，不必让用户重新选文件。 */
+  sourcesJson?: string;
+  errorMessage: string;
+  createdAt: string;
+  finishedAt: string;
+}
+
+/**
+ * 知识库（训练成果的资产形态）。
+ *
+ * `isOwner` 决定能不能改（改名 / 切公开私用）—— **别人的公开库只能勾选启用，改不动**，
+ * 否则等于谁都能改你的知识口径。`enabled` 是「当前账号的出稿读不读它」。
+ */
+interface KbKnowledgeBaseView {
+  id: string;
+  name: string;
+  visibility: "owner" | "team";
+  ownerId: string;
+  ownerName: string;
+  isOwner: boolean;
+  enabled: boolean;
+  /** 已发布到训练库、真正参与出稿的条目数 */
+  entryCount: number;
+  /** 还没确认的候选数（这个库还在长） */
+  pendingCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 启用清单保存结果。插件没推成功必须让用户看见（清单在 CRM 生效、运行端还没生效）。 */
+interface KbEnabledSaveResult {
+  enabled: string[];
+  rejected: Array<{ id: string; reason: string }>;
+  pluginPushed: boolean;
+  pluginError: string;
+}
+
+interface KbProbeEntry {
+  id: string;
+  kind: KbCandidateKind;
+  question: string;
+  answer: string;
+  verified?: boolean;
+  hitCount?: number;
+  adoptedCount?: number;
+}
+
+/**
+ * 一条问答命中，字段与插件 `TrainingLibraryMatch` 逐字一致。
+ *
+ * 这里踩过一次坑：`hits` 曾经被当成出处（citation）的形状来渲染
+ * （读 title/snippet/score），结果每条都渲染成空壳 —— 两者是**不同结构**，
+ * 「命中」回答的是「哪条问答对上了、像多少、对了哪些词」，
+ * 「出处」回答的是「这句话出自哪一条、切片是什么、历史命中几次」。
+ * 所以正文用 `citations`（四类合一、已去重），`hits` 只用来补问答特有的信息。
+ */
+interface KbProbeMatch {
+  entry: KbProbeEntry;
+  similarity: number;
+  matched: number;
+  matchedTerms: string[];
+  /** >0 说明这条命中含词典等价匹配（跨语言召回的痕迹）。 */
+  expandedHits?: number;
+}
+
+/** 可展开的出处（`TrainingCitation`）：三类用途共用，界面按 kind 分组。 */
+interface KbProbeCitation {
+  refId: string;
+  kind: KbCandidateKind;
+  title: string;
+  snippet: string;
+  anchor: string;
+  score: number;
+  hitTerms: string[];
+  verified: boolean;
+  adopted: boolean;
+  hitCount: number;
+  /** 出处三件套（哪个文件 / 哪一段 / 来源描述）：随发布带到插件，有就显示「《文件》§段落 · 描述」。 */
+  sourceTitle?: string;
+  sourceAnchor?: string;
+  sourceNote?: string;
+}
+
+/**
+ * 插件 `resolve()` 的原样返回。**没有 `blocked` 这个字段** ——
+ * 护栏判决在 `verdict` 里（文案由插件给），被拦的场景在 `forbidden` 里。
+ * `message` 是前端本地失败（插件不可达 / 路由报错）时自己填的，不是插件字段。
+ */
+interface KbProbeResult {
+  query?: string;
+  hits?: KbProbeMatch[];
+  snippets?: KbProbeEntry[];
+  policies?: KbProbeEntry[];
+  forbidden?: KbProbeMatch[];
+  forbiddenPhrases?: string[];
+  citations?: KbProbeCitation[];
+  verdict?: string;
+  warnings?: string[];
+  /** 插件回报的「知识库清单对本次检索的影响」：没命中时用来区分"被清单挡掉"与"没这条语料"。 */
+  kbScope?: {
+    configured: boolean;
+    enabledKbIds: string[];
+    considered: number;
+    skippedByScope: number;
+  };
+  message?: string;
+}
+
+interface KbPublishOutcome {
+  published: Array<{ id: string; entryId: string }>;
+  existing: Array<{ id: string; entryId: string }>;
+  failed: Array<{ id: string; reason: string }>;
+}
+
+const KB_KIND_TEXT: Record<string, string> = {
+  qa: "问答对",
+  snippet: "口径片段",
+  policy: "政策",
+  forbidden: "禁用词"
+};
+
+/** 视图态：纯视图偏好 + 本次会话数据，不进 AppState（不该跟着全量持久化走）。 */
+const kbTrainingState = {
+  loaded: false,
+  loading: false,
+  runs: [] as KbTrainingRun[],
+  activeRunId: "",
+  counts: null as Record<string, number> | null,
+  candidates: [] as KbTrainingCandidate[],
+  /** 本批候选总数（来自 counts）；大于已装条数说明界面只装了前 N 条 —— 必须说出来。 */
+  candidateTotal: 0,
+  /** 用户在屏 1 暂存的多份资料（本地读取），提交时一起进 `sources.text.items`。note = 来源描述（选填）。 */
+  staged: [] as Array<{ title: string; body: string; note: string }>,
+  /** 文件中心资料缓存：候选出处可点开时要靠它拿到 asset 对象。 */
+  assets: [] as KnowledgeAsset[],
+  /** 用户手动动过勾选的候选：预勾选不再覆盖它们，避免"我取消了又被勾回来"。 */
+  touched: new Set<string>(),
+  selected: new Set<string>(),
+  focusIndex: -1,
+  /** 正在行内编辑的候选（一次只编辑一条）：编辑态的草稿放这里，重绘不丢。 */
+  editId: "",
+  editQuestion: "",
+  editAnswer: "",
+  probe: null as KbProbeResult | null,
+  probeQuestion: "",
+  /** 自动刷新连续失败次数；到上限就停轮询，避免每 3 秒弹一次错。 */
+  pollFailures: 0,
+  pollStopped: false,
+  /**
+   * 已经发出停止请求、但批次还没停下来的 id。
+   * 取消是**请求**不是结果（要等飞行中的模型调用结束），这段时间里按钮必须显示
+   * 「正在停止…」并禁用 —— 否则按钮回到可点状态，用户会以为没生效而反复点，
+   * 而它本来就要等几十秒。
+   */
+  cancelPending: new Set<string>()
+};
+
+/**
+ * 知识库屏的状态。与 `kbTrainingState` 分开放：知识库是**账号级**资产（跨批次、可被别人分享），
+ * 批次是**本次操作**的上下文，两者的刷新时机不同（勾选启用不该重绘批次列表）。
+ */
+const kbKnowledgeState = {
+  items: [] as KbKnowledgeBaseView[],
+  /** 当前账号的启用清单（来自后端，不靠 items[].enabled 拼，避免列表截断时算漏）。 */
+  enabledIds: [] as string[],
+  loading: false,
+  /** 正在提交的行 id：那一行按钮禁用，避免连点产生互相覆盖的两次保存。 */
+  pending: new Set<string>(),
+  /** 行内改名的草稿（一次只改一条）。 */
+  renameId: "",
+  renameValue: "",
+  /** 顶部搜索框的草稿：只过滤卡片展示，不影响「归入哪个库」下拉（那是提交口径）。 */
+  query: "",
+  /** 面板底部的常驻提示（插件没同步成功这类"保存成功但没生效"必须留在屏幕上）。 */
+  notice: "",
+  noticeOk: false
+};
+
+/** 自动刷新连续失败几次就停（再刷只是重复报同一个错）。 */
+const KB_POLL_FAILURE_LIMIT = 3;
+
+/**
+ * 纯展示用的推算常数：后端每 20 段语料调一次 CLI（`kb-training-prompt.ts`
+ * 的 `KB_SEGMENTS_PER_CALL`）。前端**不参与提炼决策**，只用它把
+ * 「段数 vs 调用次数」翻译成「还有几段没处理」给用户看（§9 降级矩阵 #2）。
+ */
+const KB_DISPLAY_SEGMENTS_PER_CALL = 20;
+
+let kbTrainingPollTimer: ReturnType<typeof setTimeout> | null = null;
+let kbTrainingKeysBound = false;
+
+function kbRunStatusMeta(status: KbRunStatus) {
+  if (status === "running") return { text: "运行中", cls: "is-run" };
+  if (status === "succeeded") return { text: "已完成", cls: "is-ok" };
+  // 注意：文案避开「部分+完成」这个组合词 —— 既有自检禁止在状态展示里用它（易与搜客任务终态混淆）。
+  if (status === "partial") return { text: "部分入池", cls: "is-warn" };
+  if (status === "cancelled") return { text: "已取消", cls: "is-idle" };
+  return { text: "失败", cls: "is-bad" };
+}
+
+function kbEngineText(engine: KbEngine, model?: string) {
+  if (engine === "cli") return model ? `CLI（${model}）` : "CLI";
+  if (engine === "ai") return model ? `模型（${model}）` : "配置模型";
+  return "未生效";
+}
+
+function kbSourceRefHtml(ref: KbTrainingSourceRef | null, sourceType: string) {
+  if (!ref) return "（无出处）";
+  const title = ref.title || ref.assetId || "未命名资料";
+  const anchor = ref.anchor ? ` ${ref.anchor}` : "";
+  const scope = sourceType === "conversation" ? "会话" : ref.assetId ? "文件中心" : "粘贴资料";
+  // 关联了文件中心资料就把标题做成链接：候选的出处要能一键回到资料本身，
+  // 否则「有出处」只是台账上的一句话，核对仍得自己去文件中心翻。
+  const label = ref.assetId
+    ? `<a href="#" data-kb-asset="${escapeHtml(ref.assetId)}">${escapeHtml(title)}</a>`
+    : escapeHtml(title);
+  // 来源描述（选填）：跟着出处一起显示，让人不用翻原文就知道这份资料是谁给的、什么时候的口径。
+  const note = ref.note ? ` · ${escapeHtml(ref.note)}` : "";
+  return `${label}${escapeHtml(anchor)}${note} · ${scope}`;
+}
+
+function kbCandidateStatusTag(candidate: KbTrainingCandidate) {
+  if (candidate.status === "published") return `<span class="kb-tag is-ok">已发布</span>`;
+  if (candidate.status === "approved") return `<span class="kb-tag is-brand">已确认</span>`;
+  if (candidate.status === "rejected") return `<span class="kb-tag is-bad">已丢弃</span>`;
+  return `<span class="kb-tag">待确认</span>`;
+}
+
+function kbKindTag(candidate: KbTrainingCandidate) {
+  const tone = candidate.kind === "qa" ? " is-brand" : candidate.kind === "policy" ? " is-ok" : candidate.kind === "forbidden" ? " is-bad" : "";
+  return `<span class="kb-tag${tone}">${escapeHtml(KB_KIND_TEXT[candidate.kind] || candidate.kind)}</span>`;
+}
+
+function kbVisibleCandidates(): KbTrainingCandidate[] {
+  const status = qs<HTMLSelectElement>("#kbCandidateStatusFilter")?.value || "pending";
+  const kind = qs<HTMLSelectElement>("#kbCandidateKindFilter")?.value || "all";
+  const confidence = qs<HTMLSelectElement>("#kbCandidateConfidenceFilter")?.value || "all";
+  const gapOnly = Boolean(qs<HTMLInputElement>("#kbCandidateGapOnly")?.checked);
+  return kbTrainingState.candidates.filter((candidate) => {
+    if (status !== "all" && candidate.status !== status) return false;
+    if (kind !== "all" && candidate.kind !== kind) return false;
+    if (confidence === "high" && candidate.confidence < 0.9) return false;
+    if (confidence === "mid" && (candidate.confidence < 0.5 || candidate.confidence >= 0.9)) return false;
+    if (confidence === "low" && candidate.confidence >= 0.5) return false;
+    if (gapOnly && !candidate.gapFlag) return false;
+    return true;
+  });
+}
+
+/** 从批次 stats 推算「还有多少段没提炼」——有数才能说人话（§9#2）。 */
+function kbUnprocessedSegments(run: KbTrainingRun) {
+  const stats = run.stats;
+  if (!stats || run.status !== "partial") return 0;
+  const processed = stats.cliCalls * KB_DISPLAY_SEGMENTS_PER_CALL;
+  return Math.max(0, stats.segments - processed);
+}
+
+/** 批次卡片下方的「该怎么办」提示：降级必须可见，而且要能照着做（§9 全表）。 */
+function kbRunAdvice(run: KbTrainingRun) {
+  const unprocessed = kbUnprocessedSegments(run);
+  // 取消的「发生了什么」由批次自带的说明负责（停在半路 / 停在最后一批，说法不同）；
+  // 这里只说**下一步做什么**，否则同一张卡片上两行字在重复同一句话。
+  if (run.status === "cancelled") return "下一步：确认右侧候选后发布；剩余段落要补齐，点下面「用同一份资料再训一次」";
+  if (run.status === "failed") return "引擎或插件不可用：修好后把同一份资料再提交一次即可（重复条目不会再进库）";
+  if (unprocessed > 0) return `还有约 ${unprocessed} 段没提炼：把同一份资料再提交一次补齐，已进库的不会重复`;
+  if (run.status === "succeeded" && run.stats && run.stats.candidates === 0) {
+    const why = run.stats.duplicates > 0
+      ? `${run.stats.duplicates} 条与库里既有条目重复`
+      : "这份资料里没有能变成问答 / 口径 / 政策的内容";
+    return `本批没有新增条目：${why}。可以换一份更具体（参数、口径、常见问答）的资料`;
+  }
+  if (run.status === "partial") return "本批只完成了一部分：先把已出的候选处理掉，再补提剩余段落";
+  return "";
+}
+
+/** 运行耗时：结束时用 finishedAt，运行中用「此刻」—— 每秒刷新由轮询重绘带动。 */
+function kbRunElapsedText(run: KbTrainingRun): string {
+  const start = new Date(run.progress?.startedAt || run.createdAt).getTime();
+  const end = run.status === "running" ? Date.now() : new Date(run.finishedAt || run.createdAt).getTime();
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** 进度百分比：没有总段数时不画进度条（宁可没有，也不要一个假的 0%）。 */
+function kbRunPercent(run: KbTrainingRun): number {
+  const progress = run.progress;
+  if (!progress?.totalSegments) return 0;
+  const done = Math.max(0, Math.min(progress.processedSegments, progress.totalSegments));
+  return Math.max(2, Math.round((done / progress.totalSegments) * 100));
+}
+
+/**
+ * 批次卡片里的进度行。
+ *
+ * 为什么值得单独一行：200 段资料 = 10 次 CLI 调用，最坏要十几分钟。
+ * 没有百分比时用户只有两种解读 —— 「在跑」或「卡死了」，而这两种的下一步完全相反
+ * （等 vs 取消重来）。进度条 + 「第 3/10 批 · 已处理 45/200 段 · 2m 10s」就是那份证据。
+ */
+function kbRunProgressHtml(run: KbTrainingRun): string {
+  if (run.status !== "running") {
+    // 结束态保留一行极简事实：这批到底处理了多少段（失败时更要看）。
+    const progress = run.progress;
+    if (!progress?.totalSegments) return "";
+    return `<div class="kb-run-done"><span>已处理 ${progress.processedSegments}/${progress.totalSegments} 段</span><span>${kbRunElapsedText(run)}</span></div>`;
+  }
+  const percent = kbRunPercent(run);
+  const progress = run.progress;
+  const elapsed = kbRunElapsedText(run);
+  // 第一批还在飞时进度必然是 0：一次 CLI 调用常 30~90 秒，条子钉在 2% 与「卡死」无法区分。
+  // 这一段改用不定长扫光，并把「单批要多久」直接写出来 —— 用户据此决定等还是停。
+  const pendingFirstBatch = Boolean(progress?.totalSegments) && (progress?.batchesDone ?? 0) === 0;
+  const detail = progress?.totalSegments
+    ? (pendingFirstBatch
+      ? `模型正在提炼第 1/${progress.batches} 批（单批通常 1~2 分钟）· 已等待 ${elapsed}`
+      : `第 ${Math.min(progress.batchesDone + 1, progress.batches)}/${progress.batches} 批 · 已处理 ${progress.processedSegments}/${progress.totalSegments} 段 · ${elapsed}`)
+    : `正在读取资料 · ${elapsed}`;
+  const bar = pendingFirstBatch
+    ? `<div class="kb-run-bar"><i></i></div>`
+    : `<div class="kb-run-bar"><i style="width:${percent}%"></i></div>`;
+  const aria = pendingFirstBatch
+    ? `aria-busy="true"`
+    : `aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"`;
+  return `<div class="kb-run-progress${pendingFirstBatch ? " is-pending" : ""}" role="progressbar" ${aria}>
+    ${bar}
+    <span>${detail}</span>
+  </div>`;
+}
+
+function renderKbRunList() {
+  const host = qs<HTMLElement>("#kbRunList");
+  if (!host) return;
+  if (kbTrainingState.loading && !kbTrainingState.runs.length) {
+    host.innerHTML = `<div class="kb-empty">正在读取训练批次…</div>`;
+    return;
+  }
+  if (!kbTrainingState.runs.length) {
+    host.innerHTML = `<div class="kb-empty">还没有训练批次：填好标题与正文，点「开始训练」</div>`;
+    return;
+  }
+  // 轮询连续失败后停掉自动刷新：界面必须说明「停在哪一步、怎么恢复」，
+  // 否则用户只会看到数据不再变化，以为是自己看错了。
+  const notice = kbTrainingState.pollStopped
+    ? `<div class="kb-truncated">自动刷新已停（连续 ${kbTrainingState.pollFailures} 次读取失败）：点右上角「刷新」重试</div>`
+    : "";
+  host.innerHTML = notice + kbTrainingState.runs.map((run) => {
+    const meta = kbRunStatusMeta(run.status);
+    const stats = run.stats;
+    const statsText = stats
+      ? `语料 ${stats.segments} 段 · 入池 ${stats.candidates} 条 · 重复 ${stats.duplicates} · 无出处 ${stats.skipped} · 越界 ${stats.invented}`
+      : "等待提炼结果…";
+    const advice = kbRunAdvice(run);
+    // 批次上标明「这批发布后会归入哪个库」：发布是逐条带上 kbId 的，
+    // 用户不在卡片上看到归属，发布完就只能在知识库列表里反推。
+    const kbName = kbKnowledgeNameOf(run.kbId);
+    return `<article class="kb-run-card${run.id === kbTrainingState.activeRunId ? " is-active" : ""}" data-kb-run="${escapeHtml(run.id)}" role="button" tabindex="0">
+      <div class="kb-run-top">
+        <span class="kb-tag ${meta.cls}">${meta.text}</span>
+        <span class="kb-tag">${escapeHtml(kbEngineText(run.engine, run.model))}</span>
+        ${kbName ? `<span class="kb-tag is-kb" title="这批发布的候选归入：${escapeHtml(kbName)}">库：${escapeHtml(kbName)}</span>` : ""}
+        ${run.pendingCount ? `<span class="kb-tag is-warn">待确认 ${run.pendingCount}</span>` : ""}
+        <span class="kb-run-time">${escapeHtml(formatTime(run.createdAt))}</span>
+      </div>
+      ${kbRunProgressHtml(run)}
+      <div class="kb-run-stats">${escapeHtml(statsText)}</div>
+      ${advice ? `<div class="kb-run-stats kb-run-advice">${escapeHtml(advice)}</div>` : ""}
+      ${run.errorMessage ? `<div class="kb-run-error">${escapeHtml(run.errorMessage)}</div>` : ""}
+      ${run.status === "running"
+        ? (kbTrainingState.cancelPending.has(run.id)
+          ? `<div class="kb-run-actions"><button type="button" class="kb-run-action" data-kb-run-cancel="${escapeHtml(run.id)}" disabled>正在停止…（等当前这批结束）</button></div>`
+          : `<div class="kb-run-actions"><button type="button" class="kb-run-action" data-kb-run-cancel="${escapeHtml(run.id)}">停止这批</button></div>`)
+        : run.status === "failed" || run.status === "partial" || run.status === "cancelled"
+          ? `<div class="kb-run-actions"><button type="button" class="kb-run-action" data-kb-run-retry="${escapeHtml(run.id)}">用同一份资料再训一次</button></div>`
+          : ""}
+    </article>`;
+  }).join("");
+}
+
+function syncKbCandidateSelection() {
+  const count = qs<HTMLElement>("#kbCandidateSelectedCount");
+  if (count) count.textContent = `已选 ${kbTrainingState.selected.size} 条`;
+  qsa<HTMLInputElement>("#kbCandidateList input[data-kb-pick]").forEach((input) => {
+    const id = input.dataset.kbPick || "";
+    const picked = kbTrainingState.selected.has(id);
+    input.checked = picked;
+    input.closest(".kb-candidate")?.classList.toggle("is-selected", picked);
+  });
+  const size = kbTrainingState.selected.size;
+  ["#kbReviewSelectedButton", "#kbDropSelectedButton", "#kbPublishButton"].forEach((selector) => {
+    const button = qs<HTMLButtonElement>(selector);
+    if (button) button.disabled = size === 0;
+  });
+  // 「全选本页」是**有状态的**：这一屏已经全勾上时同一个位置变成「取消全选」。
+  // 只换文案与 title，不新增第二个按钮 —— 两个并列按钮里总有一个是当前点不动的。
+  const selectVisible = qs<HTMLButtonElement>("#kbSelectVisibleButton");
+  if (selectVisible) {
+    const rows = kbVisibleCandidates();
+    const allPicked = rows.length > 0 && rows.every((candidate) => kbTrainingState.selected.has(candidate.id));
+    selectVisible.disabled = rows.length === 0;
+    selectVisible.textContent = allPicked ? "取消全选" : "全选本页";
+    selectVisible.title = rows.length
+      ? `${allPicked ? "取消勾选" : "勾选"}当前筛选下这一屏的 ${rows.length} 条（列表外的条目不受影响）`
+      : "当前筛选下没有候选";
+  }
+}
+
+/** 重绘前记住编辑框的光标位置：轮询 / 其它重绘不该把正在打字的人打断。 */
+function kbEditFocusSnapshot(): { field: string; start: number; end: number } | null {
+  const active = document.activeElement as HTMLTextAreaElement | null;
+  const field = active?.dataset?.kbEdit;
+  if (!field) return null;
+  return { field, start: active!.selectionStart, end: active!.selectionEnd };
+}
+
+function kbRestoreEditFocus(snapshot: { field: string; start: number; end: number } | null) {
+  if (!snapshot) return;
+  const el = qs<HTMLTextAreaElement>(`#kbCandidateList textarea[data-kb-edit="${snapshot.field}"]`);
+  if (!el) return;
+  el.focus();
+  el.setSelectionRange(snapshot.start, snapshot.end);
+}
+
+/** 空候选 / 截断都得说清是哪一种：三者（截断、筛掉了、真没有）用户的下一步完全不同。 */
+function kbCandidateNoticeText(visibleCount: number): string {
+  if (kbTrainingState.candidateTotal > kbTrainingState.candidates.length) {
+    return `本批共 ${kbTrainingState.candidateTotal} 条候选，界面只装了前 ${kbTrainingState.candidates.length} 条：先按状态 / 类型筛着处理，剩下的下一屏再来。`;
+  }
+  if (!visibleCount && kbTrainingState.activeRunId) {
+    const run = kbTrainingState.runs.find((item) => item.id === kbTrainingState.activeRunId);
+    const stats = run?.stats;
+    if (stats && stats.candidates === 0) {
+      return kbRunAdvice(run!) || "本批没有提炼出候选：换一份内容更具体的资料再试。";
+    }
+    return "当前筛选下没有候选：把上面的状态或类型切回「全部」看看。";
+  }
+  return "";
+}
+
+function renderKbCandidateList() {
+  const host = qs<HTMLElement>("#kbCandidateList");
+  const summary = qs<HTMLElement>("#kbCandidateSummary");
+  const counts = kbTrainingState.counts;
+  if (summary) {
+    // 只显示条数：在这里追加「运行端读副本」会把标题挤成三行（1280 宽实测 96px vs 60px），
+    // 那句话放副标与按钮 title 里，位置更合适。
+    summary.textContent = counts
+      ? `待确认 ${counts.pending || 0} · 已确认 ${counts.approved || 0} · 已发布 ${counts.published || 0} 条 · 已丢弃 ${counts.rejected || 0}`
+      : "选一个批次开始";
+  }
+  if (!host) return;
+  const notice = qs<HTMLElement>("#kbCandidateNotice");
+  const setNotice = (text: string) => {
+    if (!notice) return;
+    notice.textContent = text;
+    notice.hidden = !text;
+  };
+  if (!kbTrainingState.activeRunId) {
+    host.innerHTML = `<div class="kb-empty">先在左侧选中一个训练批次</div>`;
+    setNotice("");
+    syncKbCandidateSelection();
+    return;
+  }
+  const rows = kbVisibleCandidates();
+  if (kbTrainingState.focusIndex >= rows.length) kbTrainingState.focusIndex = rows.length - 1;
+  if (!rows.length) {
+    host.innerHTML = `<div class="kb-empty">当前筛选下没有候选</div>`;
+    setNotice(kbCandidateNoticeText(0));
+    syncKbCandidateSelection();
+    return;
+  }
+  setNotice(kbCandidateNoticeText(rows.length));
+  const focusSnapshot = kbEditFocusSnapshot();
+  host.innerHTML = rows.map((candidate, index) => {
+    const editing = candidate.id === kbTrainingState.editId;
+    const meta = [
+      `<span>出处：${kbSourceRefHtml(candidate.sourceRef, candidate.sourceType)}</span>`,
+      candidate.rationale ? `<span>依据：${escapeHtml(candidate.rationale)}</span>` : "",
+      candidate.tags?.length ? `<span>标签：${escapeHtml(candidate.tags.join("、"))}</span>` : ""
+    ].filter(Boolean).join("");
+    const actions = candidate.status === "published"
+      ? `<button class="btn" data-kb-act="revoke" data-kb-id="${escapeHtml(candidate.id)}">从训练库撤回</button>`
+      : editing
+        ? `<button class="btn" data-kb-act="edit-cancel" data-kb-id="${escapeHtml(candidate.id)}">取消编辑</button>
+           <button class="btn primary" data-kb-act="edit-confirm" data-kb-id="${escapeHtml(candidate.id)}">保存并确认</button>`
+        // 待确认的行**不渲染发布键**：发布是确认之后的事，把按钮摆在第一步就会有人点。
+        // 后端也会拒，但界面上少一个「点了报错」的入口，比事后解释更省事。
+        : `<button class="btn" data-kb-act="edit-start" data-kb-id="${escapeHtml(candidate.id)}">编辑</button>
+           ${candidate.status === "pending" ? `<button class="btn" data-kb-act="confirm" data-kb-id="${escapeHtml(candidate.id)}">确认</button>` : ""}
+           <button class="btn" data-kb-act="drop" data-kb-id="${escapeHtml(candidate.id)}">丢弃</button>
+           ${candidate.status === "approved" ? `<button class="btn primary" data-kb-act="publish" data-kb-id="${escapeHtml(candidate.id)}">发布</button>` : ""}`;
+    const note = editing
+      ? "改完点「保存并确认」：改过内容的条目会重算指纹，下次训练同一份资料不会再被当成重复"
+      : candidate.status === "published"
+        ? "已进训练库（运行端读副本）；撤回只是下架，运行端保留留痕"
+        : !candidate.sourceRef
+          ? "没有出处，无法发布"
+          : candidate.status === "approved"
+            ? "已确认，点「发布」后进训练库"
+            : "人工确认后才会进训练库";
+    const content = editing
+      ? `<div class="kb-edit">
+           <label><span>问法（口径片段 / 政策可为空）</span><textarea data-kb-edit="question" rows="2" maxlength="2000">${escapeHtml(kbTrainingState.editQuestion)}</textarea></label>
+           <label><span>答案</span><textarea data-kb-edit="answer" rows="6" maxlength="4000">${escapeHtml(kbTrainingState.editAnswer)}</textarea></label>
+         </div>`
+      : `${candidate.question ? `<div class="kb-candidate-q">${escapeHtml(candidate.question)}</div>` : ""}
+         <div class="kb-candidate-a">${escapeHtml(candidate.answer)}</div>`;
+    return `<article class="kb-candidate${candidate.status === "published" ? " is-published" : ""}${editing ? " is-editing" : ""}" data-kb-candidate="${escapeHtml(candidate.id)}" data-kb-index="${index}" tabindex="0">
+      <label class="kb-check"><input type="checkbox" data-kb-pick="${escapeHtml(candidate.id)}"></label>
+      <div class="kb-candidate-body">
+        <div class="kb-candidate-top">
+          ${kbKindTag(candidate)}
+          ${kbCandidateStatusTag(candidate)}
+          ${candidate.preselect ? `<span class="kb-tag is-run">预勾选</span>` : ""}
+          ${candidate.gapFlag ? `<span class="kb-tag is-warn">知识缺口</span>` : ""}
+          <span class="kb-conf">置信 ${escapeHtml(candidate.confidence.toFixed(2))}</span>
+        </div>
+        ${content}
+        <div class="kb-candidate-meta">${meta}</div>
+        <div class="kb-candidate-actions">
+          <span>${note}</span>
+          ${actions}
+        </div>
+      </div>
+    </article>`;
+  }).join("");
+  if (kbTrainingState.focusIndex >= 0) focusKbCandidate(kbTrainingState.focusIndex);
+  kbRestoreEditFocus(focusSnapshot);
+  syncKbCandidateSelection();
+}
+
+/**
+ * 出处按类型分组 —— `citations` 四类合一是按「主依据 → 分数」排的，
+ * 直接平铺看不出层次。禁用类不在这里列：它已经在红色块里说过一次了。
+ */
+const KB_PROBE_GROUPS: Array<{ kind: KbCandidateKind; title: string }> = [
+  { kind: "qa", title: "命中的问答对" },
+  { kind: "snippet", title: "会一并进提示词的口径片段" },
+  { kind: "policy", title: "并入护栏的政策（全量注入）" }
+];
+
+function kbProbeCitationHtml(citation: KbProbeCitation, match?: KbProbeMatch) {
+  const tags = [
+    citation.verified ? `<span class="kb-tag is-ok">已校订</span>` : "",
+    citation.adopted ? `<span class="kb-tag is-brand">被采纳过</span>` : "",
+    citation.hitCount ? `<span class="kb-tag">历史命中 ${citation.hitCount}</span>` : "",
+    match?.expandedHits ? `<span class="kb-tag is-run">含词典等价命中 ${match.expandedHits}</span>` : ""
+  ].filter(Boolean).join(" ");
+  // 问答对报相似度与共同特征数；口径 / 政策报分数（政策恒为 1，不代表相关度）。
+  const detail = [
+    citation.hitTerms?.length ? `命中词：${citation.hitTerms.join("、")}` : "",
+    match ? `相似度 ${match.similarity.toFixed(3)} · 共同特征 ${match.matched}` : `得分 ${citation.score.toFixed(3)}`
+  ].filter(Boolean).join(" · ");
+  // 出处三件套：「《文件》§段落 · 描述」。anchor 自带 § 前缀（生成时就是 `§${index}`），
+  // 这里只拼不加工。有才显示 —— 历史条目 / 人工录入没有这套。
+  const sourceBits = [
+    citation.sourceTitle ? `《${citation.sourceTitle}》` : "",
+    citation.sourceAnchor || "",
+    citation.sourceNote || ""
+  ].filter(Boolean).join(" ");
+  return `<div class="kb-probe-hit">
+    <b>${escapeHtml(citation.title || citation.refId)}</b> ${tags}
+    ${sourceBits ? `<div class="kb-cite"><em>出处：${escapeHtml(sourceBits)}</em></div>` : ""}
+    ${citation.anchor ? `<div class="kb-cite"><em>章节：${escapeHtml(citation.anchor)}</em></div>` : ""}
+    <div>${escapeHtml(citation.snippet)}</div>
+    ${detail ? `<div class="kb-cite"><em>${escapeHtml(detail)}</em></div>` : ""}
+  </div>`;
+}
+
+function renderKbProbe() {
+  const host = qs<HTMLElement>("#kbProbeResult");
+  if (!host) return;
+  const probe = kbTrainingState.probe;
+  if (!probe) {
+    host.innerHTML = `<div class="kb-empty">输入一句客户问法，看运行端实际会引用哪几条、会不会撞护栏</div>`;
+    return;
+  }
+  // 本地失败（插件不可达 / 路由报错）只有 message，没有 verdict —— 别把它当成「知识缺口」。
+  if (probe.message && !probe.verdict) {
+    host.innerHTML = `<div class="kb-empty">${escapeHtml(probe.message)}</div>`;
+    return;
+  }
+  const citations = probe.citations || [];
+  const forbidden = probe.forbidden || [];
+  const parts: string[] = [];
+  // ① 护栏判决：文案是插件那条 resolve() 自己给的结论，前端不另行总结。
+  parts.push(`<div class="kb-verdict"><b>问法：</b>${escapeHtml(kbTrainingState.probeQuestion)}${probe.verdict ? `<div>${escapeHtml(probe.verdict)}</div>` : ""}</div>`);
+  // ①.5 检索范围：**「明明有这个库却没命中」的唯一判据就在这里**。
+  //      停用某个知识库后某条问法突然答不上来，用户只能靠这三个数（启用几个库 /
+  //      实际读了几条 / 被清单挡了几条）判断是"被清单挡掉"还是"库里压根没有这条语料"。
+  const scope = probe.kbScope;
+  if (scope) {
+    const enabledCount = scope.enabledKbIds?.length || 0;
+    const scopeText = (scope.configured
+      ? `检索范围：启用 ${enabledCount} 个知识库，参与检索 ${scope.considered} 条语料`
+      : `检索范围：还没设置默认知识库（按兼容口径读自有语料）${scope.considered} 条`)
+      + (scope.skippedByScope ? `，另有 ${scope.skippedByScope} 条因不在启用清单里被跳过` : "");
+    parts.push(`<div class="kb-cite">${escapeHtml(scopeText)}</div>`);
+  }
+  // ② 「哪句被拦、为什么」：客户这句踩到禁用场景就该转人工，不是让模型自由发挥。
+  if (forbidden.length) {
+    parts.push(`<div class="kb-forbidden"><b>客户这句话踩到禁用场景，自动回复会转人工。</b>${forbidden
+      .map((item) => `<div>命中的禁用场景：${escapeHtml(item.entry.question || item.entry.answer)}</div>`)
+      .join("")}</div>`);
+  }
+  for (const warning of probe.warnings || []) parts.push(`<div class="kb-warn-line">${escapeHtml(warning)}</div>`);
+  if (!citations.length) {
+    parts.push(`<div class="kb-empty">没有命中任何条目：这条问法就是知识缺口 —— 运行端不会给出业务口径，只会走话术库或转人工。把它补成一条问答再试。</div>`);
+    host.innerHTML = parts.join("");
+    return;
+  }
+  // ③ 分组出处：citations 已经四类合一且按条目去重，**不能**再跟 hits 相加
+  //    （同一问答会出现在两处，条数会凭空翻倍）。hits 只用来补问答特有的相似度与词典等价命中。
+  const matchesById = new Map((probe.hits || []).map((hit) => [hit.entry.id, hit]));
+  for (const group of KB_PROBE_GROUPS) {
+    const items = citations.filter((citation) => citation.kind === group.kind);
+    if (!items.length) continue;
+    parts.push(`<section class="kb-probe-group"><header>${group.title} · ${items.length}</header>${
+      items.map((citation) => kbProbeCitationHtml(citation, matchesById.get(citation.refId))).join("")
+    }</section>`);
+  }
+  if (probe.forbiddenPhrases?.length) {
+    parts.push(`<div class="kb-cite"><em>库里启用 ${probe.forbiddenPhrases.length} 条禁用短语，出稿时会逐条校验回复内容</em></div>`);
+  }
+  host.innerHTML = parts.join("");
+}
+
+/**
+ * 五步流水线。这一屏最容易迷路的地方是「我现在该做什么」：
+ * 选资料 / 确认 / 发布分散在三块面板里，每块都在说自己的事。
+ * 顶部这条把「已完成到哪、下一步是什么」压成一句话，并让当前该做的那步高亮。
+ */
+function renderKbPipeline() {
+  const host = qs<HTMLElement>("#kbPipeline");
+  if (!host) return;
+  const run = kbTrainingState.runs.find((item) => item.id === kbTrainingState.activeRunId);
+  const counts = kbTrainingState.counts;
+  const staged = kbTrainingState.staged.length;
+  const pending = counts?.pending || 0;
+  const published = counts?.published || 0;
+  const enabledBases = kbKnowledgeState.enabledIds.length;
+  const running = run?.status === "running";
+  const steps = [
+    {
+      key: "source",
+      label: "选资料",
+      value: staged ? `已就绪 ${staged} 份` : "PDF / Word / 文本",
+      done: staged > 0 || Boolean(run),
+      active: !run && staged === 0
+    },
+    {
+      key: "train",
+      label: "提炼",
+      value: running
+        ? `${kbRunPercent(run!)}% · ${kbRunElapsedText(run!)}`
+        : run
+          ? kbRunStatusMeta(run.status).text
+          : "等待提交",
+      done: Boolean(run && run.status !== "running"),
+      active: running
+    },
+    {
+      key: "review",
+      label: "确认",
+      value: pending ? `待确认 ${pending}` : "没有待确认",
+      done: pending === 0 && Boolean(counts?.total),
+      active: Boolean(run && !running && pending > 0)
+    },
+    {
+      key: "publish",
+      label: "发布",
+      value: published ? `已发布 ${published} 条` : "等待确认",
+      done: published > 0,
+      active: Boolean(run && !running && pending === 0 && (counts?.approved || 0) > 0)
+    },
+    {
+      key: "live",
+      label: "生效",
+      value: enabledBases ? `启用 ${enabledBases} 个库` : "未启用任何库",
+      done: enabledBases > 0,
+      active: published > 0 && enabledBases === 0
+    }
+  ];
+  host.innerHTML = `<ol>${steps.map((step, index) => `
+    <li class="kb-step${step.done ? " is-done" : ""}${step.active ? " is-active" : ""}" data-kb-step="${step.key}">
+      <b>${String(index + 1).padStart(2, "0")}</b>
+      <span>${step.label}</span>
+      <em>${escapeHtml(step.value)}</em>
+    </li>`).join("")}</ol>`;
+}
+
+function renderKbTraining() {
+  renderKbPipeline();
+  renderKbRunList();
+  renderKbKnowledgePanel();
+  renderKbCandidateList();
+  renderKbProbe();
+}
+
+// ---------------------------------------------------------------------------
+// 知识库：公开 / 私用 + 账号级「默认知识库」多选启用
+//
+// 这一块是「训练成果能不能被别人用」的全部入口。三条判据：
+//  1. **勾选即启用，启用即生效**：没有"保存"按钮 —— 多一步就会有人勾完不点保存，
+//     然后以为启用了（出稿没变化，只能靠猜）。每次勾选都立刻落库并推给插件。
+//  2. **保存成功 ≠ 生效**：CRM 存下了但插件没推成功时，必须**常驻提示**，
+//     因为这时试问/自动回复仍按旧清单走 —— 只弹一个会消失的 toast 等于没说。
+//  3. **改不动就直说**：别人的库不渲染「改名 / 切公开」按钮（而不是渲染出来点了报错）。
+// ---------------------------------------------------------------------------
+
+function setKbKnowledgeNotice(text: string, ok = false) {
+  kbKnowledgeState.notice = text;
+  kbKnowledgeState.noticeOk = ok;
+  const host = qs<HTMLElement>("#kbKnowledgeNotice");
+  if (!host) return;
+  host.hidden = !text;
+  host.textContent = text;
+  host.classList.toggle("is-ok", ok);
+}
+
+async function loadKbKnowledgeBases(options: { silent?: boolean } = {}) {
+  if (kbKnowledgeState.loading) return;
+  kbKnowledgeState.loading = true;
+  try {
+    const result = await api<{ items: KbKnowledgeBaseView[]; enabledIds: string[] }>("/api/kb/training/knowledge-bases");
+    kbKnowledgeState.items = result.items || [];
+    kbKnowledgeState.enabledIds = result.enabledIds || [];
+    // 服务端已推的清单与本地勾选若有出入（例如插件恢复后重新同步），以服务端为准；
+    // 只在没有待提交的行时清提示，否则会把用户刚看到的结果冲掉。
+    if (!kbKnowledgeState.pending.size && !kbKnowledgeState.notice) setKbKnowledgeNotice("");
+  } catch (error) {
+    if (!options.silent) {
+      setKbKnowledgeNotice(error instanceof Error ? error.message : "知识库加载失败", false);
+      toast("知识库加载失败", "error");
+    }
+  } finally {
+    kbKnowledgeState.loading = false;
+    renderKbKnowledgePanel();
+  }
+}
+
+/** 自己的排前面：要改的东西聚在一起，别人的分享只用来勾选。 */
+function kbKnowledgeSorted(): KbKnowledgeBaseView[] {
+  return [...kbKnowledgeState.items].sort((left, right) => {
+    if (left.isOwner !== right.isOwner) return left.isOwner ? -1 : 1;
+    return right.updatedAt.localeCompare(left.updatedAt);
+  });
+}
+
+/** 知识库卡片：语言同「工具中心」tool-card（图标 + 标题 + 徽标 + hover 抬升）。
+    卡片上的勾选框就是启用开关 —— 数据属性与旧的行式布局完全一致，
+    事件仍委托在 #kbKnowledgeList 容器上，这里只换壳不换行为。 */
+function kbKnowledgeRowHtml(item: KbKnowledgeBaseView): string {
+  const id = escapeHtml(item.id);
+  const busy = kbKnowledgeState.pending.has(item.id);
+  const icon = `<span class="kb-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5V5.5"/><path d="M9 7.5h7M9 11.5h5"/></svg></span>`;
+  if (kbKnowledgeState.renameId === item.id) {
+    return `<article class="kb-card is-renaming" data-kb-kb="${id}">
+      ${icon}
+      <div class="kb-card-rename">
+        <input data-kb-kb-name-input maxlength="200" placeholder="给这个知识库起个名字，列表里才认得出" value="${escapeHtml(kbKnowledgeState.renameValue)}">
+        <button type="button" data-kb-kb-name-save ${busy ? "disabled" : ""}>保存</button>
+        <button type="button" data-kb-kb-name-cancel>取消</button>
+      </div>
+    </article>`;
+  }
+  const tags = [
+    item.isOwner
+      ? `<span class="kb-kb-tag is-mine">我创建的</span>`
+      : `<span class="kb-kb-tag">${escapeHtml(item.ownerName)} 分享</span>`,
+    item.visibility === "team"
+      ? `<span class="kb-kb-tag is-public">公开</span>`
+      : `<span class="kb-kb-tag">私用</span>`
+  ].join("");
+  const stats = [
+    `已发布 ${item.entryCount} 条`,
+    item.pendingCount ? `待确认 ${item.pendingCount} 条` : "",
+    `更新于 ${formatTime(item.updatedAt)}`
+  ].filter(Boolean).join(" · ");
+  return `<article class="kb-card${item.enabled ? "" : " is-off"}" data-kb-kb="${id}">
+    <div class="kb-card-main">
+      ${icon}
+      <div class="kb-card-body">
+        <div class="kb-card-title"><span class="kb-kb-name">${escapeHtml(item.name)}</span>${tags}</div>
+        <div class="kb-card-desc">${escapeHtml(stats)}</div>
+      </div>
+    </div>
+    <div class="kb-card-foot">
+      <label class="kb-card-switch" title="勾选即启用：出稿与试问立刻按这个清单读语料">
+        <input type="checkbox" data-kb-kb-enable="${id}" ${item.enabled ? "checked" : ""} ${busy ? "disabled" : ""}>
+        <span>${item.enabled ? "启用中" : "未启用"}</span>
+      </label>
+      <div class="kb-card-actions">
+        <button type="button" data-kb-kb-open="${id}">查看 ${item.entryCount} 条</button>
+        ${item.isOwner ? `<button type="button" data-kb-kb-visibility="${id}" ${busy ? "disabled" : ""}>${item.visibility === "team" ? "改为私用" : "公开给团队"}</button>` : ""}
+        ${item.isOwner ? `<button type="button" data-kb-kb-rename="${id}" ${busy ? "disabled" : ""}>改名</button>` : ""}
+        ${item.isOwner ? `<button type="button" class="is-danger" data-kb-kb-delete="${id}" ${busy ? "disabled" : ""}>删除</button>` : ""}
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderKbKnowledgePanel() {
+  renderKbTargetOptions();
+  const query = kbKnowledgeState.query.trim().toLowerCase();
+  const all = kbKnowledgeSorted();
+  // 搜索只过滤展示，不动提交口径：「归入哪个库」下拉仍列全量（上面 renderKbTargetOptions）。
+  const items = query ? all.filter((item) => item.name.toLowerCase().includes(query)) : all;
+  const summary = qs<HTMLElement>("#kbKnowledgeSummary");
+  if (summary) {
+    if (!all.length) {
+      summary.textContent = "还没有知识库";
+    } else if (query) {
+      summary.textContent = `匹配 ${items.length} / 共 ${all.length} 个`;
+    } else {
+      const enabled = kbKnowledgeState.enabledIds.length;
+      const shared = all.filter((item) => !item.isOwner).length;
+      summary.textContent = `已启用 ${enabled} / 可勾选 ${all.length} 个${shared ? ` · 其中 ${shared} 个是别人分享的` : ""}`;
+    }
+  }
+  const host = qs<HTMLElement>("#kbKnowledgeList");
+  if (host) {
+    // 知识库是后来才有的：更早的批次 kbId 为空，语料已经发布、也仍在参与出稿。
+    // 不说明这件事，用户看到「0 个知识库 / 8 条已发布」只会觉得系统自相矛盾。
+    const legacyRuns = kbTrainingState.runs.filter((run) => !run.kbId).length;
+    const legacyNotice = legacyRuns
+      ? `<div class="kb-kb-legacy">另有 ${legacyRuns} 个历史批次（知识库功能上线前）没有归库：它们的语料照常参与出稿，不影响使用。</div>`
+      : "";
+    host.innerHTML = legacyNotice + (items.length
+      ? items.map(kbKnowledgeRowHtml).join("")
+      : query
+        ? `<div class="kb-empty">没有匹配「${escapeHtml(kbKnowledgeState.query.trim())}」的知识库：换个名字试试，或清空搜索看全部。</div>`
+        : `<div class="kb-empty">还没有知识库。在左边发起一次训练会自动建一个；训练完把候选发布进它，它才会参与出稿。</div>`);
+  }
+  const notice = qs<HTMLElement>("#kbKnowledgeNotice");
+  if (notice) {
+    notice.hidden = !kbKnowledgeState.notice;
+    notice.textContent = kbKnowledgeState.notice;
+    notice.classList.toggle("is-ok", kbKnowledgeState.noticeOk);
+  }
+  // 启用清单影响流水线第 5 步（「生效」），重绘知识库后顺手刷新步骤条。
+  renderKbPipeline();
+}
+
+/**
+ * 保存启用清单。**不做乐观更新**：清单的实际生效点是插件，先按用户点的那一份渲染、
+ * 失败再回滚，会在失败时留下一瞬间的假象；这里改成"提交中禁用该行 → 按服务端返回重绘"。
+ */
+async function saveKbEnabledKnowledgeBases(nextIds: string[], successText: string) {
+  const result = await api<KbEnabledSaveResult>("/api/kb/training/knowledge-bases/defaults", {
+    method: "PUT",
+    body: JSON.stringify({ kbIds: nextIds })
+  });
+  kbKnowledgeState.enabledIds = result.enabled || [];
+  if (result.rejected?.length) {
+    setKbKnowledgeNotice(
+      `有 ${result.rejected.length} 个知识库没能启用（${result.rejected.map((item) => item.id).join("、")}）：${result.rejected[0].reason}`,
+      false
+    );
+  } else if (!result.pluginPushed) {
+    setKbKnowledgeNotice(
+      `清单已存到 CRM，但同步到 WhatsApp 插件失败（${result.pluginError}）：在插件恢复前，出稿与试问仍按旧清单读语料。`,
+      false
+    );
+  } else {
+    setKbKnowledgeNotice(`${successText}：已启用 ${kbKnowledgeState.enabledIds.length} 个知识库，出稿与试问即刻按这个清单读语料。`, true);
+  }
+}
+
+async function toggleKbKnowledgeEnabled(id: string, next: boolean) {
+  if (kbKnowledgeState.pending.has(id)) return;
+  const nextIds = new Set(kbKnowledgeState.enabledIds);
+  if (next) nextIds.add(id);
+  else nextIds.delete(id);
+  kbKnowledgeState.pending.add(id);
+  renderKbKnowledgePanel();
+  try {
+    await saveKbEnabledKnowledgeBases([...nextIds], next ? "已启用" : "已停用");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "启用清单保存失败";
+    setKbKnowledgeNotice(message, false);
+    toast(message, "error");
+  } finally {
+    kbKnowledgeState.pending.delete(id);
+    // 无论成败都以后端为准重读：失败时它负责把勾选状态改回来。
+    await loadKbKnowledgeBases({ silent: true });
+  }
+}
+
+async function toggleKbKnowledgeVisibility(id: string) {
+  const item = kbKnowledgeState.items.find((kb) => kb.id === id);
+  if (!item || !item.isOwner || kbKnowledgeState.pending.has(id)) return;
+  const next = item.visibility === "team" ? "owner" : "team";
+  kbKnowledgeState.pending.add(id);
+  renderKbKnowledgePanel();
+  try {
+    await api(`/api/kb/training/knowledge-bases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ visibility: next })
+    });
+    setKbKnowledgeNotice(
+      next === "team"
+        ? `「${item.name}」已公开：同团队账号可以在他们自己的清单里勾选启用它。`
+        : `「${item.name}」已改为私用：除了你，别人看不到了。`,
+      true
+    );
+    toast(next === "team" ? "已公开给团队" : "已改为私用");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "公开状态修改失败";
+    setKbKnowledgeNotice(message, false);
+    toast(message, "error");
+  } finally {
+    kbKnowledgeState.pending.delete(id);
+    await loadKbKnowledgeBases({ silent: true });
+  }
+}
+
+/**
+ * 删除知识库。
+ *
+ * 界面上其他按钮（改名 / 公开 / 启用）都是可逆的，只有这一个不可撤销，
+ * 所以必须二次确认，并且**把"哪些会没、哪些会留"逐条说清**：
+ * 只说「确定删除吗」会让用户以为训练成果一起没了，实际批次和原文都还在。
+ */
+async function deleteKbKnowledgeBase(id: string) {
+  const item = kbKnowledgeState.items.find((kb) => kb.id === id);
+  if (!item || !item.isOwner || kbKnowledgeState.pending.has(id)) return;
+  const ok = await confirmAction({
+    title: "删除知识库",
+    message: `「${item.name}」会从列表里删除，库里的语料不再参与出稿。`,
+    detail: item.name,
+    detailLabel: "要删除的知识库",
+    consequences: [
+      `${item.entryCount} 条已发布语料会从 WhatsApp 训练库下线（保留留痕，可重新发布到别的库）`,
+      "训练批次、候选和原文都保留，只解除它们与这个库的归属",
+      "删除后不可撤销"
+    ],
+    confirmLabel: "删除知识库"
+  });
+  if (!ok) return;
+  kbKnowledgeState.pending.add(id);
+  renderKbKnowledgePanel();
+  const button = qs<HTMLButtonElement>(`#kbKnowledgeList [data-kb-kb-delete="${id}"]`);
+  setButtonPending(button, true, "删除", "删除中…");
+  try {
+    const result = await api<{ archivedEntries: number; detachedRuns: number }>(
+      `/api/kb/training/knowledge-bases/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    );
+    setKbKnowledgeNotice(
+      `已删除「${item.name}」：${result.archivedEntries} 条语料已从训练库下线，${result.detachedRuns} 个训练批次解除归库（批次与原文保留）。`,
+      true
+    );
+    toast("知识库已删除");
+    // 详情弹窗正看着这个库 → 关掉，否则会停在空白列表上，看着像"库还在、只是空了"。
+    if (kbEntriesState.kbId === id) {
+      kbEntriesState.kbId = "";
+      qs<HTMLElement>("#kbEntriesModal")?.classList.remove("active");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "知识库删除失败";
+    setKbKnowledgeNotice(message, false);
+    toast(message, "error");
+  } finally {
+    kbKnowledgeState.pending.delete(id);
+    // 批次卡片上写着「归入哪个库」：不重读就会继续显示刚被删掉的那个名字。
+    await loadKbTraining({ silent: true });
+  }
+}
+
+function startKbKnowledgeRename(id: string) {
+  const item = kbKnowledgeState.items.find((kb) => kb.id === id);
+  if (!item || !item.isOwner) return;
+  kbKnowledgeState.renameId = id;
+  kbKnowledgeState.renameValue = item.name;
+  renderKbKnowledgePanel();
+  const input = qs<HTMLInputElement>("#kbKnowledgeList [data-kb-kb-name-input]");
+  input?.focus();
+  input?.select();
+}
+
+function cancelKbKnowledgeRename() {
+  kbKnowledgeState.renameId = "";
+  kbKnowledgeState.renameValue = "";
+  renderKbKnowledgePanel();
+}
+
+async function confirmKbKnowledgeRename() {
+  const id = kbKnowledgeState.renameId;
+  if (!id) return;
+  const item = kbKnowledgeState.items.find((kb) => kb.id === id);
+  const name = kbKnowledgeState.renameValue.trim();
+  if (!item) {
+    cancelKbKnowledgeRename();
+    return;
+  }
+  // 空名字/没改：不提交也不报错，直接退出编辑态 —— 名字为空会让列表没法认，静默改成默认名更糟。
+  if (!name || name === item.name) {
+    cancelKbKnowledgeRename();
+    return;
+  }
+  kbKnowledgeState.pending.add(id);
+  try {
+    await api(`/api/kb/training/knowledge-bases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name })
+    });
+    toast("知识库已改名");
+    setKbKnowledgeNotice(`已改名为「${name}」。`, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "改名失败";
+    setKbKnowledgeNotice(message, false);
+    toast(message, "error");
+  } finally {
+    kbKnowledgeState.pending.delete(id);
+    kbKnowledgeState.renameId = "";
+    kbKnowledgeState.renameValue = "";
+    await loadKbKnowledgeBases({ silent: true });
+  }
+}
+
+/** 批次卡片上显示「这批归入哪个知识库」：发布前就知道东西会进哪个库，不是盲发。 */
+function kbKnowledgeNameOf(kbId: string | undefined): string {
+  const id = String(kbId ?? "");
+  if (!id) return "";
+  return kbKnowledgeState.items.find((item) => item.id === id)?.name || "已归入一个知识库";
+}
+
+/**
+ * 屏 1 的「这批成果归入哪个知识库」下拉。
+ *
+ * 存在的理由：一次训练默认新建一个库，同一份资料反复提炼（第一次失败、补内容再提）
+ * 会攒出一堆同名近似的库 —— 「选择默认知识库」那张清单就没法看了。
+ *
+ * 只列**自己的**库：往别人的库发语料后端会 403 拒掉，与其让用户点了再报错，不如压根不列。
+ */
+function renderKbTargetOptions() {
+  const select = qs<HTMLSelectElement>("#kbTargetKnowledgeBase");
+  if (!select) return;
+  const current = select.value;
+  const owned = kbKnowledgeSorted().filter((item) => item.isOwner);
+  select.innerHTML = `<option value="">新建一个知识库（用资料标题命名）</option>` + owned.map((item) =>
+    `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（已发布 ${item.entryCount} 条）</option>`
+  ).join("");
+  // 保留用户当前的选择；只有那个库已经不在可选集合里（被删 / 不再属于自己）才退回"新建"。
+  select.value = owned.some((item) => item.id === current) ? current : "";
+}
+
+function renderKbAssetOptions(assets: KnowledgeAsset[]) {
+  const select = qs<HTMLSelectElement>("#kbSourceAsset");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">不关联</option>` + assets.map((asset) =>
+    `<option value="${escapeHtml(asset.id)}">${escapeHtml(asset.title || asset.id)}</option>`
+  ).join("");
+  if (current) select.value = current;
+}
+
+function focusKbCandidate(index: number) {
+  const rows = qsa<HTMLElement>("#kbCandidateList .kb-candidate");
+  if (!rows.length) return;
+  const next = Math.max(0, Math.min(rows.length - 1, index));
+  kbTrainingState.focusIndex = next;
+  rows.forEach((row, i) => row.classList.toggle("is-focused", i === next));
+  rows[next]?.scrollIntoView({ block: "nearest" });
+}
+
+function toggleKbCandidate(id: string, force?: boolean) {
+  kbTrainingState.touched.add(id);
+  const next = force ?? !kbTrainingState.selected.has(id);
+  if (next) kbTrainingState.selected.add(id);
+  else kbTrainingState.selected.delete(id);
+  syncKbCandidateSelection();
+}
+
+/**
+ * 全选 / 取消全选**当前筛选下这一屏**的候选。
+ *
+ * 为什么是"这一屏"而不是"整批"：列表只装了前 `counts.total` 条里的一部分
+ * （`candidateTotal` 可能远大于 `candidates.length`，见 `kbCandidateNoticeText`）。
+ * 「全选整批」会勾上一堆页面上根本没渲染的条目，用户点完「发布到训练库」才发现
+ * 发出去的东西自己没见过 —— 这种"看不见的选择"比多按几次按钮危险得多。
+ *
+ * 不复用 `toggleKbCandidate` 逐条调用：那会同步刷新 N 次（每次都要重扫整张列表），
+ * 一次几百条时明显卡顿。这里一次性改完集合，最后只同步一次。
+ *
+ * 不重绘列表：只同步勾选框与行样式，正在编辑的输入框和光标不会被打断。
+ */
+function toggleKbVisibleSelection() {
+  const rows = kbVisibleCandidates();
+  if (!rows.length) return;
+  const ids = rows.map((candidate) => candidate.id);
+  const allPicked = ids.every((id) => kbTrainingState.selected.has(id));
+  ids.forEach((id) => {
+    kbTrainingState.touched.add(id);
+    if (allPicked) kbTrainingState.selected.delete(id);
+    else kbTrainingState.selected.add(id);
+  });
+  syncKbCandidateSelection();
+}
+
+function setKbSourceHint(text: string, warn = false) {
+  const hint = qs<HTMLElement>("#kbSourceHint");
+  if (!hint) return;
+  hint.textContent = text;
+  hint.classList.toggle("is-warn", warn);
+}
+
+function stopKbTrainingPoll() {
+  if (kbTrainingPollTimer) {
+    clearTimeout(kbTrainingPollTimer);
+    kbTrainingPollTimer = null;
+  }
+}
+
+/** 只要还有 running 的批次就每 3 秒回来看一眼 —— 提炼是异步的，没有它界面永远停在「运行中」。 */
+function scheduleKbTrainingPoll() {
+  stopKbTrainingPoll();
+  // 连续失败到上限、或正在行内编辑时都不再自动刷新：
+  // 前者只会重复报同一个错，后者的重绘会打断正在打字的人（光标被吞掉）。
+  if (kbTrainingState.pollStopped || kbTrainingState.editId) return;
+  if (!kbTrainingState.runs.some((run) => run.status === "running")) return;
+  kbTrainingPollTimer = setTimeout(() => {
+    kbTrainingPollTimer = null;
+    void loadKbTraining({ silent: true });
+  }, 3000);
+}
+
+/** 自动刷新失败一次：够次数就停下来并把原因留给界面（禁止静默，也禁止刷屏）。 */
+function kbNotePollFailure() {
+  kbTrainingState.pollFailures += 1;
+  if (kbTrainingState.pollFailures >= KB_POLL_FAILURE_LIMIT) kbTrainingState.pollStopped = true;
+}
+
+async function refreshKbRunDetail(options: { showToast?: boolean; silent?: boolean } = {}) {
+  const runId = kbTrainingState.activeRunId;
+  if (!runId) {
+    kbTrainingState.counts = null;
+    kbTrainingState.candidates = [];
+    kbTrainingState.candidateTotal = 0;
+    kbTrainingState.selected.clear();
+    kbTrainingState.touched.clear();
+    kbTrainingState.focusIndex = -1;
+    kbTrainingState.editId = "";
+    renderKbTraining();
+    return;
+  }
+  try {
+    const result = await api<{ run: KbTrainingRun; counts: Record<string, number>; candidates: KbTrainingCandidate[] }>(
+      `/api/kb/training/runs/${encodeURIComponent(runId)}`
+    );
+    kbTrainingState.counts = result.counts || null;
+    kbTrainingState.candidates = result.candidates || [];
+    // counts.total 来自数据库计数，candidates 是「装进界面的那批」——
+    // 两者不等就说明被 limit 截断了，界面必须说出来（静默截断是历史踩过的坑）。
+    kbTrainingState.candidateTotal = Number(result.counts?.total ?? kbTrainingState.candidates.length);
+    if (result.run) {
+      const index = kbTrainingState.runs.findIndex((run) => run.id === result.run.id);
+      if (index >= 0) kbTrainingState.runs[index] = result.run;
+      else kbTrainingState.runs.unshift(result.run);
+    }
+    // 刷新不清掉用户的勾选：轮询每 3 秒来一次，清了就没法选了。
+    const alive = new Set(kbTrainingState.candidates.map((candidate) => candidate.id));
+    [...kbTrainingState.selected].forEach((id) => { if (!alive.has(id)) kbTrainingState.selected.delete(id); });
+    kbTrainingState.candidates.forEach((candidate) => {
+      if (candidate.preselect && candidate.status === "pending" && !kbTrainingState.touched.has(candidate.id)) {
+        kbTrainingState.selected.add(candidate.id);
+      }
+    });
+    // 正在编辑的那条若已不在本批（换批次 / 被别处处理），退出编辑态。
+    if (kbTrainingState.editId && !alive.has(kbTrainingState.editId)) kbTrainingState.editId = "";
+    kbTrainingState.pollFailures = 0;
+    kbTrainingState.pollStopped = false;
+    if (options.showToast) toast("候选已刷新");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "候选加载失败";
+    if (options.silent) kbNotePollFailure();
+    else toast(message, "error");
+  } finally {
+    renderKbTraining();
+    renderKbRunList();
+    scheduleKbTrainingPoll();
+  }
+}
+
+async function loadKbTraining(options: { silent?: boolean } = {}) {
+  if (kbTrainingState.loading) {
+    if (!options.silent) toast("正在加载，请稍候");
+    return;
+  }
+  kbTrainingState.loading = true;
+  if (!kbTrainingState.runs.length) renderKbRunList();
+  try {
+    const assetResult = await api<{ assets: KnowledgeAsset[] }>("/api/knowledge/assets")
+      .catch(() => ({ assets: [] as KnowledgeAsset[] }));
+    kbTrainingState.assets = assetResult.assets;
+    renderKbAssetOptions(assetResult.assets);
+    const runResult = await api<{ runs: KbTrainingRun[] }>("/api/kb/training/runs?limit=30");
+    kbTrainingState.runs = runResult.runs || [];
+    // 停止请求的标记要跟着状态走：批次已经不在 running，标记就该消失，
+    // 否则下一批同名卡片会带着「正在停止…」的禁用按钮出现。
+    kbTrainingState.cancelPending.forEach((id) => {
+      const live = kbTrainingState.runs.find((run) => run.id === id);
+      if (!live || live.status !== "running") kbTrainingState.cancelPending.delete(id);
+    });
+    if (!kbTrainingState.activeRunId || !kbTrainingState.runs.some((run) => run.id === kbTrainingState.activeRunId)) {
+      // 默认落在**真正有待确认**的那一批：原来固定取最新一批，
+      // 于是「昨天那批还有 8 条没确认，今天又提交了一批失败的」会看到空候选屏，
+      // 用户以为候选丢了。没有待确认的批次才退回最新一批。
+      const withPending = kbTrainingState.runs.find((run) => (run.pendingCount || 0) > 0);
+      kbTrainingState.activeRunId = (withPending ?? kbTrainingState.runs[0])?.id || "";
+      kbTrainingState.editId = "";
+    }
+    kbTrainingState.loaded = true;
+    // 知识库是账号级资产，与批次一起刷新：批次卡片要显示"归入哪个库"，
+    // 缺了它卡片只能显示一个 id。它的失败**不拖垮**整屏加载（自己内部消化并提示）。
+    await loadKbKnowledgeBases({ silent: options.silent });
+    await refreshKbRunDetail({ silent: options.silent });
+    if (!options.silent) toast("知识库训练已刷新");
+  } catch (error) {
+    // 轮询路径失败不弹 toast（每 3 秒一次会把界面刷满），但也不能吞掉：计入失败次数，
+    // 到上限就让批次列表顶上那条提示说明「自动刷新已停」。
+    if (options.silent) kbNotePollFailure();
+    else toast(error instanceof Error ? error.message : "知识库训练加载失败", "error");
+  } finally {
+    kbTrainingState.loading = false;
+    renderKbRunList();
+  }
+}
+
+/** 关联资料是「这一份资料的出处」：暂存多份时无法指向具体哪一份 —— 宁可禁用，也不猜。 */
+function syncKbAssetSelect() {
+  const select = qs<HTMLSelectElement>("#kbSourceAsset");
+  if (!select) return;
+  const ambiguous = kbTrainingState.staged.length > 1;
+  if (ambiguous) select.value = "";
+  select.disabled = ambiguous;
+}
+
+/** 暂存清单：本地读取的多份资料，提交时一起进 `sources.text.items`（后端上限 50 条）。 */
+function renderKbStaged() {
+  const host = qs<HTMLElement>("#kbStagedList");
+  syncKbAssetSelect();
+  if (!host) return;
+  const staged = kbTrainingState.staged;
+  host.hidden = !staged.length;
+  if (!staged.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const chars = staged.reduce((sum, item) => sum + item.body.length, 0);
+  host.innerHTML = `<div class="kb-staged-item"><b>已暂存 ${staged.length} 份</b><span>共 ${chars.toLocaleString()} 字符</span><button type="button" data-kb-staged="clear">全部移除</button></div>`
+    + staged.map((item, index) => `<div class="kb-staged-item"><b>${escapeHtml(item.title)}</b><span>${item.body.length.toLocaleString()} 字符</span><button type="button" data-kb-staged="${index}">移除</button><input data-kb-staged-note="${index}" maxlength="200" placeholder="来源描述（选填）：这份资料从哪来 / 谁给的口径" value="${escapeHtml(item.note)}"></div>`).join("");
+}
+
+async function startKbTrainingRun(button: HTMLButtonElement | null) {
+  const titleInput = qs<HTMLInputElement>("#kbSourceTitle");
+  const title = titleInput?.value.trim() || "";
+  const body = qs<HTMLTextAreaElement>("#kbSourceBody")?.value ?? "";
+  const assetId = qs<HTMLSelectElement>("#kbSourceAsset")?.value || "";
+  // 主表单的「来源描述」：属于正文框/关联资料这一份；暂存的多份资料各自有自己的描述输入框。
+  const mainNote = qs<HTMLInputElement>("#kbSourceNote")?.value.trim().slice(0, 200) || "";
+  const staged = kbTrainingState.staged;
+  // 暂存只有一份、正文框空着时，把「资料标题 / 关联资料 / 来源描述」应用到这唯一一份上
+  // —— 否则本地读来的单份资料永远挂不上文件中心出处。
+  const soloStaged = staged.length === 1 && !body.trim();
+  // 出处 = 标题 或 关联资料，**有一个就够**（后端会用关联资料的标题兜底）。
+  if (body.trim() && !title && !assetId) {
+    setKbSourceHint("正文框里有内容，但这段正文没有出处：填个标题，或关联一条文件中心资料。", true);
+    titleInput?.focus();
+    return;
+  }
+  const items: Array<{ title: string; body: string; assetId?: string; note?: string }> = staged.map((item) => ({
+    title: soloStaged && title ? title : item.title,
+    body: item.body,
+    assetId: soloStaged && assetId ? assetId : undefined,
+    note: soloStaged && mainNote ? mainNote : item.note || undefined
+  }));
+  if (body.trim()) items.push({ title, body, assetId: assetId || undefined, note: mainNote || undefined });
+  if (!items.length) {
+    setKbSourceHint("先粘一段资料正文，或点上面的方框选一份 PDF / Word / txt / md 文件。", true);
+    return;
+  }
+  if (!staged.length && body.trim().length < 20) {
+    setKbSourceHint("正文太短，至少贴一段有内容的资料再开始（文件中心只存链接与说明，正文不在库里）。", true);
+    qs<HTMLTextAreaElement>("#kbSourceBody")?.focus();
+    return;
+  }
+  if (button?.disabled) return;
+  if (button) setButtonPending(button, true, "开始训练", "提交中…");
+  // 归入哪个库：空 = 新建（后端按资料标题命名）。选了已有库就把成果追加进去，
+  // 避免同一份资料反复提炼攒出一堆同名近似的库。
+  const targetKbId = qs<HTMLSelectElement>("#kbTargetKnowledgeBase")?.value || "";
+  try {
+    setKbSourceHint(`已提交 ${items.length} 份资料，正在提炼（每 20 段一次调用，长资料需要点时间）…`);
+    const result = await api<{ run: KbTrainingRun; knowledgeBaseSync?: { ok: boolean; error?: string } }>("/api/kb/training/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        // 出处只走 `text.items[].assetId`：后端解析资产元数据时会把它并进同一张映射表，
+        // 出处照样能回指。**刻意不发 `files.assetIds`** —— 那条路径会把资料自身的说明
+        // 也当成一份语料喂进去（文件中心的说明常常只有几个字），凭空多出一段垃圾语料。
+        sources: { text: { items } },
+        ...(targetKbId ? { kbId: targetKbId } : {})
+      })
+    });
+    if (result.run) {
+      kbTrainingState.runs = [result.run, ...kbTrainingState.runs.filter((run) => run.id !== result.run.id)];
+      // 提交后**切到这批**：用户刚点下「开始训练」，等的是它的进度；
+      // 停在上一批会让人以为没提交成功（勾选与编辑态本来就随提交清空了，不存在半途打断）。
+      kbTrainingState.activeRunId = result.run.id;
+    }
+    kbTrainingState.touched.clear();
+    kbTrainingState.selected.clear();
+    kbTrainingState.editId = "";
+    kbTrainingState.staged = [];
+    renderKbStaged();
+    setKbSourceHint("批次已提交，已切到这一批：跑完候选项会自动出现。");
+    toast("训练批次已提交");
+    // 新建库时会**自动把库勾进创建者的清单**，那条清单一变就必须推给运行端；
+    // 推失败时运行端仍按旧清单出稿 —— 只弹一个会消失的 toast 等于没说，所以走面板上的常驻提示。
+    if (result.knowledgeBaseSync && !result.knowledgeBaseSync.ok) {
+      setKbKnowledgeNotice(
+        `知识库已建好，但启用清单没同步到 WhatsApp 插件（${result.knowledgeBaseSync.error}）：在插件恢复前，出稿仍按旧清单读语料。在下面勾选任意一个知识库可以重试同步。`,
+        false
+      );
+    }
+    // 新批次 = 新知识库（默认私用、且已给自己勾上），列表必须立刻反映出来，
+    // 否则用户会以为这批成果"没有归到任何地方"。
+    void loadKbKnowledgeBases({ silent: true });
+    await refreshKbRunDetail();
+    renderKbRunList();
+    scheduleKbTrainingPoll();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "提交失败";
+    setKbSourceHint(message, true);
+    toast(message, "error");
+  } finally {
+    if (button) setButtonPending(button, false, "开始训练", "提交中…");
+  }
+}
+
+/** 拖入 / 选择的文件按扩展名分两路：文本本地读，PDF / Word 交后端抽取。 */
+function kbSourceFileKind(name: string): "text" | "extract" | "" {
+  if (/\.(txt|md|markdown|csv|tsv|json)$/i.test(name)) return "text";
+  if (/\.(pdf|docx)$/i.test(name)) return "extract";
+  return "";
+}
+
+/**
+ * PDF / Word 的正文只能由后端抽（浏览器读不了）。
+ * 走同源 fetch 而不是 api()：这里要发原始字节，不能被 `content-type: application/json` 覆盖。
+ */
+async function kbExtractSourceFile(file: File): Promise<{ title: string; body: string; warnings: string[]; chars: number }> {
+  const csrfToken = cookieValue("gj_csrf");
+  const response = await fetch("/api/kb/training/extract", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-file-name": encodeURIComponent(file.name),
+      "x-file-type": file.type || "application/octet-stream",
+      ...(csrfToken ? { "x-csrf-token": csrfToken } : {})
+    },
+    body: file
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ message: "抽取失败" }));
+    throw new Error(body.message || "抽取失败");
+  }
+  return response.json() as Promise<{ title: string; body: string; warnings: string[]; chars: number }>;
+}
+
+/** 本地 txt / md 读取（可多选）：一次训练就能带上好几份资料，不必一份份点。 */
+async function readKbLocalFiles(dropped?: File[]) {
+  const input = qs<HTMLInputElement>("#kbSourceFile");
+  const files = dropped ?? Array.from(input?.files ?? []);
+  if (!files.length) return;
+  const room = Math.max(0, 50 - kbTrainingState.staged.length);
+  const accepted = files.slice(0, room);
+  const clipped: string[] = [];
+  const extractNotes: string[] = [];
+  let added = 0;
+  let unsupported = 0;
+  for (const file of accepted) {
+    const kind = kbSourceFileKind(file.name);
+    if (!kind) { unsupported += 1; continue; }
+    try {
+      if (kind === "text") {
+        const text = await file.text();
+        const body = text.slice(0, 200_000);
+        if (body.length < text.length) clipped.push(file.name);
+        kbTrainingState.staged.push({
+          title: file.name.replace(/\.[^.]+$/u, "").slice(0, 200) || file.name.slice(0, 200),
+          body,
+          note: ""
+        });
+      } else {
+        // 扫描件要在后端逐页做本机 OCR（约 0.4 秒/页，第一次还要编译识别组件），
+        // 提示里说清楚"可能要等"，否则用户会以为卡住又点一次。
+        setKbSourceHint(`正在抽取《${file.name}》的正文…扫描件要逐页 OCR，可能需要十几秒到一分钟，请不要关闭页面`);
+        const extracted = await kbExtractSourceFile(file);
+        // 单份资料上限 20 万字符（与文本路径一致）：后端抽出来的是整本书，
+        // 一次训练也跑不完，截断并如实说明比悄悄塞进 200 段更有用。
+        const body = extracted.body.slice(0, 200_000);
+        if (body.length < extracted.body.length) clipped.push(file.name);
+        kbTrainingState.staged.push({ title: extracted.title.slice(0, 200), body, note: "" });
+        if (extracted.warnings.length) extractNotes.push(`《${file.name}》${extracted.warnings.join("，")}`);
+      }
+      added += 1;
+    } catch (error) {
+      toast(`读取 ${file.name} 失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  }
+  // 拖拽进来的文件不经过 input，清空它的值没有意义；反过来点选后必须清，
+  // 否则下一次选同一批文件不触发 change。
+  if (!dropped && input) input.value = "";
+  renderKbStaged();
+  const skipped = files.length - accepted.length;
+  const notes = [`已读入 ${added} 份`];
+  if (clipped.length) notes.push(`${clipped.length} 份超过单份 20 万字符上限已截断`);
+  if (skipped > 0) notes.push(`${skipped} 份超出单批 50 份上限未读入`);
+  if (unsupported) notes.push(`${unsupported} 份格式不支持（只收 PDF / Word / txt / md / csv）`);
+  notes.push(...extractNotes);
+  notes.push(kbTrainingState.staged.length > 1
+    ? "多份资料各自用文件名作出处；要给某一份挂文件中心资料，请单独训那一份"
+    : "可用上方「关联文件中心资料」给这份资料挂出处");
+  notes.push("确认无误后点「开始训练」");
+  setKbSourceHint(notes.join("；"), clipped.length > 0 || skipped > 0 || unsupported > 0);
+}
+
+/** 进入行内编辑：编辑期间暂停自动刷新，否则重绘会打断正在打字的人。 */
+function startKbEdit(id: string) {
+  const candidate = kbTrainingState.candidates.find((item) => item.id === id);
+  if (!candidate || candidate.status === "published") return;
+  kbTrainingState.editId = id;
+  kbTrainingState.editQuestion = candidate.question || "";
+  kbTrainingState.editAnswer = candidate.answer;
+  stopKbTrainingPoll();
+  renderKbCandidateList();
+  qs<HTMLTextAreaElement>('#kbCandidateList textarea[data-kb-edit="answer"]')?.focus();
+}
+
+function cancelKbEdit() {
+  kbTrainingState.editId = "";
+  kbTrainingState.editQuestion = "";
+  kbTrainingState.editAnswer = "";
+  renderKbCandidateList();
+  scheduleKbTrainingPoll();
+}
+
+/** 「保存并确认」：编辑与确认是同一个动作 —— 改了不确认等于没改，确认了不带新内容等于白改。 */
+async function confirmKbEdit(id: string) {
+  const answer = kbTrainingState.editAnswer.trim();
+  if (!answer) {
+    toast("答案不能为空：空答案进库只会污染提示词", "error");
+    return;
+  }
+  await reviewKbCandidates("confirm", [id], [{ id, question: kbTrainingState.editQuestion.trim(), answer }]);
+}
+
+async function reviewKbCandidates(
+  action: "confirm" | "drop",
+  ids?: string[],
+  edits?: Array<{ id: string; question?: string; answer?: string }>
+) {
+  const target = ids?.length ? ids : [...kbTrainingState.selected];
+  if (!target.length) {
+    toast("先勾选要处理的候选", "error");
+    return;
+  }
+  try {
+    // 后端单次上限 20 条。**分批提交**而不是 slice(0,20)：静默丢掉用户选中的后半截，
+    // 界面却提示「已处理 N 条」，是最难发现的一类不诚实。
+    const chunks: string[][] = [];
+    for (let index = 0; index < target.length; index += 20) chunks.push(target.slice(index, index + 20));
+    for (const chunk of chunks) {
+      await api("/api/kb/training/candidates/review", {
+        method: "POST",
+        body: JSON.stringify({ ids: chunk, action, edits: edits?.length ? edits : undefined })
+      });
+    }
+    // 「确认」保留勾选并把筛选切到「已确认」：主流程是「勾选 → 确认 → 发布」，
+    // 确认后那几条会从「待确认」里消失，切过去才能看到它们仍勾着、直接发布。
+    // 「丢弃」必须清掉勾选 —— 已丢弃的候选留在勾选里只会让发布做无效事。
+    if (action === "drop") {
+      target.forEach((id) => kbTrainingState.selected.delete(id));
+    } else {
+      const filter = qs<HTMLSelectElement>("#kbCandidateStatusFilter");
+      if (filter) filter.value = "approved";
+    }
+    if (edits?.length) {
+      kbTrainingState.editId = "";
+      kbTrainingState.editQuestion = "";
+      kbTrainingState.editAnswer = "";
+    }
+    toast(action === "confirm"
+      ? (edits?.length ? `已保存修改并确认 ${target.length} 条，可直接发布` : `已确认 ${target.length} 条，可直接发布`)
+      : `已丢弃 ${target.length} 条`);
+    await refreshKbRunDetail();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "候选处理失败", "error");
+  }
+}
+
+/**
+ * 一键确认本批里「高置信 + 未确认」的候选。
+ *
+ * 为什么需要它：模型给出的 0.9 以上问答往往占大半，逐条点「确认」是纯体力活；
+ * 而体力活会让人干脆跳过确认、直接发布 —— 闸门就废了。给人一条快路，
+ * 前提是这一步仍然**只确认、不发布**（发布依旧要人再点一次）。
+ */
+async function confirmKbHighConfidence(button: HTMLButtonElement | null) {
+  const target = kbTrainingState.candidates
+    .filter((candidate) => candidate.status === "pending" && candidate.confidence >= 0.9)
+    .map((candidate) => candidate.id);
+  if (!target.length) {
+    toast("本批没有置信度 ≥0.90 的待确认候选", "error");
+    return;
+  }
+  if (button?.disabled) return;
+  if (button) setButtonPending(button, true, "确认高置信", "确认中…");
+  try {
+    await reviewKbCandidates("confirm", target);
+  } finally {
+    if (button) setButtonPending(button, false, "确认高置信", "确认中…");
+  }
+}
+
+async function publishKbCandidates(button: HTMLButtonElement | null, ids?: string[]) {
+  const target = ids?.length ? ids : [...kbTrainingState.selected];
+  if (!target.length) {
+    toast("先勾选要发布的候选", "error");
+    return;
+  }
+  // 待确认的不能发布：后端也会拒，但在这里拦住能说清「是哪几条、下一步做什么」，
+  // 而不是让用户点完看到一条 400。
+  const unconfirmed = kbTrainingState.candidates.filter(
+    (candidate) => target.includes(candidate.id) && candidate.status === "pending"
+  );
+  if (unconfirmed.length) {
+    toast(`有 ${unconfirmed.length} 条还没确认：先在「待确认」里点确认，再发布`, "error");
+    return;
+  }
+  if (button?.disabled) return;
+  if (button) setButtonPending(button, true, "发布到训练库", "发布中…");
+  try {
+    const total: KbPublishOutcome = { published: [], existing: [], failed: [] };
+    for (let index = 0; index < target.length; index += 20) {
+      const chunk = target.slice(index, index + 20);
+      const result = await api<KbPublishOutcome>("/api/kb/training/candidates/publish", {
+        method: "POST",
+        body: JSON.stringify({ ids: chunk })
+      });
+      total.published.push(...(result.published || []));
+      total.existing.push(...(result.existing || []));
+      total.failed.push(...(result.failed || []));
+    }
+    const failed = total.failed || [];
+    const ok = (total.published?.length || 0) + (total.existing?.length || 0);
+    target.forEach((id) => kbTrainingState.selected.delete(id));
+    if (failed.length) {
+      toast(`发布 ${ok} 条，失败 ${failed.length} 条：${failed[0].reason}`, "error");
+    } else {
+      toast(`已发布 ${ok} 条到训练库（其中 ${total.existing?.length || 0} 条原本就在）`);
+    }
+    // 发布改变了知识库的「已发布条数」：不刷新的话列表上那个数字会一直停在旧值，
+    // 用户会以为发了个寂寞。
+    void loadKbKnowledgeBases({ silent: true });
+    await refreshKbRunDetail();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发布失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "发布到训练库", "发布中…");
+  }
+}
+
+async function revokeKbCandidate(id: string) {
+  try {
+    await api(`/api/kb/training/candidates/${encodeURIComponent(id)}/revoke`, { method: "POST", body: JSON.stringify({}) });
+    toast("已从训练库撤回（运行端归档留痕，不硬删）");
+    kbTrainingState.selected.delete(id);
+    await refreshKbRunDetail();
+    // 知识库详情弹窗开着时同步刷新它：否则刚撤回的那条还挂在列表里。
+    if (kbEntriesState.kbId) void loadKbKnowledgeEntries(kbEntriesState.kbId, { silent: true });
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "撤回失败", "error");
+  }
+}
+
+/**
+ * 停止运行中的批次。取消是**请求**：后端在当前这批模型调用结束后才停，
+ * 所以界面不能立刻把状态改成「已取消」—— 先切按钮文案，等轮询回报终态。
+ */
+async function cancelKbRun(id: string, button: HTMLButtonElement | null) {
+  if (button?.disabled) return;
+  if (button) setButtonPending(button, true, "停止这批", "正在停止…");
+  kbTrainingState.cancelPending.add(id);
+  try {
+    await api(`/api/kb/training/runs/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({}) });
+    toast("已发出停止请求：当前这批处理完就停，已入池的候选保留");
+    await refreshKbRunDetail();
+    // 不在这里移除：批次此刻仍是 running，标记要留到状态真的变了（见 loadKbTraining）。
+    renderKbRunList();
+  } catch (error) {
+    kbTrainingState.cancelPending.delete(id);
+    toast(error instanceof Error ? error.message : "取消失败", "error");
+    renderKbRunList();
+  } finally {
+    if (button) setButtonPending(button, false, "停止这批", "正在停止…");
+  }
+}
+
+/**
+ * 失败 / 取消之后把当时提交的资料填回左侧表单。
+ *
+ * 为什么不是「一键重跑」：同一份资料重跑会再花一次模型调用；先让人看见原文、
+ * 顺手改掉那几段写得不清楚的地方，再点开始，才是这件事的真实用法。
+ * 资料来源是批次里的 `sourcesJson` 快照 —— 提交时前后端都保留了正文，不必让用户重新选文件。
+ */
+function restoreKbRunSources(id: string) {
+  const run = kbTrainingState.runs.find((item) => item.id === id);
+  if (!run?.sourcesJson) {
+    toast("这批没有留下资料快照，请重新选择文件", "error");
+    return;
+  }
+  let items: Array<{ title?: string; body?: string; note?: string }> = [];
+  try {
+    const spec = JSON.parse(run.sourcesJson) as { text?: { items?: Array<{ title?: string; body?: string; note?: string }> } };
+    items = spec?.text?.items ?? [];
+  } catch {
+    items = [];
+  }
+  const usable = items
+    .map((item) => ({
+      title: String(item.title || "未命名资料").slice(0, 200),
+      body: String(item.body || ""),
+      note: String(item.note || "").slice(0, 200)
+    }))
+    .filter((item) => item.body.trim());
+  if (!usable.length) {
+    toast("这批没有可回填的正文（可能是会话源或已被截断）", "error");
+    return;
+  }
+  kbTrainingState.staged = usable;
+  renderKbStaged();
+  // 只有一份时把它填进主表单，用户能直接改标题/关联资料；多份则留在暂存清单里各自成条。
+  if (usable.length === 1) {
+    const titleInput = qs<HTMLInputElement>("#kbSourceTitle");
+    if (titleInput) titleInput.value = usable[0].title;
+  }
+  qs<HTMLElement>("#kbUploadButton")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  setKbSourceHint(`已把 ${usable.length} 份资料填回上方（共 ${usable.reduce((sum, item) => sum + item.body.length, 0).toLocaleString()} 字符），确认无误后点「开始训练」`);
+  toast("资料已填回，可直接重新训练");
+}
+
+// ---------------------------------------------------------------------------
+// 知识库详情（点卡片进入）：已发布条目 + 单条撤回
+// ---------------------------------------------------------------------------
+
+const kbEntriesState = {
+  kbId: "",
+  name: "",
+  entries: [] as KbTrainingCandidate[],
+  query: "",
+  loading: false
+};
+
+function kbEntriesRowHtml(entry: KbTrainingCandidate) {
+  const source = entry.sourceRef
+    ? [entry.sourceRef.title ? `《${entry.sourceRef.title}》` : "", entry.sourceRef.anchor || ""].filter(Boolean).join(" ")
+    : "";
+  return `<article class="kb-entry" data-kb-entry="${escapeHtml(entry.id)}">
+    <div class="kb-entry-top">
+      ${kbKindTag(entry)}
+      <span class="kb-conf">置信 ${entry.confidence.toFixed(2)}</span>
+      ${source ? `<span class="kb-entry-source">${escapeHtml(source)}</span>` : ""}
+    </div>
+    ${entry.question ? `<div class="kb-entry-q">${escapeHtml(entry.question)}</div>` : ""}
+    <div class="kb-entry-a">${escapeHtml(entry.answer)}</div>
+    <div class="kb-entry-foot">
+      <span>${entry.reviewedAt ? `确认于 ${escapeHtml(formatTime(entry.reviewedAt))}` : "已发布"}</span>
+      <button type="button" class="kb-entry-revoke" data-kb-entry-revoke="${escapeHtml(entry.id)}">从训练库撤回</button>
+    </div>
+  </article>`;
+}
+
+function renderKbEntriesModal() {
+  const host = qs<HTMLElement>("#kbEntriesList");
+  if (!host) return;
+  const title = qs<HTMLElement>("#kbEntriesTitle");
+  if (title) title.textContent = kbEntriesState.name || "知识库";
+  const query = kbEntriesState.query.trim().toLowerCase();
+  const items = query
+    ? kbEntriesState.entries.filter((entry) => `${entry.question} ${entry.answer}`.toLowerCase().includes(query))
+    : kbEntriesState.entries;
+  const summary = qs<HTMLElement>("#kbEntriesSummary");
+  if (summary) summary.textContent = kbEntriesState.loading
+    ? "正在读取…"
+    : query
+      ? `匹配 ${items.length} / 共 ${kbEntriesState.entries.length} 条`
+      : `共 ${kbEntriesState.entries.length} 条已发布语料`;
+  if (kbEntriesState.loading) {
+    host.innerHTML = `<div class="kb-empty">正在读取这个知识库的条目…</div>`;
+    return;
+  }
+  host.innerHTML = items.length
+    ? items.map(kbEntriesRowHtml).join("")
+    : `<div class="kb-empty">${query ? "没有匹配的条目" : "这个库还没有已发布的条目：先训练、确认，再发布"}</div>`;
+}
+
+async function loadKbKnowledgeEntries(kbId: string, options: { silent?: boolean } = {}) {
+  kbEntriesState.kbId = kbId;
+  kbEntriesState.loading = true;
+  renderKbEntriesModal();
+  try {
+    const result = await api<{ knowledgeBase: KbKnowledgeBaseView; entries: KbTrainingCandidate[] }>(
+      `/api/kb/training/knowledge-bases/${encodeURIComponent(kbId)}/entries`
+    );
+    kbEntriesState.name = result.knowledgeBase?.name || "";
+    kbEntriesState.entries = result.entries || [];
+  } catch (error) {
+    if (!options.silent) toast(error instanceof Error ? error.message : "知识库条目读取失败", "error");
+  } finally {
+    kbEntriesState.loading = false;
+    renderKbEntriesModal();
+  }
+}
+
+function openKbKnowledgeEntries(kbId: string) {
+  const modal = qs<HTMLElement>("#kbEntriesModal");
+  if (!modal) return;
+  const item = kbKnowledgeState.items.find((entry) => entry.id === kbId);
+  kbEntriesState.kbId = kbId;
+  kbEntriesState.name = item?.name || "知识库";
+  kbEntriesState.entries = [];
+  kbEntriesState.query = "";
+  const search = qs<HTMLInputElement>("#kbEntriesSearch");
+  if (search) search.value = "";
+  renderKbEntriesModal();
+  modal.classList.add("active");
+  void loadKbKnowledgeEntries(kbId);
+}
+
+async function runKbProbe(button: HTMLButtonElement | null) {
+  const question = qs<HTMLInputElement>("#kbProbeInput")?.value.trim() || "";
+  if (!question) {
+    toast("先输入一句客户问法", "error");
+    qs<HTMLInputElement>("#kbProbeInput")?.focus();
+    return;
+  }
+  if (button?.disabled) return;
+  if (button) setButtonPending(button, true, "试问", "检索中…");
+  kbTrainingState.probeQuestion = question;
+  try {
+    kbTrainingState.probe = await api<KbProbeResult>("/api/kb/training/probe", {
+      method: "POST",
+      body: JSON.stringify({ body: question })
+    });
+  } catch (error) {
+    kbTrainingState.probe = { message: error instanceof Error ? error.message : "试问失败" };
+    toast(kbTrainingState.probe.message || "试问失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "试问", "检索中…");
+    renderKbProbe();
+  }
+}
+
+function kbTrainingKeyHandler(event: KeyboardEvent) {
+  if (!qs<HTMLElement>("#kb-training")?.classList.contains("active")) return;
+  // 试问弹窗开着时：Esc 收起，且 J/K 等候选快捷键不生效（焦点语义属于弹窗）。
+  // 这条要放在「INPUT 早退」之前 —— 弹窗里焦点常在输入框上，早退后就轮不到这里了。
+  const probeModal = qs<HTMLElement>("#kbProbeModal");
+  if (probeModal?.classList.contains("active")) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      probeModal.classList.remove("active");
+    }
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+  if (event.key === "Escape" && kbTrainingState.editId) {
+    event.preventDefault();
+    cancelKbEdit();
+    return;
+  }
+  const rows = kbVisibleCandidates();
+  if (!rows.length) return;
+  const key = event.key.toLowerCase();
+  if (key === "j" || key === "k") {
+    event.preventDefault();
+    const base = kbTrainingState.focusIndex < 0 ? 0 : kbTrainingState.focusIndex + (key === "j" ? 1 : -1);
+    focusKbCandidate(Math.max(0, Math.min(rows.length - 1, base)));
+    return;
+  }
+  const focused = kbTrainingState.focusIndex >= 0 ? rows[kbTrainingState.focusIndex] : undefined;
+  if (event.key === " ") {
+    if (!focused) return;
+    event.preventDefault();
+    toggleKbCandidate(focused.id);
+    return;
+  }
+  if (event.key === "Enter") {
+    if (!focused) return;
+    event.preventDefault();
+    void reviewKbCandidates("confirm", [focused.id]);
+    return;
+  }
+  if (key === "d") {
+    if (!focused) return;
+    event.preventDefault();
+    void reviewKbCandidates("drop", [focused.id]);
+    return;
+  }
+  if (key === "e") {
+    if (!focused || focused.status === "published") return;
+    event.preventDefault();
+    startKbEdit(focused.id);
+  }
+}
+
+function bindKbTrainingEvents() {
+  const refresh = qs<HTMLButtonElement>("#kbRefreshButton");
+  if (refresh) refresh.onclick = async () => {
+    if (refresh.disabled) return;
+    setButtonPending(refresh, true, "刷新", "刷新中");
+    try {
+      await loadKbTraining();
+    } finally {
+      setButtonPending(refresh, false, "刷新", "刷新中");
+    }
+  };
+
+  const start = qs<HTMLButtonElement>("#kbStartRunButton");
+  if (start) start.onclick = () => void startKbTrainingRun(start);
+
+  // 上传区（.kb-dropzone）就是文件入口：点击打开系统多选窗口、Enter/空格可达、
+  // 拖拽整批导入 —— 三条路共用同一套读入管线（readKbLocalFiles）。
+  const upload = qs<HTMLElement>("#kbUploadButton");
+  const fileInput = qs<HTMLInputElement>("#kbSourceFile");
+  if (upload) {
+    upload.onclick = () => fileInput?.click();
+    upload.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      fileInput?.click();
+    };
+    upload.ondragover = (event) => {
+      event.preventDefault();
+      upload.classList.add("is-drag");
+    };
+    upload.ondragleave = () => upload.classList.remove("is-drag");
+    upload.ondrop = (event) => {
+      event.preventDefault();
+      upload.classList.remove("is-drag");
+      const all = Array.from(event.dataTransfer?.files ?? []);
+      if (!all.length) return;
+      const ok = all.filter((item) => kbSourceFileKind(item.name) !== "");
+      const skipped = all.length - ok.length;
+      if (skipped > 0) toast(`${skipped} 个文件格式不支持，已跳过：拖入只收 PDF / Word / txt / md / csv`, "error");
+      if (ok.length) void readKbLocalFiles(ok);
+    };
+  }
+  if (fileInput) fileInput.onchange = () => void readKbLocalFiles();
+
+  const stagedList = qs<HTMLElement>("#kbStagedList");
+  // 来源描述只存草稿、**不重绘**：重绘会换掉 input 本身，打字的人光标就没了。
+  if (stagedList) stagedList.oninput = (event) => {
+    const input = event.target as HTMLInputElement | null;
+    if (!input) return;
+    const raw = input.dataset?.kbStagedNote;
+    if (raw === undefined) return;
+    const index = Number(raw);
+    if (Number.isInteger(index) && index >= 0 && kbTrainingState.staged[index]) {
+      kbTrainingState.staged[index].note = input.value.slice(0, 200);
+    }
+  };
+  if (stagedList) stagedList.onclick = (event) => {
+    const trigger = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-kb-staged]");
+    const raw = trigger?.dataset?.kbStaged;
+    if (raw === undefined) return;
+    if (raw === "clear") kbTrainingState.staged = [];
+    else {
+      const index = Number(raw);
+      if (Number.isInteger(index) && index >= 0) kbTrainingState.staged.splice(index, 1);
+    }
+    renderKbStaged();
+    setKbSourceHint(kbTrainingState.staged.length ? `已暂存 ${kbTrainingState.staged.length} 份，点「开始训练」提交` : "");
+  };
+
+  const runList = qs<HTMLElement>("#kbRunList");
+  if (runList) runList.onclick = (event) => {
+    const target = event.target as HTMLElement | null;
+    const card = target?.closest<HTMLElement>("[data-kb-run]");
+    const id = card?.dataset.kbRun;
+    // 卡片级动作先于「选中这批」处理：否则点「停止」会顺带切批次，用户看到的是另一批的进度。
+    const cancel = target?.closest<HTMLButtonElement>("[data-kb-run-cancel]");
+    if (cancel) {
+      event.stopPropagation();
+      void cancelKbRun(cancel.dataset.kbRunCancel || "", cancel);
+      return;
+    }
+    const retry = target?.closest<HTMLButtonElement>("[data-kb-run-retry]");
+    if (retry) {
+      event.stopPropagation();
+      if (id) restoreKbRunSources(retry.dataset.kbRunRetry || id);
+      return;
+    }
+    if (!id || id === kbTrainingState.activeRunId) return;
+    kbTrainingState.activeRunId = id;
+    kbTrainingState.selected.clear();
+    kbTrainingState.touched.clear();
+    kbTrainingState.focusIndex = -1;
+    kbTrainingState.editId = "";
+    kbTrainingState.editQuestion = "";
+    kbTrainingState.editAnswer = "";
+    renderKbRunList();
+    void refreshKbRunDetail();
+  };
+
+  // 知识库面板：勾选即启用（**没有保存按钮** —— 多一步就会有人勾完不点保存，
+  // 然后以为启用了）、行内改名、公开/私用切换。
+  // 用事件委托挂在容器上：面板每轮重绘都换掉 innerHTML，逐个 addEventListener 会随重绘一起丢。
+  const knowledgeList = qs<HTMLElement>("#kbKnowledgeList");
+  if (knowledgeList) {
+    knowledgeList.onchange = (event) => {
+      const input = event.target as HTMLInputElement | null;
+      const id = input?.dataset?.kbKbEnable;
+      if (id) void toggleKbKnowledgeEnabled(id, Boolean(input?.checked));
+    };
+    // 改名草稿只存内存、**不重绘**（与候选编辑框同理）：一重绘就把光标和正在打的字冲掉。
+    knowledgeList.oninput = (event) => {
+      const input = event.target as HTMLInputElement | null;
+      if (input?.dataset?.kbKbNameInput === undefined) return;
+      kbKnowledgeState.renameValue = input.value;
+    };
+    knowledgeList.onkeydown = (event) => {
+      const input = event.target as HTMLInputElement | null;
+      if (input?.dataset?.kbKbNameInput === undefined) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void confirmKbKnowledgeRename();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelKbKnowledgeRename();
+      }
+    };
+    knowledgeList.onclick = (event) => {
+      const target = event.target as HTMLElement | null;
+      // 复选框自己会派发 change；这里再处理一次就是同一动作提交两遍（两次 PUT 互相覆盖）。
+      if (target?.closest("input[data-kb-kb-enable]")) return;
+      const rename = target?.closest<HTMLElement>("[data-kb-kb-rename]")?.dataset.kbKbRename;
+      if (rename) {
+        startKbKnowledgeRename(rename);
+        return;
+      }
+      const visibility = target?.closest<HTMLElement>("[data-kb-kb-visibility]")?.dataset.kbKbVisibility;
+      if (visibility) {
+        void toggleKbKnowledgeVisibility(visibility);
+        return;
+      }
+      const open = target?.closest<HTMLElement>("[data-kb-kb-open]")?.dataset.kbKbOpen;
+      if (open) {
+        openKbKnowledgeEntries(open);
+        return;
+      }
+      const remove = target?.closest<HTMLElement>("[data-kb-kb-delete]")?.dataset.kbKbDelete;
+      if (remove) {
+        void deleteKbKnowledgeBase(remove);
+        return;
+      }
+      if (target?.closest("[data-kb-kb-name-save]")) void confirmKbKnowledgeRename();
+      else if (target?.closest("[data-kb-kb-name-cancel]")) cancelKbKnowledgeRename();
+    };
+  }
+
+  // 顶部搜索框：只过滤卡片展示（含「归入哪个库」下拉不受影响 —— 提交口径不能被搜索框收窄）。
+  const knowledgeSearch = qs<HTMLInputElement>("#kbKnowledgeSearch");
+  if (knowledgeSearch) knowledgeSearch.oninput = () => {
+    kbKnowledgeState.query = knowledgeSearch.value.slice(0, 200);
+    renderKbKnowledgePanel();
+  };
+
+  ["#kbCandidateStatusFilter", "#kbCandidateKindFilter", "#kbCandidateConfidenceFilter", "#kbCandidateGapOnly"].forEach((selector) => {
+    qs<HTMLElement>(selector)?.addEventListener("change", () => {
+      kbTrainingState.focusIndex = -1;
+      renderKbCandidateList();
+    });
+  });
+
+  const list = qs<HTMLElement>("#kbCandidateList");
+  if (list) {
+    list.onchange = (event) => {
+      const input = event.target as HTMLInputElement | null;
+      const id = input?.dataset?.kbPick;
+      if (id) toggleKbCandidate(id, Boolean(input?.checked));
+    };
+    // 编辑框只更新内存草稿、**不重绘**：一重绘就把光标和正在打的字冲掉。
+    list.oninput = (event) => {
+      const field = (event.target as HTMLTextAreaElement | null)?.dataset?.kbEdit;
+      if (field === "question") kbTrainingState.editQuestion = (event.target as HTMLTextAreaElement).value;
+      else if (field === "answer") kbTrainingState.editAnswer = (event.target as HTMLTextAreaElement).value;
+    };
+    list.onclick = (event) => {
+      const target = event.target as HTMLElement | null;
+      // 出处链到文件中心：候选的出处要能一键回到资料本身（否则「有出处」只是台账上的一句话）。
+      const assetLink = target?.closest<HTMLElement>("[data-kb-asset]");
+      if (assetLink) {
+        event.preventDefault();
+        event.stopPropagation();
+        const assetId = assetLink.dataset.kbAsset || "";
+        const asset = kbTrainingState.assets.find((item) => item.id === assetId);
+        if (asset) void openKnowledgeAsset(asset);
+        else toast("这条资料不在当前可见范围内（可能已删除或不属于你的团队）", "error");
+        return;
+      }
+      const button = target?.closest<HTMLButtonElement>("button[data-kb-act]");
+      if (button) {
+        event.stopPropagation();
+        const id = button.dataset.kbId || "";
+        const action = button.dataset.kbAct || "";
+        if (action === "confirm") void reviewKbCandidates("confirm", [id]);
+        else if (action === "drop") void reviewKbCandidates("drop", [id]);
+        else if (action === "revoke") void revokeKbCandidate(id);
+        else if (action === "publish") void publishKbCandidates(button, [id]);
+        else if (action === "edit-start") startKbEdit(id);
+        else if (action === "edit-cancel") cancelKbEdit();
+        else if (action === "edit-confirm") void confirmKbEdit(id);
+        return;
+      }
+      const row = target?.closest<HTMLElement>("[data-kb-candidate]");
+      if (row) focusKbCandidate(Number(row.dataset.kbIndex || 0));
+    };
+  }
+
+  const selectVisibleButton = qs<HTMLButtonElement>("#kbSelectVisibleButton");
+  if (selectVisibleButton) selectVisibleButton.onclick = () => toggleKbVisibleSelection();
+  const reviewButton = qs<HTMLButtonElement>("#kbReviewSelectedButton");
+  if (reviewButton) reviewButton.onclick = () => void reviewKbCandidates("confirm");
+  const dropButton = qs<HTMLButtonElement>("#kbDropSelectedButton");
+  if (dropButton) dropButton.onclick = () => void reviewKbCandidates("drop");
+  const publishButton = qs<HTMLButtonElement>("#kbPublishButton");
+  if (publishButton) publishButton.onclick = () => void publishKbCandidates(publishButton);
+  const highConfidenceButton = qs<HTMLButtonElement>("#kbHighConfidenceButton");
+  if (highConfidenceButton) highConfidenceButton.onclick = () => void confirmKbHighConfidence(highConfidenceButton);
+
+  // 知识库详情弹窗：条目列表、搜索、单条撤回。与试问弹窗同一套 .modal-backdrop 语言。
+  const entriesModal = qs<HTMLElement>("#kbEntriesModal");
+  const entriesClose = qs<HTMLButtonElement>("#kbEntriesClose");
+  if (entriesModal && entriesClose) entriesClose.onclick = () => entriesModal.classList.remove("active");
+  if (entriesModal) entriesModal.onclick = (event) => {
+    if (event.target === entriesModal) entriesModal.classList.remove("active");
+  };
+  const entriesSearch = qs<HTMLInputElement>("#kbEntriesSearch");
+  if (entriesSearch) entriesSearch.oninput = () => {
+    kbEntriesState.query = entriesSearch.value.slice(0, 120);
+    renderKbEntriesModal();
+  };
+  const entriesList = qs<HTMLElement>("#kbEntriesList");
+  if (entriesList) entriesList.onclick = (event) => {
+    const id = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-kb-entry-revoke]")?.dataset.kbEntryRevoke;
+    if (id) void revokeKbCandidate(id);
+  };
+
+  const probeInput = qs<HTMLInputElement>("#kbProbeInput");
+  if (probeInput) probeInput.onkeydown = (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void runKbProbe(qs<HTMLButtonElement>("#kbProbeButton"));
+  };
+  const probeButton = qs<HTMLButtonElement>("#kbProbeButton");
+  if (probeButton) probeButton.onclick = () => void runKbProbe(probeButton);
+
+  // 试问验证收进弹窗：入口在视图头部（「问一句试试」），打开即聚焦输入框，
+  // 点遮罩或关闭键收起 —— 与全局其它弹窗同一套 .modal-backdrop.active 语言。
+  const kbProbeModal = qs<HTMLElement>("#kbProbeModal");
+  const kbProbeOpenButton = qs<HTMLButtonElement>("#kbProbeOpenButton");
+  if (kbProbeModal && kbProbeOpenButton) kbProbeOpenButton.onclick = () => {
+    kbProbeModal.classList.add("active");
+    qs<HTMLInputElement>("#kbProbeInput")?.focus();
+  };
+  const kbProbeModalClose = qs<HTMLButtonElement>("#kbProbeModalClose");
+  if (kbProbeModal && kbProbeModalClose) kbProbeModalClose.onclick = () => kbProbeModal.classList.remove("active");
+  if (kbProbeModal) kbProbeModal.onclick = (event) => {
+    if (event.target === kbProbeModal) kbProbeModal.classList.remove("active");
+  };
+
+  if (!kbTrainingKeysBound) {
+    kbTrainingKeysBound = true;
+    document.addEventListener("keydown", kbTrainingKeyHandler);
   }
 }
 
@@ -42405,6 +45209,41 @@ function installEvents() {
     state.closedDealPage += 1;
     void refreshClosedDeals();
   });
+  qs<HTMLButtonElement>("#pipelineArchiveEntry")?.addEventListener("click", () => activateNavView("deal-archive"));
+  qs<HTMLButtonElement>("#dealArchiveBackButton")?.addEventListener("click", () => activateNavView("pipeline"));
+  qs<HTMLInputElement>("#dealArchiveSearch")?.addEventListener("change", (event) => {
+    state.dealArchiveKeyword = (event.currentTarget as HTMLInputElement).value.trim();
+    state.dealArchivePage = 1;
+    void refreshDealArchive();
+  });
+  qs<HTMLSelectElement>("#dealArchiveStage")?.addEventListener("change", (event) => {
+    state.dealArchiveStage = (event.currentTarget as HTMLSelectElement).value;
+    state.dealArchivePage = 1;
+    void refreshDealArchive();
+  });
+  qs<HTMLInputElement>("#dealArchiveMonth")?.addEventListener("change", (event) => {
+    state.dealArchiveMonth = (event.currentTarget as HTMLInputElement).value;
+    state.dealArchivePage = 1;
+    void refreshDealArchive();
+  });
+  qs<HTMLButtonElement>("#dealArchiveReset")?.addEventListener("click", () => {
+    state.dealArchiveKeyword = "";
+    state.dealArchiveStage = "all";
+    state.dealArchiveMonth = "";
+    state.dealArchivePage = 1;
+    setFieldValue("#dealArchiveSearch", "");
+    setFieldValue("#dealArchiveStage", "all");
+    setFieldValue("#dealArchiveMonth", "");
+    void refreshDealArchive();
+  });
+  qs<HTMLButtonElement>("#dealArchivePrev")?.addEventListener("click", () => {
+    state.dealArchivePage = Math.max(1, state.dealArchivePage - 1);
+    void refreshDealArchive();
+  });
+  qs<HTMLButtonElement>("#dealArchiveNext")?.addEventListener("click", () => {
+    state.dealArchivePage += 1;
+    void refreshDealArchive();
+  });
   qs<HTMLButtonElement>("#reminders .page-head .btn.primary")?.addEventListener("click", () => openReminderModal());
   qs<HTMLButtonElement>("#chooseCustomerImportButton")?.addEventListener("click", () => qs<HTMLInputElement>("#customerImportInput")?.click());
   qs<HTMLInputElement>("#customerImportInput")?.addEventListener("change", (event) => {
@@ -42473,6 +45312,7 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#knowledgeAddButton")?.addEventListener("click", () => openKnowledgeModal());
   qs<HTMLButtonElement>("#knowledgeRefreshButton")?.addEventListener("click", () => void refreshKnowledgeAssets(true));
+  bindKbTrainingEvents();
   qs<HTMLInputElement>("#knowledgeSearchInput")?.addEventListener("input", (event) => {
     state.knowledgeSearch = (event.currentTarget as HTMLInputElement).value;
     renderKnowledge();
@@ -44592,7 +47432,7 @@ async function renderEmailReturnFlow() {
   box.innerHTML = `
     <div class="deck-top">
       <div class="deck-crumb">Outbound Intelligence · <b>回流</b></div>
-      <div class="deck-live">● 收信监听 <b>${escapeHtml(syncText)}</b></div>
+      <div class="deck-live">● 收信监听 <b>${escapeHtml(syncState === "ok" ? "已同步" : syncState === "error" ? "异常" : syncState === "pending" ? "待首次同步" : "未开启")}</b></div>
     </div>
     <header class="deck-hero">
       <div>
@@ -44768,6 +47608,7 @@ function activateNavView(view: string, after?: () => void) {
   }
   const activeView = qs<HTMLElement>(".view.active")?.id;
   if (activeView === "global-map") stopGmTimeline();
+  if (activeView === "kb-training" && view !== "kb-training") stopKbTrainingPoll();
   if (activeView === "container-load") disposeContainerLoad();
   if (["lead-finder", "lead-task-detail"].includes(activeView || "") && !["lead-finder", "lead-task-detail"].includes(view)) {
     stopLeadTaskEventStream(false);
@@ -44777,6 +47618,10 @@ function activateNavView(view: string, after?: () => void) {
   if (view !== "leads") closeLeadDrawer();
   if (view !== "customers") closeCustomerDrawer();
   if (view !== "peers") closePeerDrawer();
+  // 联系条同理：它代表「你刚刚点过的那一行」，换个页面就等于没点过 —— 回来时不许自己冒出来。
+  if (view !== "customers") hideContactDock("customers");
+  if (view !== "leads") hideContactDock("leads");
+  if (view !== "customer-pool") hideContactDock("customer-pool");
   if (view !== "prospect-list" && prospectMobileDetailOpen) {
     prospectMobileDetailOpen = false;
     document.body.classList.remove("prospect-mobile-detail-open");
@@ -44848,6 +47693,9 @@ function activateNavView(view: string, after?: () => void) {
     renderCustomerPool();
     void reloadCustomerScopes().catch((error) => toast(error instanceof Error ? error.message : "客户公池加载失败", "error"));
   }
+  if (view === "deal-archive") {
+    void refreshDealArchive().catch((error) => toast(error instanceof Error ? error.message : "归档商机加载失败", "error"));
+  }
   if (view === "sales-distillation") {
     void loadSalesDistillationWorkspace();
   }
@@ -44869,6 +47717,10 @@ function activateNavView(view: string, after?: () => void) {
   }
   if (view === "sales-skill-center") {
     void loadSalesSkillCenter();
+  }
+  if (view === "kb-training") {
+    // 静默加载：进入视图不弹提示（导航一次点击可能触发两次 activateNavView，弹两条一样的 toast 是噪音）。
+    void loadKbTraining({ silent: true });
   }
   if (view === "products") {
     renderProducts();
@@ -44952,7 +47804,9 @@ function renderTopbarForView(view: string) {
   searchWrap?.classList.remove("is-hidden");
   context?.classList.toggle("is-hidden", !isCustomerView);
   if (searchInput) {
-    searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "全局搜索 / 输入模块名后回车跳转";
+    // 非客户视图不放占位提示：这一格是全局命令入口（回车直达模块），
+    // 常驻的「全局搜索 / 输入模块名后回车跳转」反而像一句说明贴在输入框里。
+    searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "";
   }
   if (primaryButton) primaryButton.hidden = !isCustomerView || Boolean(state.iamCapabilities && !hasIamCapability("customer.create"));
   if (primaryText && isCustomerView) primaryText.textContent = "新增客户";

@@ -42,6 +42,16 @@ export interface AppConfig {
   /** CLI 技能扫描目录；空/未设时按 cli-engine 的规则解析（插件自带 skills/ 优先）。 */
   cliSkillsDirs?: string;
   /**
+   * 常驻预热池。开一次省掉每次约 4 秒的 CLI 冷启动。
+   * 测试环境默认关闭：用例里没有真的登录态，预热只会白起进程。
+   */
+  cliWarm?: boolean;
+  /**
+   * 「同一句客户消息」的成品缓存（2 分钟）。测试环境默认关闭：
+   * 用例之间会换着 mock CRM/CLI，缓存会把上一个用例的结果喂给下一个。
+   */
+  autoChatCache?: boolean;
+  /**
    * 自动聊兜底扫描（每分钟补扫漏掉的入站消息）。
    * 测试环境默认关闭，否则定时器会在用例中途插入草稿，让断言变得不确定。
    */
@@ -233,6 +243,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     cliWorkspacePath: path.resolve(process.cwd(), environment.GOODJOB_CLI_WORKSPACE?.trim() || ".data/cli-workspace"),
     // 与 Runner 侧同名：一处配置就能同时管住「CRM 任务用的技能目录」和「插件自动回复用的技能目录」。
     cliSkillsDirs: environment.GOODJOB_SKILLS_DIRS?.trim() || undefined,
+    cliWarm: parseBoolean("GOODJOB_CLI_WARM", environment.GOODJOB_CLI_WARM, nodeEnv !== "test"),
+    autoChatCache: parseBoolean("AUTO_CHAT_CACHE", environment.AUTO_CHAT_CACHE, nodeEnv !== "test"),
     autoChatSweep: parseBoolean("AUTO_CHAT_SWEEP", environment.AUTO_CHAT_SWEEP, nodeEnv !== "test")
   };
 }

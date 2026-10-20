@@ -74,7 +74,7 @@ describe("database lifecycle", () => {
     }>("SELECT auto_translate,provider_id FROM translation_preferences WHERE id='default'");
     const trainingTables = await database.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
-       WHERE table_schema='public' AND table_name IN ('training_profiles','auto_chat_settings','auto_chat_drafts','training_library_entries')
+       WHERE table_schema='public' AND table_name IN ('training_profiles','auto_chat_settings','auto_chat_drafts','training_library_entries','training_kb_subscriptions')
        ORDER BY table_name`
     );
     // 引擎来源三列是迁移 14 加的：存量行默认 auto（= 按可用性挑通道），不是空串。
@@ -85,25 +85,113 @@ describe("database lifecycle", () => {
        ORDER BY column_name`
     );
     // 训练库两列是迁移 15 加的：enabled 默认 1、priority 默认 100。
+    // status 是迁移 16 加的（候选池闸门）：存量行默认 active，保证升级不改既有行为。
     const libraryColumns = await database.query<{ column_name: string; column_default: string }>(
       `SELECT column_name, column_default FROM information_schema.columns
        WHERE table_schema='public' AND table_name='training_library_entries'
-         AND column_name IN ('enabled','priority','kind','source')
+         AND column_name IN ('enabled','priority','kind','source','status')
        ORDER BY column_name`
     );
 
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    // 跟进同步两列是迁移 17 加的表：一张运行记录、一张逐条明细（用户要的「同步记录文档」）。
+    const followupTables = await database.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema='public' AND table_name IN ('followup_sync_runs','followup_sync_items')
+       ORDER BY table_name`
+    );
+    // v19 可观测性：verified 必须默认 false（机器导入的一律没校订，人工确认才翻），
+    // adopted_count 默认 0（命中 ≠ 有用）。这两列默认值写反了，P3 的分层加权就全错。
+    const libraryObservability = await database.query<{ column_name: string; column_default: string }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='training_library_entries'
+         AND column_name IN ('verified','adopted_count','last_hit_at','last_adopted_at')
+       ORDER BY column_name`
+    );
+    // 草稿行上的出处 id：采纳信号唯一的着落点，缺了 adopted_count 永远涨不上去。
+    const draftCiteColumns = await database.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='auto_chat_drafts'
+         AND column_name IN ('library_entry_ids_json')
+       ORDER BY column_name`
+    );
+    // v20 知识库：kb_id 必须默认空串（存量 53 条 = 未分组，行为与改动前完全一致），
+    // 订阅表的主键必须是 (owner_user_id, kb_id) —— 换成自增 id 就挡不住重复推送。
+    const kbColumns = await database.query<{ column_name: string; column_default: string | null }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='training_library_entries'
+         AND column_name IN ('kb_id')
+       ORDER BY column_name`
+    );
+    const kbSubscriptionKeys = await database.query<{ column_name: string; constraint_name: string }>(
+      `SELECT kcu.column_name, tc.constraint_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+        WHERE tc.table_schema='public' AND tc.table_name='training_kb_subscriptions'
+          AND tc.constraint_type='PRIMARY KEY'
+        ORDER BY kcu.ordinal_position`
+    );
+    // 开关必须默认关（0）：这条链会往 CRM 的 customerActivities 写数据，而那张表
+    // 同时是业绩考核 followUpCount 的数据源，不能替用户默认打开。
+    const followupColumns = await database.query<{ column_name: string; column_default: string }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='automation_settings'
+         AND column_name IN ('followup_sync_enabled','followup_sync_hour','followup_sync_minute')
+       ORDER BY column_name`
+    );
+    // v18 档案回流三列：hit_count 必须默认 0（没被用过就是没被用过），指纹可空。
+    const profileHitColumns = await database.query<{ column_name: string; column_default: string }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='training_profiles'
+         AND column_name IN ('hit_count','last_hit_at','input_fingerprint')
+       ORDER BY column_name`
+    );
+
+    // v21 出处三列：默认空串（历史条目没有这个信息，行为与改动前一致），
+    // 谁要是把它改成 NOT NULL 无默认或非空默认，存量迁移就会炸。
+    const sourceRefColumns = await database.query<{ column_name: string; column_default: string | null }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='training_library_entries'
+         AND column_name IN ('source_title','source_anchor','source_note')
+       ORDER BY column_name`
+    );
+    // v21 出处三列：默认空串（历史条目没有这个信息，行为与改动前一致）。
+    expect(sourceRefColumns.rows.map((row) => row.column_name)).toEqual(["source_anchor", "source_note", "source_title"]);
+    expect(sourceRefColumns.rows.find((row) => row.column_name === "source_title")?.column_default).toContain("''");
+    expect(sourceRefColumns.rows.find((row) => row.column_name === "source_anchor")?.column_default).toContain("''");
+    expect(sourceRefColumns.rows.find((row) => row.column_name === "source_note")?.column_default).toContain("''");
+
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     expect(trainingTables.rows.map((row) => row.table_name)).toEqual([
       "auto_chat_drafts",
       "auto_chat_settings",
+      "training_kb_subscriptions",
       "training_library_entries",
       "training_profiles"
     ]);
     expect(engineColumns.rows.map((row) => row.column_name)).toEqual(["cli_effort", "cli_model", "engine"]);
     expect(engineColumns.rows.find((row) => row.column_name === "engine")?.column_default).toContain("auto");
-    expect(libraryColumns.rows.map((row) => row.column_name)).toEqual(["enabled", "kind", "priority", "source"]);
+    expect(libraryColumns.rows.map((row) => row.column_name)).toEqual(["enabled", "kind", "priority", "source", "status"]);
     expect(libraryColumns.rows.find((row) => row.column_name === "enabled")?.column_default).toContain("1");
     expect(libraryColumns.rows.find((row) => row.column_name === "priority")?.column_default).toContain("100");
+    expect(libraryColumns.rows.find((row) => row.column_name === "status")?.column_default).toContain("active");
+    expect(followupTables.rows.map((row) => row.table_name)).toEqual(["followup_sync_items", "followup_sync_runs"]);
+    expect(followupColumns.rows.map((row) => row.column_name)).toEqual(["followup_sync_enabled", "followup_sync_hour", "followup_sync_minute"]);
+    expect(followupColumns.rows.find((row) => row.column_name === "followup_sync_enabled")?.column_default).toContain("0");
+    expect(followupColumns.rows.find((row) => row.column_name === "followup_sync_hour")?.column_default).toContain("19");
+    expect(profileHitColumns.rows.map((row) => row.column_name)).toEqual(["hit_count", "input_fingerprint", "last_hit_at"]);
+    expect(profileHitColumns.rows.find((row) => row.column_name === "hit_count")?.column_default).toContain("0");
+    expect(libraryObservability.rows.map((row) => row.column_name)).toEqual([
+      "adopted_count",
+      "last_adopted_at",
+      "last_hit_at",
+      "verified"
+    ]);
+    expect(libraryObservability.rows.find((row) => row.column_name === "verified")?.column_default).toContain("false");
+    expect(libraryObservability.rows.find((row) => row.column_name === "adopted_count")?.column_default).toContain("0");
+    expect(draftCiteColumns.rows.map((row) => row.column_name)).toEqual(["library_entry_ids_json"]);
+    expect(kbColumns.rows.map((row) => row.column_name)).toEqual(["kb_id"]);
+    expect(kbColumns.rows[0]?.column_default ?? "").toContain("''");
+    expect(kbSubscriptionKeys.rows.map((row) => row.column_name)).toEqual(["owner_user_id", "kb_id"]);
     expect(Number(accounts.rows[0].count)).toBe(0);
     expect(Number(mocks.rows[0].count)).toBe(0);
     expect(preference.rows[0]).toMatchObject({ auto_translate: 0, provider_id: null });

@@ -483,7 +483,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     const topExport = page.locator("#topExportButton");
 
     await expect(topSearch).not.toHaveClass(/is-hidden/);
-    await expect(page.locator("#topSearchInput")).toHaveAttribute("placeholder", "全局搜索 / 输入模块名后回车跳转");
+    await expect(page.locator("#topSearchInput")).toHaveAttribute("placeholder", "");
+    await expect(page.locator("#topSearchInput")).toHaveAttribute("aria-label", "全局搜索");
     await expect(topContext).toHaveClass(/is-hidden/);
     await expect(page.locator("#topTodoCount")).toHaveText(/\d+/);
     await expect(page.locator("#topReminderCount")).toHaveText(/\d+/);

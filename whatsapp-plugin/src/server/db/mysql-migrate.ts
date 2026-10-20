@@ -605,6 +605,156 @@ const migrations: MysqlMigration[] = [
         CONSTRAINT communication_fk_training_library_account FOREIGN KEY (account_id) REFERENCES channel_accounts(id) ON DELETE CASCADE
       ) ${tableOptions}`);
     }
+  },
+  {
+    version: 16,
+    name: "training_library_status",
+    apply: async (transaction) => {
+      /**
+       * 训练库条目的生命周期列。
+       *
+       * 为什么必须 default 'active'：存量 45 条（100% 来自档案自动导入、0 条人工确认）
+       * 如果在这次迁移里被当成「候选」，自动回复当晚就没有语料可用了。
+       * 所以规则是**存量保持 active，只有新导入的进 candidate** ——
+       * 闸门装在导入路径上（`importFromProfile`），不是装在这次迁移上。
+       */
+      await ensureColumn(transaction, "training_library_entries", "status", "VARCHAR(16) NOT NULL DEFAULT 'active'");
+      await ensureIndex(transaction, "training_library_entries", "training_library_owner_status_idx", "owner_user_id, status");
+    }
+  },
+  {
+    version: 17,
+    name: "followup_sync",
+    apply: async (transaction) => {
+      /**
+       * WhatsApp 对话 → CRM 客户跟进自动同步的运行记录（docs/WHATSAPP-FOLLOWUP-SYNC-DESIGN.md §3.6）。
+       *
+       * 两张表刻意都建在插件侧而不是 CRM：同步是插件发起的、记录留在发起方最自然，
+       * 而且 P1 阶段「不碰 CRM 任何表」这条纪律要能一眼看出来。
+       *
+       * `run_date` 上的 UNIQUE 是幂等第一层：同一天手动重跑是**更新**这一行而非再插一行。
+       * 少了它，用户连点两次「立即同步」就会出现两条当天记录，看不出哪条算数。
+       */
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS followup_sync_runs (
+        id VARCHAR(191) PRIMARY KEY,
+        owner_user_id VARCHAR(191) NOT NULL,
+        run_date DATE NOT NULL,
+        trigger_type VARCHAR(16) NOT NULL DEFAULT 'scheduled',
+        status VARCHAR(16) NOT NULL DEFAULT 'running',
+        timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
+        conversations_scanned INT NOT NULL DEFAULT 0,
+        message_count INT NOT NULL DEFAULT 0,
+        customers_matched INT NOT NULL DEFAULT 0,
+        activities_written INT NOT NULL DEFAULT 0,
+        leads_created INT NOT NULL DEFAULT 0,
+        leads_existing INT NOT NULL DEFAULT 0,
+        skipped INT NOT NULL DEFAULT 0,
+        ambiguous INT NOT NULL DEFAULT 0,
+        engine VARCHAR(16) NOT NULL DEFAULT 'none',
+        model VARCHAR(64) NULL,
+        notification_sent TINYINT NOT NULL DEFAULT 0,
+        error TEXT NULL,
+        summary TEXT NOT NULL,
+        started_at DATETIME(3) NOT NULL,
+        finished_at DATETIME(3) NULL,
+        updated_at DATETIME(3) NOT NULL,
+        UNIQUE KEY followup_sync_runs_owner_date_unique (owner_user_id, run_date),
+        KEY followup_sync_runs_owner_date_idx (owner_user_id, run_date)
+      ) ${tableOptions}`);
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS followup_sync_items (
+        id VARCHAR(191) PRIMARY KEY,
+        run_id VARCHAR(191) NOT NULL,
+        owner_user_id VARCHAR(191) NOT NULL,
+        conversation_key VARCHAR(191) NOT NULL,
+        contact_name VARCHAR(255) NOT NULL DEFAULT '',
+        contact_phone VARCHAR(64) NOT NULL DEFAULT '',
+        kind VARCHAR(16) NOT NULL DEFAULT 'skipped',
+        status VARCHAR(16) NOT NULL DEFAULT 'skipped',
+        customer_id VARCHAR(191) NULL,
+        lead_id VARCHAR(191) NULL,
+        activity_id VARCHAR(191) NULL,
+        message_count INT NOT NULL DEFAULT 0,
+        summary TEXT NOT NULL,
+        error TEXT NULL,
+        created_at DATETIME(3) NOT NULL,
+        UNIQUE KEY followup_sync_items_run_conversation_unique (run_id, conversation_key),
+        KEY followup_sync_items_run_idx (run_id, created_at),
+        CONSTRAINT communication_fk_followup_sync_item_run FOREIGN KEY (run_id) REFERENCES followup_sync_runs(id) ON DELETE CASCADE
+      ) ${tableOptions}`);
+      // 默认 0 = 关闭。这条链会往 CRM 的 customerActivities 写数据，而那张表同时是
+      // 业绩考核 followUpCount 的数据源，不能替用户默认打开。
+      await ensureColumn(transaction, "automation_settings", "followup_sync_enabled", "TINYINT NOT NULL DEFAULT 0");
+      await ensureColumn(transaction, "automation_settings", "followup_sync_hour", "INT NOT NULL DEFAULT 19");
+      await ensureColumn(transaction, "automation_settings", "followup_sync_minute", "INT NOT NULL DEFAULT 0");
+      await ensureColumn(transaction, "automation_settings", "last_followup_sync_at", "DATETIME(3) NULL");
+      await ensureColumn(transaction, "automation_settings", "next_followup_sync_at", "DATETIME(3) NULL");
+    }
+  },
+  {
+    version: 18,
+    name: "training_profile_feedback",
+    apply: async (transaction) => {
+      // 与 PG 侧 v18 同构：档案使用回流 + 重复训练指纹短路（详见 migrate.ts 同版本注释）。
+      await ensureColumn(transaction, "training_profiles", "hit_count", "INT NOT NULL DEFAULT 0");
+      await ensureColumn(transaction, "training_profiles", "last_hit_at", "DATETIME(3) NULL");
+      await ensureColumn(transaction, "training_profiles", "input_fingerprint", "VARCHAR(64) NULL");
+    }
+  },
+  {
+    version: 19,
+    name: "training_library_observability",
+    apply: async (transaction) => {
+      // 与 PG 侧 v19 同构（详见 migrate.ts 同版本注释）：
+      // verified = 人校订过（P3 分层加权要用）；adopted_count/last_adopted_at = 命中 ≠ 有用的「有用」；
+      // 草稿行记下用到的条目 id，采纳信号才有着落。
+      await ensureColumn(transaction, "training_library_entries", "verified", "TINYINT NOT NULL DEFAULT 0");
+      await ensureColumn(transaction, "training_library_entries", "adopted_count", "INT NOT NULL DEFAULT 0");
+      await ensureColumn(transaction, "training_library_entries", "last_hit_at", "DATETIME(3) NULL");
+      await ensureColumn(transaction, "training_library_entries", "last_adopted_at", "DATETIME(3) NULL");
+      await ensureColumn(transaction, "auto_chat_drafts", "library_entry_ids_json", "TEXT NULL");
+      // 存量回填：人工录入的条目本来就是人校订过的；导入来源的留 0，等人工确认再翻。
+      await transaction.exec("UPDATE training_library_entries SET verified=1 WHERE source='manual'");
+    }
+  },
+  {
+    version: 20,
+    name: "training_knowledge_bases",
+    apply: async (transaction) => {
+      /**
+       * CRM 训练成果的「知识库」这一层在插件侧的落点（与 PG 侧 v20 同构）。
+       *
+       * 背景：CRM 侧新增了 `kb_knowledge_bases`（有名字、有创建者、可公开/私用）。
+       * 插件只存**必要的两样**：
+       *  1. 条目的 `kb_id` —— 这条语料属于哪个库；
+       *  2. 账号的启用清单 —— 出稿时读哪些库。
+       *
+       * 为什么不把可见性也搬过来：插件身份令牌只有 userId，没有 teamId，
+       * 无法自行判断「同团队公开」；而 CRM 有完整的 users.team_id。
+       * 所以**可见性由 CRM 判定，启用清单由 CRM 推送**（`PUT /api/v1/training/kb-subscriptions`），
+       * 插件只执行清单 —— 一处判定，不会两边各有一套慢慢漂移的规则。
+       */
+      await ensureColumn(transaction, "training_library_entries", "kb_id", "VARCHAR(191) NOT NULL DEFAULT ''");
+      await ensureIndex(transaction, "training_library_entries", "training_library_kb_idx", "kb_id, enabled, status");
+      await transaction.exec(`CREATE TABLE IF NOT EXISTS training_kb_subscriptions (
+        owner_user_id VARCHAR(191) NOT NULL,
+        kb_id VARCHAR(191) NOT NULL,
+        synced_at DATETIME(3) NOT NULL,
+        PRIMARY KEY (owner_user_id, kb_id)
+      ) ${tableOptions}`);
+    }
+  },
+  {
+    version: 21,
+    name: "training_library_source_ref",
+    apply: async (transaction) => {
+      /**
+       * 出处随发布一起落到条目上（与 PG 侧 v21 同构）：推荐/引用时能注明「哪个文件、哪一段」。
+       * 三列只服务**人看的出处展示**，不进提示词；默认空串 = 历史条目没有这个信息，行为不变。
+       */
+      await ensureColumn(transaction, "training_library_entries", "source_title", "VARCHAR(255) NOT NULL DEFAULT ''");
+      await ensureColumn(transaction, "training_library_entries", "source_anchor", "VARCHAR(64) NOT NULL DEFAULT ''");
+      await ensureColumn(transaction, "training_library_entries", "source_note", "VARCHAR(512) NOT NULL DEFAULT ''");
+    }
   }
 ];
 

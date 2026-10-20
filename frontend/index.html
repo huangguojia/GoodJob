@@ -1283,7 +1283,7 @@
       width: 22px;
       height: 2px;
       border-radius: 999px;
-      background: #0f766e;
+      background: var(--brand);
     }
 
     .focus-metric:first-child::before {
@@ -4356,20 +4356,50 @@
     .pipeline-summary {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      margin-bottom: 10px;
+      gap: 10px;
+      margin-bottom: 12px;
     }
 
     .pipeline-summary-item {
-      padding: 10px 12px;
-      border: 1px solid var(--line-soft);
-      border-radius: 8px;
+      position: relative;
+      padding: 13px 16px 13px 20px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
       background: var(--surface);
+      overflow: hidden;
     }
+
+    /* 左侧锚条：默认中性线，有意义的差异才上色（逾期红 / 今日到期品牌靛蓝），0 值不着色 */
+    .pipeline-summary-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--line-soft);
+    }
+
+    .pipeline-summary-item.is-brand::before { background: var(--brand); }
+    .pipeline-summary-item.is-alert::before { background: #d64545; }
+    #pipeline .pipeline-summary-item.is-alert b { color: #b42318; }
 
     .pipeline-summary-item span,
     .pipeline-summary-item small { display: block; color: var(--muted); font-size: 11px; }
+
     .pipeline-summary-item b { display: block; margin: 4px 0; color: var(--ink); font-size: 18px; }
+
+    /* 数值后的小单位（个 / 币种代码）：不与大数字同权 */
+    .pipeline-summary-item b em {
+      font-style: normal;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--ht-label);
+      margin-left: 3px;
+    }
+
+    .pipeline-summary-item small { margin-top: 2px; }
 
     .pipeline-toolbar,
     .pipeline-closed-filters {
@@ -10530,10 +10560,27 @@
     .journey-line { position: absolute; top: 36px; left: 0; right: 0; height: 3px; background: var(--surface-3); border-radius: 2px; z-index: 0; }
     .journey-node { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 56px; z-index: 1; opacity: 0; transform: translateY(8px); transition: opacity .5s var(--ease-out), transform .5s var(--ease-out); transition-delay: var(--delay, 0s); }
     .journey-node.visible { opacity: 1; transform: translateY(0); }
-    .journey-dot { width: 36px; height: 36px; border-radius: 50%; background: var(--surface-2); border: 2px solid var(--node-color, var(--brand)); display: flex; align-items: center; justify-content: center; font-size: 14px; transition: transform .14s var(--ease-out), box-shadow .14s var(--ease-out); cursor: pointer; }
-    .journey-dot:hover { transform: scale(1.18); box-shadow: 0 0 0 4px var(--brand-tint); }
-    .journey-label { font-size: 9px; font-weight: 600; color: var(--text); white-space: nowrap; }
-    .journey-date { font-size: 8px; color: var(--muted); }
+    /* 客户旅程节点圆点。
+       原来是「灰底 + 2px 粗描边 + emoji」：emoji 是彩色位图，会盖掉 --node-color，
+       且形状随系统字体变。现在统一成「白底 + 细描边 + 线性图标」，颜色全部由
+       currentColor 透传自 --node-color，粗细与全站图标一致。 */
+    .journey-dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--surface); border: 1.5px solid var(--node-color, var(--brand)); color: var(--node-color, var(--brand)); box-shadow: 0 1px 3px rgba(16, 33, 31, .07); transition: transform .14s var(--ease-out), box-shadow .14s var(--ease-out); cursor: pointer; }
+    .journey-dot svg { width: 17px; height: 17px; display: block; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    /* WhatsApp / 微信是品牌实心字形（靠 fill 不靠 stroke），复用 --glyph-k 与联系图标条同比例。 */
+    .journey-dot svg.contact-brand-glyph { width: calc(15px * var(--glyph-k, 1)); height: calc(15px * var(--glyph-k, 1)); fill: currentColor; stroke: none; }
+    .journey-dot:hover { transform: scale(1.12); box-shadow: 0 0 0 4px var(--brand-tint), 0 3px 9px -3px rgba(16, 33, 31, .2); }
+    /* 最新一个节点做实心：一眼看到「旅程走到哪了」——是状态，不是装饰。 */
+    .journey-node.is-latest .journey-dot { background: var(--node-color, var(--brand)); color: #fff; box-shadow: 0 2px 8px -3px rgba(16, 33, 31, .28); }
+    /* is-latest 的选择器权重更高，必须显式补回 hover 反馈，否则实心点悬停无反应。 */
+    .journey-node.is-latest .journey-dot:hover { box-shadow: 0 0 0 4px var(--brand-tint), 0 3px 9px -3px rgba(16, 33, 31, .24); }
+    .journey-label { font-size: 10px; font-weight: 600; color: var(--text); white-space: nowrap; }
+    .journey-date { font-size: 9px; color: var(--muted); }
+    @media (prefers-reduced-motion: reduce) {
+      /* 节点靠 .visible 触发入场过渡，这里直接给终态，不要让它停在 opacity:0。 */
+      .journey-node { opacity: 1; transform: none; transition: none; }
+      .journey-dot { transition: none; }
+      .journey-dot:hover { transform: none; }
+    }
     /* 客户旅程节点详情浮层。
        必须挂在 <body> 上、由 renderCustomerJourney 用 fixed 定位跟随节点：
        .journey-track 是横向滚动容器（overflow-x: auto），浏览器会把它的 overflow-y
@@ -10863,6 +10910,18 @@
       stroke-width: 2;
     }
 
+    /* 品牌通道（WhatsApp / 微信）走官方 glyph 实心绘制 —— 用描边近似“画个泡泡”在 16px 下
+       会被一眼看成画错了。实心块天然更重，故用 --glyph-k 按视觉高度配重：
+       WhatsApp glyph 满铺 24 正方形 → .9；微信 glyph 宽高比 1.46:1（天然横长）→ 1.12。 */
+    .customer-contact-action svg.contact-brand-glyph {
+      width: calc(16px * var(--glyph-k, 1));
+      height: calc(16px * var(--glyph-k, 1));
+      fill: currentColor;
+      stroke: none;
+      overflow: visible;
+      flex: 0 0 auto;
+    }
+
     .customer-page-summary {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -10970,27 +11029,153 @@
       padding: 11px 13px 13px;
     }
 
+    /* 联系按钮。基础态 = 「无值」，直接用冷调中性底，与 is-empty 同貌 ——
+       详情页模板历史上漏给部分按钮加 is-empty，靠基础态兜住，任何入口都不再出现两种空态长相。 */
     .customer-contact-action {
-      min-height: 36px;
+      min-height: 34px;
+      padding: 0 13px;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 7px;
-      border: 1px solid #d8e0eb;
-      border-radius: 7px;
-      color: #37445b;
-      background: var(--surface);
-      font-size: 10px;
-      font-weight: 800;
+      gap: 8px;
+      border: 1px solid #e5ebf4;
+      border-radius: var(--radius-sm);
+      color: #93a1b5;
+      background: #f5f7fb;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .01em;
       cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease;
     }
 
-    .customer-contact-action:hover { border-color: rgba(15,118,110,.42); color: #0f766e; background: var(--surface-2); }
-    .customer-contact-action.is-ready { border-color: rgba(22,163,106,.28); color: #13704c; background: #f5fcf8; }
+    /* 通道色相：邮箱靛蓝 / 电话青 / WhatsApp 绿 / 微信深绿。
+       通道色属品牌语义（WhatsApp 就是绿的），故不挂主题变量；主题跟随交给外层容器。
+       .contact-dock-action 是列表页联系条那套（只用字色，没有外框）；
+       .customer-contact-action 是详情页 / 抽屉那套（用得上 --ch-bg / --ch-bd）。 */
+    .contact-dock-action[data-contact-dock-channel="email"],
+    .customer-contact-action[data-contact-dock-channel="email"],
+    .customer-contact-action[data-customer-contact="email"] { --ch: #4f46e5; --ch-bg: #e8eaff; --ch-bd: #c3c8f8; }
+    .contact-dock-action[data-contact-dock-channel="phone"],
+    .customer-contact-action[data-contact-dock-channel="phone"],
+    .customer-contact-action[data-customer-contact="phone"] { --ch: #0c736a; --ch-bg: #ddf3f0; --ch-bd: #a9ded8; }
+    .contact-dock-action[data-contact-dock-channel="whatsapp"],
+    .customer-contact-action[data-contact-dock-channel="whatsapp"],
+    .customer-contact-action[data-customer-contact="whatsapp"] { --ch: #12733e; --ch-bg: #ddf3e6; --ch-bd: #a8dcc0; }
+    .contact-dock-action[data-contact-dock-channel="wechat"],
+    .customer-contact-action[data-contact-dock-channel="wechat"],
+    .customer-contact-action[data-customer-contact="wechat"] { --ch: #0a6435; --ch-bg: #dcf0e4; --ch-bd: #a5d7bd; }
+
+    /* 有值 = 通道浅底 + 通道色字与图标；悬停才反转为实底白字（反馈只在指针交互时出现） */
+    .customer-contact-action.is-ready {
+      border-color: var(--ch-bd, var(--brand-ring));
+      color: var(--ch, var(--brand));
+      background: var(--ch-bg, var(--brand-tint));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7);
+    }
+
+    .customer-contact-action.is-ready:hover {
+      border-color: var(--ch, var(--brand));
+      color: #fff;
+      background: var(--ch, var(--brand));
+      box-shadow: 0 2px 6px -1px var(--ch-bd, var(--brand-ring));
+    }
+
+    /* 无值 = 冷调中性底 + 中性字。原来用虚线边 + opacity 压暗，实测文字只剩 rgb(179,187,185)、边框几乎看不见，整条发虚 */
     .customer-contact-action:disabled,
-    .customer-contact-action.is-empty { opacity: .5; cursor: not-allowed; color: var(--muted); border-color: var(--line); background: var(--surface); }
-    .customer-contact-action:disabled:hover { opacity: .5; color: var(--muted); border-color: var(--line); background: var(--surface); }
-    .customer-contact-action small { color: #8a96a7; font-size: 8px; font-weight: 700; }
+    .customer-contact-action.is-empty {
+      color: #93a1b5;
+      border-color: #e5ebf4;
+      background: #f5f7fb;
+      box-shadow: none;
+    }
+
+    /* 只有真 disabled 才禁用光标；列表页联系条里的空态按钮点了是「补录该通道」，仍可交互 */
+    .customer-contact-action:disabled { cursor: not-allowed; }
+    .customer-contact-action:disabled:hover { color: #93a1b5; border-color: #e5ebf4; background: #f5f7fb; }
+    .customer-contact-action.is-empty:hover { color: #6b7d94; border-color: #d5deec; background: #eef2f8; }
+    .customer-contact-action small { color: #94a3b6; font-size: 11px; font-weight: 500; }
+
+    /* 列表页「快捷联系条」：客户 / 线索 / 客户公池里点某行后，落到该页筛选 / 批量操作条的右端。
+       它表达的是「当前选中这一行的联系方式」，是一条状态而非一组按钮 —— 所以没有外框、没有底色，
+       只有图标 + 文字；悬停才给下划线这种可点反馈。 */
+    .contact-dock {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-left: auto;
+      animation: contactDockIn .18s var(--ease-out) backwards;
+    }
+
+    /* hidden 属性会被上面的 display:flex 压住，必须显式补一条 */
+    .contact-dock[hidden] { display: none; }
+
+    @keyframes contactDockIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { .contact-dock { animation: none; } }
+
+    /* 线索 / 客户公池的筛选条是 grid：默认占满一整行再靠右，否则会被塞进某个固定宽度列里挤变形 */
+    #leads .lead-filter-row > .contact-dock,
+    #customer-pool .customer-pool-toolbar > .contact-dock { grid-column: 1 / -1; }
+
+    /* 桌面端线索筛选条第 2 行右侧本来就空着（重置 / 生成发信批次只占前两列）——
+       联系条补进那片空位，省得再起一行；窄屏筛选条只剩 1~2 列，退回整行靠右。 */
+    @media (min-width: 901px) {
+      #leads .lead-filter-row > .contact-dock { grid-column: 3 / -1; }
+    }
+
+    .contact-dock-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: #94a3b6;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .01em;
+      line-height: 1;
+      cursor: pointer;
+      transition: color .15s ease;
+    }
+
+    .contact-dock-action svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+      flex: 0 0 auto;
+    }
+
+    /* 品牌通道（WhatsApp / 微信）走官方 glyph 实心绘制，配重见 customerContactIcon 的说明 */
+    .contact-dock-action svg.contact-brand-glyph {
+      width: calc(15px * var(--glyph-k, 1));
+      height: calc(15px * var(--glyph-k, 1));
+      fill: currentColor;
+      stroke: none;
+      overflow: visible;
+    }
+
+    /* 有值 = 通道色字；无值 = 灰字（点了是去补录该通道，所以不禁用、不置灰到底） */
+    .contact-dock-action.is-ready { color: var(--ch, var(--brand)); }
+    .contact-dock-action.is-ready:hover { text-decoration: underline; text-underline-offset: 3px; }
+    .contact-dock-action.is-empty:hover { color: #6b7d94; }
+
+    /* 行可点：点行 = 选中 + 在上方出联系条（详情仍从客户名 / 线索名进入） */
+    #customers tbody tr,
+    #leadsTableBody tr,
+    #customerPoolTableBody tr,
+    #customerMobileList .customer-mobile-card,
+    #leadMobileList .lead-mobile-card,
+    #customerPoolMobileList .customer-pool-card { cursor: pointer; }
 
     .customer-page-deals,
     .customer-page-followups {
@@ -11478,6 +11663,14 @@
     .mail-brief-note.is-ok { color: #15803d; }
     .mail-brief-issues { margin: 2px 0 0; padding-left: 18px; display: grid; gap: 3px; }
     .mail-brief-issues li { font-size: 11.5px; line-height: 1.6; color: #b91c1c; }
+    .mail-brief-badges { display: inline-flex; align-items: center; gap: 6px; }
+    .mail-brief-origin { margin: 0; font-size: 12px; line-height: 1.7; color: #334155; }
+    .mail-brief-facts { display: flex; flex-wrap: wrap; gap: 5px; }
+    .mail-brief-chip { padding: 1px 8px; border: 1px solid #dbe6f5; border-radius: 999px; background: #eef4fd; color: #2c5d9c; font-size: 11px; line-height: 1.7; }
+    .mail-brief-diff { margin: 0; padding: 6px 10px; border-left: 3px solid #378add; border-radius: 0 6px 6px 0; background: #eef4fd; color: #1f4b7f; font-size: 11.5px; line-height: 1.7; }
+    .mail-brief-action { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .mail-brief-action .btn { padding: 4px 10px; font-size: 12px; }
+    .mail-brief-action span { font-size: 11px; line-height: 1.6; color: #64748b; }
     .mail-scenario-row { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 10px; }
     .mail-scenario-row > span,
     .mail-goal-field > span { color: #68758a; font-size: 10px; font-weight: 700; }
@@ -25016,6 +25209,19 @@ body.platform-mode .workspace-tabs { display:none !important; }
       --kinetic-accent: #dfe104;
       --kinetic-danger: #ff6b8a;
       --kinetic-cyan: #70e1dc;
+
+      /* 线索漏斗图表配色：由 CSS 变量驱动（JS 侧 getComputedStyle 读取），
+         折线主线跟随主题品牌色，描边环跟随卡片底 —— 避免「换主题后图表仍是旧色」。
+         各设计方案的覆盖文件可再行覆盖这几个变量。 */
+      --gj-funnel-line: var(--brand);
+      --gj-funnel-label: var(--kinetic-ink);
+      --gj-funnel-marker-ring: var(--kinetic-surface);
+      --gj-funnel-entered: var(--brand-2);
+      --gj-funnel-pending: var(--brand-2);
+      --gj-funnel-valid: var(--brand);
+      --gj-funnel-customer: var(--brand);
+      --gj-funnel-deal: var(--brand-strong);
+
       max-width: none;
       min-height: calc(100dvh - 64px);
       margin: -8px -22px -24px;
@@ -25436,6 +25642,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <div class="nav-secondary-grid">
             <button class="nav-secondary-button" data-view="sales-distillation" title="销售能力训练"><span>销售训练</span></button>
             <button class="nav-secondary-button" data-view="knowledge" title="资料维护"><span>资料维护</span></button>
+            <button class="nav-secondary-button" data-view="kb-training" title="知识库训练"><span>知识库训练</span></button>
             <button class="nav-secondary-button" data-view="exam" title="在线考试"><span>在线考试</span></button>
             <button class="nav-secondary-button" data-view="wecom" title="企业微信"><span>企业微信</span></button>
             <button class="nav-secondary-button" data-view="daily-reports" title="团队日报"><span>团队日报</span></button>
@@ -25486,7 +25693,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="top-core">
           <label class="command" id="topSearchWrap">
             <svg width="17" height="17" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"/></svg>
-            <input id="topSearchInput" placeholder="全局搜索 / 输入模块名后回车跳转" list="topSearchHints" />
+            <input id="topSearchInput" list="topSearchHints" aria-label="全局搜索" autocomplete="off" />
             <datalist id="topSearchHints">
               <option value="客户"></option>
               <option value="搜客"></option>
@@ -26984,7 +27191,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div></div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>时间</th><th>方向</th><th>对接方</th><th>主题</th><th>状态</th><th>HTTP</th><th>耗时</th><th>操作</th></tr></thead>
+                <thead><tr><th>时间</th><th>方向</th><th>对接方</th><th>主题</th><th>来源 IP</th><th>状态</th><th>HTTP</th><th>耗时</th><th>操作</th></tr></thead>
                 <tbody id="exchangeMessagesBody"></tbody>
               </table>
             </div>
@@ -29034,7 +29241,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="view" id="pipeline">
           <div class="page-head">
             <div><h1>商机管道</h1></div>
-            <button class="btn primary">新增商机</button>
+            <div class="page-head-actions"><button class="btn" id="pipelineArchiveEntry" type="button">归档商机</button><button class="btn primary">新增商机</button></div>
           </div>
           <div class="pipeline-summary" id="pipelineSummary"></div>
           <div class="pipeline-toolbar">
@@ -29055,7 +29262,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <div class="pipeline-archive-content">
               <div class="pipeline-closed-filters">
                 <input id="pipelineClosedSearch" placeholder="搜索客户、产品、国家或丢单原因">
-                <select id="pipelineClosedStatus"><option value="all">全部关闭状态</option><option value="成交">已成交</option><option value="丢单">已丢单</option></select>
+                <select id="pipelineClosedStatus"><option value="all">全部关闭状态</option><option value="成交">已成交</option><option value="丢单">已丢单</option><option value="archived">已归档</option></select>
                 <input id="pipelineClosedMonth" type="month" aria-label="关闭月份">
               </div>
               <div class="table-wrap">
@@ -29069,6 +29276,62 @@ body.platform-mode .workspace-tabs { display:none !important; }
           </details>
           <div class="deal-drawer-backdrop" id="dealDrawerBackdrop"></div>
           <aside class="panel" id="dealDrawer" aria-label="商机详情"></aside>
+        </div>
+
+        <style>
+          /* ===== 归档商机（#deal-archive）：独立界面，检索 + 拉回 ===== */
+          #deal-archive .page-head-actions { display: flex; align-items: center; gap: 8px; }
+          #deal-archive .deal-archive-summary { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+          #deal-archive .deal-archive-summary > div { min-height: 76px; display: grid; align-content: center; gap: 4px; padding: 12px 16px; border-right: 1px solid var(--line-soft); }
+          #deal-archive .deal-archive-summary > div:last-child { border-right: 0; }
+          #deal-archive .deal-archive-summary .stat-label { color: #6b7d94; font-size: 11px; font-weight: 500; letter-spacing: .02em; }
+          #deal-archive .deal-archive-summary .stat-value { color: #131c2e; font-size: 20px; font-weight: 700; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
+          #deal-archive .deal-archive-summary .stat-note { color: #94a3b6; font-size: 11px; font-weight: 400; }
+          #deal-archive .deal-archive-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 150px 170px auto; gap: 8px; margin-bottom: 10px; }
+          #deal-archive .deal-archive-toolbar input,
+          #deal-archive .deal-archive-toolbar select { width: 100%; min-width: 0; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface); outline: 0; font: inherit; }
+          #deal-archive .deal-archive-toolbar input:focus,
+          #deal-archive .deal-archive-toolbar select:focus { border-color: var(--brand); box-shadow: var(--brand-ring); }
+          #deal-archive .deal-archive-list { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+          #deal-archive .deal-archive-list table { min-width: 820px; }
+          #deal-archive .deal-archive-deal b { display: block; color: var(--ink); font-size: 13px; }
+          #deal-archive .deal-archive-deal span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+          #deal-archive .deal-archive-actions { display: flex; justify-content: flex-end; gap: 6px; white-space: nowrap; }
+          #deal-archive .deal-archive-review { max-width: 320px; color: #536176; font-size: 12px; line-height: 1.5; }
+          @media (max-width: 760px) {
+            #deal-archive .deal-archive-summary { grid-template-columns: 1fr; }
+            #deal-archive .deal-archive-summary > div { min-height: 58px; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+            #deal-archive .deal-archive-summary > div:last-child { border-bottom: 0; }
+            #deal-archive .deal-archive-toolbar { grid-template-columns: 1fr; }
+            #deal-archive .deal-archive-list { overflow-x: auto; }
+          }
+        </style>
+        <div class="view" id="deal-archive">
+          <header class="page-head">
+            <div>
+              <h1>归档商机</h1>
+              <span class="sub">已归档商机的独立存档界面：按条件检索，一键拉回（仅取消归档标记，不动客户状态、佣金与报表）</span>
+            </div>
+            <div class="page-head-actions"><button class="btn" id="dealArchiveBackButton" type="button">返回商机管道</button></div>
+          </header>
+          <section class="deal-archive-summary" id="dealArchiveSummary">
+            <div><span class="stat-label">归档商机</span><b class="stat-value">0</b><span class="stat-note">当前筛选下的归档总数</span></div>
+            <div><span class="stat-label">已成交归档</span><b class="stat-value">0</b><span class="stat-note">恢复后阶段保持成交</span></div>
+            <div><span class="stat-label">已丢单归档</span><b class="stat-value">0</b><span class="stat-note">恢复后阶段保持丢单</span></div>
+          </section>
+          <div class="deal-archive-toolbar">
+            <input id="dealArchiveSearch" placeholder="搜索商机、客户、产品、国家或丢单原因">
+            <select id="dealArchiveStage" aria-label="成交结果"><option value="all">全部结果</option><option value="成交">已成交</option><option value="丢单">已丢单</option></select>
+            <input id="dealArchiveMonth" type="month" aria-label="关闭月份">
+            <button class="btn" id="dealArchiveReset" type="button">重置</button>
+          </div>
+          <section class="deal-archive-list">
+            <table>
+              <thead><tr><th>商机</th><th>金额</th><th>结果</th><th>关闭时间</th><th>复盘</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody id="dealArchiveTableBody"><tr><td colspan="6" class="empty-cell">暂无归档商机。</td></tr></tbody>
+            </table>
+          </section>
+          <div class="pipeline-pager"><button class="btn" id="dealArchivePrev" type="button">上一页</button><span id="dealArchivePage">第 1 页</span><button class="btn" id="dealArchiveNext" type="button">下一页</button></div>
         </div>
 
         <div class="view" id="reminders">
@@ -29597,6 +29860,762 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <aside class="panel file-category-panel"><div class="file-category-head"><b>资料类目</b><span id="knowledgeCategoryCount">0 个</span></div><div class="file-category-list" id="knowledgeCategoryList"></div></aside>
             <section class="panel file-list-panel"><div class="file-table-head"><span>资料</span><span>来源</span><span>状态</span><span>访问</span></div><div id="knowledgeFileList"></div></section>
             <aside class="panel file-detail-panel" id="knowledgeDetail"><div class="file-detail-empty">选择一项资料查看详情</div></aside>
+          </div>
+        </div>
+
+        <div class="view" id="kb-training">
+          <style>
+            /* ==============================================================
+               知识库训练工作台（v2 视觉刷新）。
+               设计令牌全部复用全局：--brand 系（跟主题换肤走）、--line/--surface/
+               --muted/--ink、--shadow-*、--ease-out/expo —— 这里不另立一套；
+               动效只做「缓出 + 小位移」，reduced-motion 由全局 reduce 兜底。
+               ============================================================== */
+            /* ⚠️ 变量放 #kb-training，**布局态必须写在 #kb-training.active 上**。
+               全局靠 `.view { display:none }` 隐藏非活动视图（权重 0,1,0），
+               若这里直接写 `#kb-training { display:flex }`（权重 1,0,0），
+               会把隐藏规则压掉 —— 这个视图就会在每个页面都渲染出来。 */
+            #kb-training.active {
+              display: flex;
+              flex-direction: column;
+              gap: 14px;
+            }
+
+            /* ---- 进场：轻量错峰浮现，每次切进视图重放（灵动的主来源） ---- */
+            @keyframes kbRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            #kb-training.active > .kb-searchbar { animation: kbRise .45s var(--ease-expo) both; }
+            #kb-training.active > .kb-kb-panel { animation: kbRise .45s var(--ease-expo) .06s both; }
+            #kb-training.active .kb-layout > .kb-panel:nth-child(1) { animation: kbRise .45s var(--ease-expo) .12s both; }
+            #kb-training.active .kb-layout > .kb-panel:nth-child(2) { animation: kbRise .45s var(--ease-expo) .18s both; }
+
+            /* ---- 头部：品牌竖条 + 标题（与弹窗 .modal-heading-mark 同一语言） ---- */
+            #kb-training .kb-head {
+              display: flex;
+              align-items: center;
+              gap: 14px;
+              padding-bottom: 12px;
+              border-bottom: 1px solid var(--line-soft);
+            }
+            #kb-training .kb-head-mark { flex: 0 0 auto; width: 4px; align-self: stretch; border-radius: 999px; background: var(--brand); }
+            #kb-training .kb-head-text { flex: 1; min-width: 0; }
+            #kb-training .kb-head h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; color: var(--ink); }
+            #kb-training .kb-head-text span { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); }
+            #kb-training .kb-head .head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+            #kb-training .kb-head .btn:active { transform: translateY(.5px); }
+
+            /* ---- 顶部搜索：过滤下方已训练知识库卡片（替代旧的指标卡区） ---- */
+            #kb-training .kb-searchbar {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+            }
+            #kb-training .kb-search {
+              flex: 1;
+              max-width: 480px;
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              padding: 0 12px;
+              border: 1px solid var(--line);
+              border-radius: 10px;
+              background: var(--surface);
+              box-shadow: var(--shadow-xs);
+              transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
+            }
+            #kb-training .kb-search:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #kb-training .kb-search svg { flex: none; width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 2; }
+            #kb-training .kb-search input { flex: 1; min-width: 0; border: 0; background: none; box-shadow: none; padding-left: 0; }
+            #kb-training .kb-searchbar > span {
+              flex: none;
+              font-size: 11px;
+              color: var(--muted);
+              font-variant-numeric: tabular-nums;
+            }
+
+            /* ---- 已训练知识库：卡片网格。语言同「工具中心」tool-card
+               （图标 + 标题 + 徽标 + hover 抬升），但复用本视图的 --brand 系令牌，
+               不引入第二种强调色。卡片上的勾选框就是启用开关（勾选即生效）。 ---- */
+            #kb-training .kb-cards {
+              display: grid;
+              grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+              gap: 12px;
+            }
+            #kb-training .kb-cards > .kb-empty { grid-column: 1 / -1; }
+            #kb-training .kb-card {
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+              padding: 14px;
+              border: 1px solid var(--line);
+              border-radius: 12px;
+              background: var(--surface);
+              box-shadow: var(--shadow-xs);
+              min-width: 0;
+              transition: transform .2s var(--ease-out), box-shadow .2s var(--ease-out), border-color .2s var(--ease-out), opacity .2s var(--ease-out);
+            }
+            #kb-training .kb-card:hover {
+              transform: translateY(-2px);
+              border-color: color-mix(in srgb, var(--brand) 32%, var(--line));
+              box-shadow: var(--shadow-soft);
+            }
+            #kb-training .kb-card.is-off { opacity: .72; background: var(--surface-2); }
+            #kb-training .kb-card.is-renaming { flex-direction: row; align-items: center; }
+            #kb-training .kb-card-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+            #kb-training .kb-card-icon {
+              flex: none;
+              width: 38px;
+              height: 38px;
+              border-radius: 10px;
+              display: grid;
+              place-items: center;
+              color: var(--brand-strong);
+              background: var(--brand-tint);
+            }
+            #kb-training .kb-card-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+            #kb-training .kb-card-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+            #kb-training .kb-card-title {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+              flex-wrap: wrap;
+              font-size: 13px;
+              font-weight: 650;
+              color: var(--ink);
+              min-width: 0;
+            }
+            #kb-training .kb-card-title .kb-kb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+            #kb-training .kb-card-desc { font-size: 11px; line-height: 1.6; color: var(--muted); font-variant-numeric: tabular-nums; }
+            /* 底部操作条：开关居左、管理动作居右 —— 不与标题抢横向空间（挤一起会竖着摞） */
+            #kb-training .kb-card-foot {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+              padding-top: 9px;
+              border-top: 1px solid var(--line-soft);
+            }
+            #kb-training .kb-card-switch {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+              font-size: 11px;
+              color: var(--muted);
+              cursor: pointer;
+              min-width: 0;
+            }
+            #kb-training .kb-card-switch input { width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer; }
+            #kb-training .kb-card-switch:has(input:checked) { color: var(--brand-strong); }
+            #kb-training .kb-card-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+            #kb-training .kb-card-actions button { border: 0; background: none; padding: 2px 4px; font-size: 11px; color: var(--muted); cursor: pointer; }
+            #kb-training .kb-card-actions button:hover:not(:disabled) { color: var(--brand); }
+            /* 删除是这一排里唯一不可撤销的动作：hover 用红色，别和其他按钮一样变品牌紫。 */
+            #kb-training .kb-card-actions button.is-danger:hover:not(:disabled) { color: var(--rose); }
+            #kb-training .kb-card-actions button:disabled { color: var(--muted); cursor: default; }
+            #kb-training .kb-card-rename { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+            #kb-training .kb-card-rename input { flex: 1; min-width: 0; }
+
+            /* ---- 布局：两列（选资料+批次 | 确认候选）；试问验证收进弹窗 ---- */
+            #kb-training .kb-layout {
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+              gap: 14px;
+              align-items: start;
+            }
+            @media (max-width: 1180px) { #kb-training .kb-layout { grid-template-columns: minmax(0, 1fr); } }
+
+            #kb-training .kb-panel {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+              padding: 16px;
+              border: 1px solid var(--line);
+              border-radius: 14px;
+              background: var(--surface);
+              box-shadow: var(--shadow-xs);
+              min-width: 0;
+            }
+            #kb-training .kb-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+            #kb-training .kb-panel-head b { font-size: 13px; font-weight: 650; color: var(--ink); }
+            #kb-training .kb-panel-head span { font-size: 11px; font-weight: 400; color: var(--muted); text-align: right; }
+            #kb-training .kb-field { display: flex; flex-direction: column; gap: 6px; }
+            #kb-training .kb-field > span { font-size: 11px; font-weight: 500; letter-spacing: .02em; color: var(--muted); }
+            #kb-training .kb-field > span em { font-style: normal; font-weight: 400; letter-spacing: 0; opacity: .85; margin-left: 4px; }
+            /* 屏 1/2 的区块头：全局 .section-head/.section-title 语言（与搜客清单同源），
+               这里只收紧行距 —— kb-panel 自带 gap 12px，别再吃一份 margin-bottom。 */
+            #kb-training .kb-screen-head { margin-bottom: 0; }
+            #kb-training .kb-screen-head .view-sub { margin-top: 2px; font-size: 12px; }
+            #kb-training .kb-screen-head > span { font-size: 11px; color: var(--muted); flex: none; }
+            /* ---- 上传区：点击批量选择 + 拖拽，整个框就是入口（不再藏一个小按钮） ---- */
+            #kb-training .kb-dropzone {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 4px;
+              padding: 22px 16px 18px;
+              border: 1.5px dashed color-mix(in srgb, var(--brand) 38%, var(--line));
+              border-radius: 12px;
+              background: color-mix(in srgb, var(--brand-tint) 45%, var(--surface));
+              cursor: pointer;
+              text-align: center;
+              transition: border-color .18s var(--ease-out), background-color .18s var(--ease-out), transform .18s var(--ease-out);
+            }
+            #kb-training .kb-dropzone:hover,
+            #kb-training .kb-dropzone.is-drag { border-color: var(--brand); background: var(--brand-tint); }
+            #kb-training .kb-dropzone.is-drag { transform: scale(1.01); }
+            #kb-training .kb-dropzone:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+            #kb-training .kb-dropzone-icon {
+              width: 34px; height: 34px; border-radius: 10px; margin-bottom: 2px;
+              display: grid; place-items: center;
+              color: var(--brand-strong); background: var(--surface);
+              box-shadow: var(--shadow-xs);
+            }
+            #kb-training .kb-dropzone-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+            #kb-training .kb-dropzone b { font-size: 13px; font-weight: 650; color: var(--ink); }
+            #kb-training .kb-dropzone > span { font-size: 11px; color: var(--muted); }
+            /* 元信息四格：标题/描述/关联资料/归属库，两列排布（窄屏收一列） */
+            #kb-training .kb-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+            @media (max-width: 960px) { #kb-training .kb-form-grid { grid-template-columns: minmax(0, 1fr); } }
+            #kb-training .kb-source-actions { display: flex; align-items: center; gap: 12px; }
+            #kb-training .kb-source-actions .kb-hint { flex: 1; min-width: 0; }
+            #kb-training .kb-source-actions .btn { flex: none; }
+            #kb-training .kb-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+            #kb-training .kb-hint.is-warn { color: var(--amber); }
+            #kb-training .kb-run-list, #kb-training .kb-candidate-list { display: flex; flex-direction: column; gap: 10px; }
+
+            /* 行级卡片：hover 抬升 1px + 柔和投影（灵动的第二来源；位移克制不花哨） */
+            #kb-training .kb-run-card, #kb-training .kb-candidate, #kb-training .kb-kb-row {
+              transition: border-color .18s var(--ease-out), background-color .18s var(--ease-out), transform .18s var(--ease-out), box-shadow .18s var(--ease-out);
+            }
+            #kb-training .kb-run-card:hover, #kb-training .kb-candidate:hover, #kb-training .kb-kb-row:hover {
+              transform: translateY(-1px);
+              box-shadow: var(--shadow-soft);
+            }
+            #kb-training .kb-run-card {
+              border: 1px solid var(--line);
+              border-radius: 12px;
+              padding: 12px 14px;
+              background: var(--surface-2);
+              display: flex;
+              flex-direction: column;
+              gap: 8px;
+              cursor: pointer;
+            }
+            #kb-training .kb-run-card:hover { border-color: var(--line); background: var(--surface); }
+            #kb-training .kb-run-card.is-active { border-color: var(--brand); background: var(--surface); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #kb-training .kb-run-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+            #kb-training .kb-run-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+            #kb-training .kb-run-stats { font-size: 11px; color: var(--text); line-height: 1.6; }
+            #kb-training .kb-run-advice { color: var(--amber); }
+            #kb-training .kb-run-error { font-size: 11px; color: var(--amber); line-height: 1.6; }
+            /* 标签在视图与试问弹窗两处都用：双前缀 */
+            #kb-training .kb-tag, #kbProbeModal .kb-tag {
+              display: inline-flex;
+              align-items: center;
+              height: 20px;
+              padding: 0 8px;
+              border-radius: 6px;
+              font-size: 11px;
+              font-weight: 500;
+              background: var(--surface-3);
+              color: var(--text);
+              white-space: nowrap;
+            }
+            #kb-training .kb-tag.is-ok, #kbProbeModal .kb-tag.is-ok { background: var(--green-tint); color: var(--green); }
+            #kb-training .kb-tag.is-run, #kb-training .kb-tag.is-brand, #kbProbeModal .kb-tag.is-run, #kbProbeModal .kb-tag.is-brand { background: var(--brand-tint); color: var(--brand-strong); }
+            #kb-training .kb-tag.is-warn, #kbProbeModal .kb-tag.is-warn { background: var(--amber-tint); color: var(--amber); }
+            #kb-training .kb-tag.is-bad, #kbProbeModal .kb-tag.is-bad { background: var(--rose-tint); color: var(--rose); }
+            /* 知识库名可以很长：放宽截断而不是把卡片顶宽（`nowrap` 会把整行推出容器）。 */
+            #kb-training .kb-tag.is-kb { max-width: 190px; display: inline-block; line-height: 20px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+            #kb-training .kb-candidate-toolbar {
+              display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+              padding: 10px 12px;
+              border: 1px solid var(--line);
+              border-radius: 10px;
+              background: var(--surface-2);
+            }
+            #kb-training .kb-candidate-toolbar select { max-width: 132px; }
+            #kb-training .kb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+            #kb-training .kb-keyboard-hint { margin-left: auto; font-size: 11px; color: var(--muted); }
+            #kb-training .kb-candidate {
+              display: grid;
+              grid-template-columns: 22px minmax(0, 1fr);
+              gap: 10px;
+              padding: 12px 14px;
+              border: 1px solid var(--line);
+              border-radius: 12px;
+              background: var(--surface);
+            }
+            #kb-training .kb-candidate.is-selected { border-color: var(--brand-2); background: color-mix(in srgb, var(--brand-tint) 36%, var(--surface)); }
+            #kb-training .kb-candidate.is-focused { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #kb-training .kb-candidate.is-published { background: var(--green-tint); }
+            #kb-training .kb-candidate-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+            #kb-training .kb-candidate-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+            #kb-training .kb-candidate-q { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.5; word-break: break-word; }
+            #kb-training .kb-candidate-a { font-size: 12.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+            #kb-training .kb-candidate-meta { font-size: 11px; line-height: 1.6; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+            #kb-training .kb-candidate-meta a { color: var(--brand-strong); text-decoration: none; }
+            #kb-training .kb-candidate-meta a:hover { text-decoration: underline; }
+            #kb-training .kb-conf { font-variant-numeric: tabular-nums; }
+            #kb-training .kb-candidate-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--line-soft); }
+            #kb-training .kb-candidate-actions > span:first-child { font-size: 11px; color: var(--muted); }
+            #kb-training .kb-candidate-actions .btn.primary { margin-left: auto; }
+
+            /* ---- 屏 1 · 多份资料的暂存清单 ---- */
+            #kb-training .kb-staged { display: flex; flex-direction: column; gap: 6px; }
+            /* 自定义类上写了 display:flex 就必须补 [hidden] —— 否则 JS 里 .hidden=true 不起作用 */
+            #kb-training .kb-staged[hidden] { display: none; }
+            #kb-training .kb-staged-item {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              row-gap: 4px;
+              gap: 8px;
+              padding: 6px 10px;
+              border: 1px solid var(--line);
+              border-radius: 8px;
+              background: var(--surface-2);
+              font-size: 11px;
+              color: var(--text);
+              min-width: 0;
+            }
+            #kb-training .kb-staged-item b { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #kb-training .kb-staged-item span { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+            #kb-training .kb-staged-item button { flex: none; border: 0; background: none; padding: 0 2px; font-size: 11px; color: var(--amber); cursor: pointer; }
+            /* 暂存行的「来源描述」：挤不下一行时独占第二行，不把文件名挤没 */
+            #kb-training .kb-staged-item input[data-kb-staged-note] { flex: 1 1 220px; min-width: 160px; }
+
+            /* ---- 屏 2 · 候选行内编辑 ---- */
+            #kb-training .kb-edit { display: flex; flex-direction: column; gap: 6px; }
+            #kb-training .kb-edit label { display: flex; flex-direction: column; gap: 4px; }
+            #kb-training .kb-edit label > span { font-size: 11px; font-weight: 500; letter-spacing: .02em; color: var(--muted); }
+            #kb-training .kb-edit textarea { min-height: 72px; resize: vertical; }
+            #kb-training .kb-candidate.is-editing .kb-candidate-q,
+            #kb-training .kb-candidate.is-editing .kb-candidate-a { display: none; }
+            #kb-training .kb-candidate.is-editing { border-color: var(--brand); }
+            #kb-training .kb-truncated { font-size: 11px; line-height: 1.6; color: var(--amber); }
+
+            /* ---- 知识库（训练成果的资产形态）：公开/私用 + 账号级启用清单 ----
+               勾选即启用，所以每一行自己就是一个开关；「我创建的」与「别人分享的」用标签区分，
+               不另起两块 —— 两块列表会让「我到底启用了哪几个」需要跨区数一遍。 */
+            #kb-training .kb-kb-panel { gap: 12px; }
+            #kb-training .kb-kb-name {
+              font-size: 13px; font-weight: 600; color: var(--ink);
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            /* 标签沿用本视图既有的 `.kb-tag` 色板（实心浅底、无描边）：
+               自造一套描边药丸会让这块看起来像另一个页面的东西。 */
+            #kb-training .kb-kb-tag { padding: 1px 6px; border-radius: 999px; font-size: 11px; background: var(--surface-3); color: var(--text); }
+            #kb-training .kb-kb-tag.is-mine { background: var(--brand-tint); color: var(--brand-strong); }
+            #kb-training .kb-kb-tag.is-public { background: var(--green-tint); color: var(--green); }
+            #kb-training .kb-kb-notice { font-size: 11px; line-height: 1.6; color: var(--amber); }
+            #kb-training .kb-kb-notice[hidden] { display: none; }
+            #kb-training .kb-kb-notice.is-ok { color: var(--green); }
+
+            /* ---- 试问验证弹窗（HTML 放在全局弹窗区、视图之外：
+               .view 的显隐/溢出不该影响 fixed 弹窗的定位与层级；
+               样式复用全局 .modal-backdrop/.modal/modalIn 语言，这里只补内容区。） ---- */
+            #kbProbeModal .modal { width: min(680px, 100%); }
+            #kbProbeModal .modal-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; overflow-y: auto; }
+            #kbProbeModal .kb-probe-form { display: flex; gap: 8px; }
+            #kbProbeModal .kb-probe-form input { flex: 1; min-width: 0; }
+            #kbProbeModal .kb-probe-result { display: flex; flex-direction: column; gap: 10px; }
+            #kbProbeModal .kb-probe-hit {
+              border: 1px solid var(--line);
+              border-radius: 10px;
+              padding: 10px 12px;
+              background: var(--surface-2);
+              font-size: 12px;
+              line-height: 1.65;
+              color: var(--text);
+            }
+            #kbProbeModal .kb-probe-hit b { font-weight: 600; color: var(--ink); }
+            #kbProbeModal .kb-verdict {
+              padding: 10px 12px;
+              border: 1px solid var(--line);
+              border-left: 3px solid var(--brand);
+              border-radius: 8px;
+              background: var(--surface-2);
+              font-size: 12px;
+              line-height: 1.65;
+              color: var(--text);
+            }
+            #kbProbeModal .kb-forbidden {
+              padding: 10px 12px;
+              border: 1px solid #f0d5d0;
+              border-radius: 10px;
+              background: #fdf5f4;
+              font-size: 12px;
+              line-height: 1.65;
+              color: #8c2f22;
+            }
+            #kbProbeModal .kb-forbidden b { font-weight: 650; }
+            #kbProbeModal .kb-warn-line { font-size: 11px; line-height: 1.6; color: var(--amber); }
+            #kbProbeModal .kb-probe-group { display: flex; flex-direction: column; gap: 8px; }
+            #kbProbeModal .kb-probe-group > header {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              font-size: 11px;
+              font-weight: 500;
+              letter-spacing: .02em;
+              color: var(--muted);
+            }
+            #kbProbeModal .kb-probe-group > header::after { content: ""; flex: 1; height: 1px; background: var(--line-soft); }
+            #kbProbeModal .kb-cites { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+            #kbProbeModal .kb-cite { font-size: 11px; line-height: 1.6; color: var(--text); }
+            #kbProbeModal .kb-cite em { font-style: normal; color: var(--muted); }
+            /* 空态在视图与弹窗两处都用：双前缀 */
+            #kb-training .kb-empty, #kbProbeModal .kb-empty { padding: 22px; text-align: center; font-size: 12px; color: var(--muted); }
+
+            /* ---- 流水线：选资料 → 提炼 → 确认 → 发布 → 生效 ------------------
+               这一屏最常出现的困惑是「我现在该干什么」：三块面板各说各的，
+               新手要自己拼出顺序。步骤条把「走到哪 / 下一步是什么」压成一行。 */
+            #kb-training .kb-pipeline { min-width: 0; }
+            #kb-training .kb-pipeline ol {
+              display: grid;
+              grid-template-columns: repeat(5, minmax(0, 1fr));
+              gap: 10px;
+              margin: 0;
+              padding: 0;
+              list-style: none;
+            }
+            @media (max-width: 1080px) { #kb-training .kb-pipeline ol { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+            @media (max-width: 720px) { #kb-training .kb-pipeline ol { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+            #kb-training .kb-step {
+              position: relative;
+              display: grid;
+              grid-template-columns: 26px minmax(0, 1fr);
+              grid-template-rows: auto auto;
+              align-items: center;
+              gap: 1px 9px;
+              padding: 9px 12px;
+              border: 1px solid var(--line);
+              border-radius: 11px;
+              background: var(--surface-2);
+              min-width: 0;
+              transition: border-color .2s var(--ease-out), background-color .2s var(--ease-out), box-shadow .2s var(--ease-out);
+            }
+            #kb-training .kb-step b {
+              grid-row: 1 / span 2;
+              display: grid;
+              place-items: center;
+              width: 26px;
+              height: 26px;
+              border-radius: 8px;
+              background: var(--surface-3);
+              color: var(--muted);
+              font-size: 10.5px;
+              font-weight: 700;
+              letter-spacing: .02em;
+              font-variant-numeric: tabular-nums;
+              transition: background-color .2s var(--ease-out), color .2s var(--ease-out);
+            }
+            #kb-training .kb-step span { font-size: 12px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+            #kb-training .kb-step em {
+              font-style: normal;
+              font-size: 11px;
+              line-height: 1.4;
+              color: var(--muted);
+              font-variant-numeric: tabular-nums;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            /* 已完成：数字块转绿（不用整块绿底 —— 五块都绿会像五个告警） */
+            #kb-training .kb-step.is-done b { background: var(--green-tint); color: var(--green); }
+            /* 当前步：品牌描边 + 极浅底，全屏只有一块 */
+            #kb-training .kb-step.is-active {
+              border-color: var(--brand-2);
+              background: color-mix(in srgb, var(--brand-tint) 62%, var(--surface));
+              box-shadow: 0 0 0 3px var(--brand-ring);
+            }
+            #kb-training .kb-step.is-active b { background: var(--brand); color: #fff; }
+            #kb-training .kb-step.is-active em { color: var(--brand-strong); }
+
+            /* ---- 批次进度：运行中唯一能证明「还在往前走」的东西 --------------- */
+            #kb-training .kb-run-progress { display: flex; flex-direction: column; gap: 5px; }
+            #kb-training .kb-run-bar {
+              height: 5px;
+              border-radius: 999px;
+              background: var(--surface-3);
+              overflow: hidden;
+            }
+            #kb-training .kb-run-bar i {
+              display: block;
+              height: 100%;
+              border-radius: inherit;
+              background: linear-gradient(90deg, var(--brand), var(--brand-2));
+              transition: width .6s var(--ease-out);
+              position: relative;
+            }
+            /* 微光只在「运行中」出现：给静态进度条加循环动画等于伪造活动状态 */
+            #kb-training .kb-run-bar i::after {
+              content: "";
+              position: absolute;
+              inset: 0;
+              background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .6), transparent);
+              animation: kbBarShimmer 1.5s linear infinite;
+            }
+            @keyframes kbBarShimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+            /* 第一批还在飞（一次 CLI 调用常 30~90 秒）：进度条钉在 2% 看起来就是卡死。
+               这一段用不定长扫光 —— 它表达的是「在动，但还估不出剩多久」；
+               第一批产出后立刻切回真实百分比。两种语义不能混用，所以只在这一个状态下出现。 */
+            #kb-training .kb-run-progress.is-pending .kb-run-bar i {
+              width: 38%;
+              transition: none;
+              animation: kbBarIndeterminate 1.6s cubic-bezier(.45, 0, .55, 1) infinite;
+            }
+            #kb-training .kb-run-progress.is-pending .kb-run-bar i::after { animation: none; }
+            /* 位移区间刻意留在「两端都还有一截露在外面」：完全滑出容器的那几帧会看起来像停了。 */
+            @keyframes kbBarIndeterminate {
+              from { transform: translateX(-40%); }
+              to { transform: translateX(210%); }
+            }
+            #kb-training .kb-run-progress span,
+            #kb-training .kb-run-done { font-size: 11px; line-height: 1.5; color: var(--muted); font-variant-numeric: tabular-nums; }
+            #kb-training .kb-run-done { display: flex; justify-content: space-between; gap: 12px; }
+            #kb-training .kb-run-actions { display: flex; justify-content: flex-end; }
+            #kb-training .kb-run-action {
+              border: 0;
+              background: none;
+              padding: 2px 0;
+              font-size: 11px;
+              color: var(--muted);
+              cursor: pointer;
+              text-decoration: underline;
+              text-underline-offset: 2px;
+            }
+            #kb-training .kb-run-action:hover:not(:disabled) { color: var(--brand); }
+            #kb-training .kb-run-action:disabled { opacity: .55; cursor: default; text-decoration: none; }
+
+            /* 「确认高置信」：工具栏里的快捷动作，视觉上弱于主按钮、强于纯文字 */
+            #kb-training .kb-quick {
+              border: 1px solid var(--line);
+              border-radius: 7px;
+              background: var(--surface);
+              padding: 3px 9px;
+              font-size: 11px;
+              color: var(--brand-strong);
+              cursor: pointer;
+              transition: border-color .18s var(--ease-out), background-color .18s var(--ease-out);
+            }
+            #kb-training .kb-quick:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-tint); }
+            #kb-training .kb-quick:disabled { opacity: .55; cursor: default; }
+            #kb-training .kb-kb-legacy {
+              grid-column: 1 / -1;
+              padding: 8px 10px;
+              border: 1px dashed var(--line);
+              border-radius: 10px;
+              background: var(--surface-2);
+              font-size: 11px;
+              line-height: 1.6;
+              color: var(--muted);
+            }
+            #kb-training .kb-tag.is-idle { background: var(--surface-3); color: var(--muted); }
+
+            /* ---- 知识库详情弹窗（在视图之外，必须用 ID 作用域） ---- */
+            #kbEntriesModal .modal { width: min(780px, 100%); }
+            #kbEntriesModal .modal-heading p { font-size: 11px; color: var(--muted); }
+            #kbEntriesModal .modal-body {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+              padding: 14px 16px;
+              max-height: 64vh;
+              overflow-y: auto;
+            }
+            #kbEntriesModal .kb-entries-search {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              padding: 0 12px;
+              border: 1px solid var(--line);
+              border-radius: 10px;
+              background: var(--surface);
+            }
+            #kbEntriesModal .kb-entries-search:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #kbEntriesModal .kb-entries-search svg { flex: none; width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 2; }
+            #kbEntriesModal .kb-entries-search input { flex: 1; min-width: 0; border: 0; background: none; box-shadow: none; }
+            #kbEntriesModal .kb-entries-list { display: flex; flex-direction: column; gap: 10px; }
+            #kbEntriesModal .kb-entry {
+              display: flex;
+              flex-direction: column;
+              gap: 7px;
+              padding: 12px 14px;
+              border: 1px solid var(--line);
+              border-radius: 12px;
+              background: var(--surface);
+              transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
+            }
+            #kbEntriesModal .kb-entry:hover { border-color: color-mix(in srgb, var(--brand) 30%, var(--line)); box-shadow: var(--shadow-soft); }
+            #kbEntriesModal .kb-entry-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+            #kbEntriesModal .kb-entry-source { margin-left: auto; font-size: 11px; color: var(--muted); }
+            #kbEntriesModal .kb-entry-q { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.5; word-break: break-word; }
+            #kbEntriesModal .kb-entry-a { font-size: 12.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+            #kbEntriesModal .kb-entry-foot {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 10px;
+              padding-top: 6px;
+              border-top: 1px solid var(--line-soft);
+              font-size: 11px;
+              color: var(--muted);
+            }
+            #kbEntriesModal .kb-entry-revoke { border: 0; background: none; padding: 0; font-size: 11px; color: var(--amber); cursor: pointer; }
+            #kbEntriesModal .kb-entry-revoke:hover { text-decoration: underline; }
+            #kbEntriesModal .kb-tag {
+              display: inline-flex;
+              align-items: center;
+              height: 20px;
+              padding: 0 8px;
+              border-radius: 6px;
+              font-size: 11px;
+              font-weight: 500;
+              background: var(--surface-3);
+              color: var(--text);
+              white-space: nowrap;
+            }
+            #kbEntriesModal .kb-tag.is-ok { background: var(--green-tint); color: var(--green); }
+            #kbEntriesModal .kb-tag.is-brand { background: var(--brand-tint); color: var(--brand-strong); }
+            #kbEntriesModal .kb-tag.is-bad { background: var(--rose-tint); color: var(--rose); }
+            #kbEntriesModal .kb-empty { padding: 22px; text-align: center; font-size: 12px; color: var(--muted); }
+            #kbEntriesModal .kb-conf { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+            @media (prefers-reduced-motion: reduce) {
+              #kb-training .kb-run-bar i::after { animation: none; }
+              #kb-training .kb-run-bar i { transition: none; }
+              /* 不定长扫光也不动：静态的 38% 色块配文字说明，比动画更符合「减少动态」的诉求 */
+              #kb-training .kb-run-progress.is-pending .kb-run-bar i { animation: none; }
+            }
+          </style>
+
+          <header class="kb-head">
+            <div class="kb-head-mark"></div>
+            <div class="kb-head-text">
+              <h1>知识库训练</h1>
+              <span>把资料提炼成自动回复语料：人工确认后发布到训练库（运行端读一份只读副本），发布前问一句试试</span>
+            </div>
+            <div class="head-actions">
+              <button class="btn" id="kbRefreshButton" type="button">刷新</button>
+              <button class="btn primary" id="kbProbeOpenButton" type="button">问一句试试</button>
+            </div>
+          </header>
+
+          <section class="kb-pipeline" id="kbPipeline" aria-label="训练流程">
+            <ol><li class="kb-step is-active"><b>01</b><span>选资料</span><em>等待选资料</em></li></ol>
+          </section>
+
+          <section class="kb-searchbar">
+            <label class="kb-search" for="kbKnowledgeSearch">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="kbKnowledgeSearch" type="search" placeholder="搜索已训练的知识库名称…" autocomplete="off">
+            </label>
+            <span id="kbKnowledgeSummary">加载中</span>
+          </section>
+
+          <section class="panel kb-panel kb-kb-panel" id="kbKnowledgePanel">
+            <div class="kb-panel-head">
+              <b>已训练知识库 · 出稿读哪些语料</b>
+              <span>勾选即启用、取消即停用，立刻作用于试问与自动回复 —— 不需要再点保存</span>
+            </div>
+            <div class="kb-cards" id="kbKnowledgeList"><div class="kb-empty">正在加载知识库…</div></div>
+            <div class="kb-kb-notice" id="kbKnowledgeNotice" hidden></div>
+          </section>
+
+          <div class="kb-layout">
+            <section class="panel kb-panel">
+              <div class="section-head kb-screen-head">
+                <div class="section-title">
+                  <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
+                  <div><h2>选资料训练</h2><p class="view-sub">文件中心只存链接与说明；正文粘贴或读本地 PDF / Word / txt / md，可一次多份</p></div>
+                </div>
+              </div>
+
+              <div class="kb-dropzone" id="kbUploadButton" role="button" tabindex="0" aria-label="选择或拖入资料文件，支持多选">
+                <span class="kb-dropzone-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span>
+                <b>点击选择文件 —— 弹窗里可按住 Cmd / Ctrl 批量勾选</b>
+                <span>支持 PDF / Word(.docx) / txt / md / csv；扫描件 PDF 会自动逐页 OCR；也可以直接拖进这个框，或者在下面粘贴正文</span>
+                <input type="file" id="kbSourceFile" accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,application/pdf,text/plain,text/markdown" multiple hidden>
+              </div>
+
+              <div class="kb-staged" id="kbStagedList" hidden></div>
+
+              <div class="kb-form-grid">
+                <label class="kb-field">
+                  <span>资料标题<em>出处就靠它；已关联资料时用资料自己的标题</em></span>
+                  <input id="kbSourceTitle" maxlength="200" placeholder="例如：LED 灯具参数手册 V3">
+                </label>
+                <label class="kb-field">
+                  <span>来源描述<em>选填：这份资料从哪来，会跟着候选出处显示</em></span>
+                  <input id="kbSourceNote" maxlength="200" placeholder="例如：2026-10 客户 Anna 邮件确认的付款条款">
+                </label>
+                <label class="kb-field">
+                  <span>关联文件中心资料<em>选填，用于出处回溯</em></span>
+                  <select id="kbSourceAsset"><option value="">不关联</option></select>
+                </label>
+                <label class="kb-field">
+                  <span>这批成果归入哪个知识库<em>发布后按它被运行端读到</em></span>
+                  <select id="kbTargetKnowledgeBase"><option value="">新建一个知识库（用资料标题命名）</option></select>
+                </label>
+              </div>
+
+              <label class="kb-field">
+                <span>资料正文（粘贴方式）<em>段与段之间空一行，提炼会按段回指出处</em></span>
+                <textarea id="kbSourceBody" rows="8" placeholder="把资料内容粘贴到这里；选了文件时这里可以空着"></textarea>
+              </label>
+
+              <div class="kb-source-actions">
+                <p class="kb-hint" id="kbSourceHint"></p>
+                <button class="btn primary" id="kbStartRunButton" type="button">开始训练</button>
+              </div>
+
+              <div class="kb-run-list" id="kbRunList"><div class="kb-empty">还没有训练批次</div></div>
+            </section>
+
+            <section class="panel kb-panel">
+              <div class="section-head kb-screen-head">
+                <div class="section-title">
+                  <span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11.5 11 13.5 15.5 9"/><path d="M5 3h14a1 1 0 0 1 1 1v13.5a.5.5 0 0 1-.85.35L16.5 15H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg></span>
+                  <div><h2>确认候选</h2><p class="view-sub">确认过的才会发布；发布后运行端读副本，试问与自动回复立刻可用</p></div>
+                </div>
+                <span id="kbCandidateSummary">选一个批次开始</span>
+              </div>
+              <div class="kb-candidate-toolbar">
+                <select id="kbCandidateStatusFilter">
+                  <option value="pending">待确认</option>
+                  <option value="approved">已确认</option>
+                  <option value="published">已发布</option>
+                  <option value="rejected">已丢弃</option>
+                  <option value="all">全部</option>
+                </select>
+                <select id="kbCandidateKindFilter">
+                  <option value="all">全部类型</option>
+                  <option value="qa">问答对</option>
+                  <option value="snippet">口径片段</option>
+                  <option value="policy">政策</option>
+                  <option value="forbidden">禁用词</option>
+                </select>
+                <select id="kbCandidateConfidenceFilter">
+                  <option value="all">全部置信度</option>
+                  <option value="high">高置信 ≥0.90</option>
+                  <option value="mid">中等 0.50–0.90</option>
+                  <option value="low">低 &lt;0.50</option>
+                </select>
+                <label class="kb-check"><input type="checkbox" id="kbCandidateGapOnly">只看知识缺口</label>
+                <button type="button" class="kb-quick" id="kbHighConfidenceButton" title="把本批置信度 ≥0.90 的待确认候选一次性确认（仍不会自动发布）">确认高置信</button>
+                <span class="kb-keyboard-hint">J / K 上下 · 空格勾选 · E 编辑 · Enter 确认 · D 丢弃</span>
+              </div>
+              <div class="kb-candidate-list" id="kbCandidateList"><div class="kb-empty">暂无候选</div></div>
+              <p class="kb-truncated" id="kbCandidateNotice" hidden></p>
+              <div class="kb-candidate-actions">
+                <span id="kbCandidateSelectedCount">已选 0 条</span>
+                <button class="btn" id="kbSelectVisibleButton" type="button" title="勾选当前筛选下这一屏的候选">全选本页</button>
+                <button class="btn" id="kbReviewSelectedButton" type="button">确认所选</button>
+                <button class="btn" id="kbDropSelectedButton" type="button">丢弃所选</button>
+                <button class="btn primary" id="kbPublishButton" type="button" title="确认过的候选写入训练库；运行端读的是只读副本">发布到训练库</button>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -30386,6 +31405,55 @@ body.platform-mode .workspace-tabs { display:none !important; }
         </div>
       </section>
 
+      <!-- 知识库训练 · 试问验证弹窗：与插件真实检索同源（试问不计数）。
+           放在视图之外 —— .view 的显隐与溢出不该影响 fixed 弹窗的定位与层级；
+           样式复用全局 .modal-backdrop/.modal 语言（含 modalIn 进场动画）。 -->
+      <div class="modal-backdrop" id="kbProbeModal" role="dialog" aria-modal="true">
+        <div class="modal kb-probe-modal">
+          <div class="modal-head">
+            <div class="modal-heading">
+              <div class="modal-heading-mark"></div>
+              <div>
+                <h2>问一句试试</h2>
+                <p>与插件真实检索同源 · 试问不计数，随便试</p>
+              </div>
+            </div>
+            <button class="modal-close" id="kbProbeModalClose" type="button" aria-label="关闭">&times;</button>
+          </div>
+          <div class="modal-body kb-probe-body">
+            <div class="kb-probe-form">
+              <input id="kbProbeInput" placeholder="输入一句客户问法，例如：What is your MOQ?">
+              <button class="btn primary" id="kbProbeButton" type="button">试问</button>
+            </div>
+            <div class="kb-probe-result" id="kbProbeResult"><div class="kb-empty">输入一句客户问法，看插件实际会引用哪几条、会不会撞护栏</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 知识库训练 · 知识库详情弹窗：这个库里到底有哪些语料（可逐条撤回）。
+           没有它，「已发布 12 条」只是卡面上的一个数字 —— 想核对只能去插件后台翻。 -->
+      <div class="modal-backdrop" id="kbEntriesModal" role="dialog" aria-modal="true">
+        <div class="modal kb-entries-modal">
+          <div class="modal-head">
+            <div class="modal-heading">
+              <div class="modal-heading-mark"></div>
+              <div>
+                <h2 id="kbEntriesTitle">知识库</h2>
+                <p id="kbEntriesSummary">正在读取…</p>
+              </div>
+            </div>
+            <button class="modal-close" id="kbEntriesClose" type="button" aria-label="关闭">&times;</button>
+          </div>
+          <div class="modal-body kb-entries-body">
+            <label class="kb-entries-search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="kbEntriesSearch" type="search" placeholder="搜索问法或答案…" autocomplete="off">
+            </label>
+            <div class="kb-entries-list" id="kbEntriesList"><div class="kb-empty">正在读取…</div></div>
+          </div>
+        </div>
+      </div>
+
       <!-- 更新前鸣谢弹窗 (页面内 DOM, 不会被弹窗拦截器/广告拦截器阻止) -->
       <div class="modal-backdrop" id="updateCreditsModal" role="dialog" aria-modal="true">
         <div class="modal" style="width:min(560px,100%);">
@@ -30935,7 +32003,9 @@ body.platform-mode .workspace-tabs { display:none !important; }
       searchWrap && searchWrap.classList.remove("is-hidden");
       context && context.classList.toggle("is-hidden", !isCustomerView);
       if (searchInput) {
-        searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "全局搜索 / 输入模块名后回车跳转";
+        // 非客户视图不放占位提示：这一格是全局命令入口（回车直达模块），
+        // 常驻的「全局搜索 / 输入模块名后回车跳转」反而像一句说明贴在输入框里。
+        searchInput.placeholder = isCustomerView ? "搜索客户、联系人、国家或产品" : "";
       }
       if (primaryButton) primaryButton.hidden = !isCustomerView;
       if (primaryText && isCustomerView) primaryText.textContent = "新增客户";
@@ -30987,6 +32057,549 @@ body.platform-mode .workspace-tabs { display:none !important; }
     }
     @media (min-width: 1920px) {
       #lead-finder { max-width: 2120px; }
+    }
+  </style>
+  <style id="head-text-refine">
+    /* ==================================================================
+       页头「右上方文字」统一精致化 · 2026-10-14
+       ------------------------------------------------------------------
+       体检结论：各视图右上角的统计/说明文字此前是 20 多套各自为政的样式——
+         字号 9 / 10 / 10.5 / 11 / 11.5 / 12 / 16 / 17 / 18 / 19 / 20 /
+              22 / 23 / 24px 共 14 档；
+         字重 400 / 500 / 600 / 700 / 800 / 900 六档混用（含 16px+900 的
+              「处理中 15」和 10px+900 的提成标签）；
+         灰色 5 套（绿灰 #6a7975、蓝灰 #728099、暖棕 #9b937f…），
+              prospect-list 甚至直接用 rgba(0,0,0,.6) 脱离主题；
+         products / shipments 还压着暖米黄径向底 + 琥珀色数字。
+       统一规范（冷调板岩 + 品牌靛蓝）：
+         标签 label 11px / 500 / #6b7d94 / letter-spacing .02em
+         数值 value 20px / 700 / #131c2e / tabular-nums / ls -.015em
+         说明 note  11px / 400 / #94a3b6
+         状态色只用于有意义的差异（异常/风险），0 值一律不着色。
+       ================================================================== */
+    :root {
+      --ht-label: #6b7d94;
+      --ht-value: #131c2e;
+      --ht-note: #94a3b6;
+      --ht-line: #e7ecf4;
+    }
+
+    /* ---------- 1. 标签（统计块上方的说明词） ---------- */
+    #customer-pool .customer-pool-summary span,
+    #pipeline .pipeline-summary-item span,
+    #pipeline .pipeline-summary-item small,
+    #outreach-journey .oj-summary span,
+    #outreach-journey .oj-summary small,
+    #plan-growth .plan-task-stats span,
+    #approval-center .approval-metric span,
+    #maintenance-center .mt-summary span,
+    #knowledge .file-center-metrics span,
+    #exam .exam-metric-strip span,
+    #agent-skills .agent-skills-summary span,
+    #commission .commission-kpi span,
+    #products .pc-stat-label,
+    #shipments .sh-stat-label,
+    #daily-reports .dy-stat span,
+    #prospect-list .lead-command-item span,
+    #prospect-list .lead-command-item small,
+    #lead-finder .lead-pool-summary .lead-command-item span,
+    #kb-training .kb-metrics span,
+    .dense-card span {
+      color: var(--ht-label);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: .02em;
+      line-height: 1.35;
+      text-transform: none;
+      font-family: inherit;
+    }
+
+    /* ---------- 2. 数值（统计块的大数字） ---------- */
+    #customer-pool .customer-pool-summary b,
+    #pipeline .pipeline-summary-item b,
+    #outreach-journey .oj-summary b,
+    #plan-growth .plan-task-stats b,
+    #approval-center .approval-metric strong,
+    #maintenance-center .mt-summary b,
+    #knowledge .file-center-metrics b,
+    #exam .exam-metric-strip b,
+    #agent-skills .agent-skills-summary b,
+    #commission .commission-kpi b,
+    #products .pc-stat-num,
+    #shipments .sh-stat-num,
+    #daily-reports .dy-stat b,
+    #prospect-list .lead-command-item b,
+    #lead-finder .lead-pool-summary .lead-command-item b,
+    #kb-training .kb-metrics b,
+    .dense-card b {
+      color: var(--ht-value);
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -.015em;
+      line-height: 1.15;
+      font-family: inherit;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+    }
+
+    /* ---------- 3. 辅助说明（数值下方的小字） ---------- */
+    #customer-pool .customer-pool-summary small,
+    #kb-training .kb-metrics small,
+    #approval-center .approval-metric small {
+      color: var(--ht-note);
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0;
+      line-height: 1.35;
+    }
+    /* .dense-card 右上角的状态词（可复用 / 待完善）保留语义色，只统一字号字重 */
+    .dense-card small { font-size: 11px; font-weight: 600; letter-spacing: .01em; line-height: 1.3; }
+
+    /* ---------- 4. 统计卡容器：统一内边距与描边 ---------- */
+    #customer-pool .customer-pool-summary > div,
+    #maintenance-center .mt-summary > div,
+    #knowledge .file-center-metrics > div,
+    #kb-training .kb-metrics > div,
+    #agent-skills .agent-skills-summary > div { padding: 13px 16px; }
+    .dense-card { border-color: var(--ht-line); }
+    #maintenance-center .mt-summary,
+    #knowledge .file-center-metrics,
+    #kb-training .kb-metrics,
+    #agent-skills .agent-skills-summary { border-color: var(--ht-line); }
+
+    /* ---------- 5. 产品维护 / 发货跟踪：暖米黄 → 冷调石板 ---------- */
+    #products, #shipments {
+      --pc-paper: #f6f8fc;
+      --pc-paper-2: #ffffff;
+      --pc-line: #e7ecf4;
+      --pc-line-2: #eff3f9;
+      --pc-muted: #6b7d94;
+      --pc-amber: var(--brand);
+      --pc-amber-soft: var(--brand-tint);
+    }
+    .pc-head, .sh-head {
+      background: radial-gradient(120% 130% at 100% 0%, #ffffff 0%, #f7f9fd 55%, #eef3fa 100%);
+      border-bottom-color: var(--ht-line);
+    }
+    .pc-head::after, .sh-head::after { background: radial-gradient(circle, rgba(99,102,241,.10), transparent 70%); }
+    .pc-stat, .sh-stat {
+      min-width: 88px;
+      padding: 11px 15px;
+      border-color: var(--ht-line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: none;
+    }
+    .pc-stat-amber { background: linear-gradient(160deg, #f4f6ff, #eaeeff); border-color: #d8defb; }
+    .pc-stat-amber .pc-stat-num { color: var(--brand-strong); }
+    .sh-stat-blue .sh-stat-num { color: #2f6fd0; }
+    .sh-stat-green .sh-stat-num { color: #1a8f5a; }
+    .sh-stat-red .sh-stat-num { color: #c0392b; }
+    .pc-badge { color: var(--brand-strong); background: var(--brand-tint); border-color: #d8defb; }
+    #daily-reports .dy-stat { border-color: var(--ht-line); }
+
+    /* ---------- 6. 报表页脚注（深底上的浅蓝粗体水印 → 轻量小字） ---------- */
+    #reports .report-hero small {
+      color: rgba(226, 233, 245, .62);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: .06em;
+      line-height: 1.4;
+      text-transform: none;
+    }
+
+    /* ---------- 7. 开发信回流页：荧光黄 + 重复文案 ---------- */
+    #email-return-flow .deck-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #8f9aab;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: .05em;
+    }
+    #email-return-flow .deck-live b { color: #d3dbe8; font-weight: 600; }
+    #email-return-flow .deck-crumb { color: #6b7789; letter-spacing: .18em; }
+    #email-return-flow .deck-crumb b { color: #d3dbe8; }
+
+    /* ---------- 8. 线索页「处理中 / 垃圾箱」分段控件 ---------- */
+    #leads .lead-workspace-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--ht-line);
+      border-radius: 10px;
+      background: #f5f7fb;
+    }
+    #leads .lead-workspace-tabs button {
+      height: 28px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 7px;
+      color: var(--ht-label);
+      background: transparent;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0;
+      cursor: pointer;
+      transition: color .16s var(--ease-out), background-color .16s var(--ease-out);
+    }
+    #leads .lead-workspace-tabs button:hover { color: var(--ht-value); background: rgba(255, 255, 255, .8); }
+    #leads .lead-workspace-tabs button.active {
+      color: var(--brand-strong);
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(19, 28, 46, .12);
+    }
+    #leads .lead-workspace-tabs b {
+      margin-left: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      opacity: .9;
+    }
+    #leads .lead-workspace-tabs button.active b { color: var(--brand); opacity: 1; }
+
+    /* ---------- 9. 零散「右上角小字」收口 ---------- */
+    /* 待办中心「实时同步」胶囊：10px/800 → 11px/600，冷底 + 语义绿点 */
+    #todo.todo-view .todo-live-state {
+      min-height: 28px;
+      padding: 0 10px;
+      border-color: var(--ht-line);
+      border-radius: 999px;
+      color: var(--ht-label);
+      background: #f6f8fc;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .01em;
+    }
+    #todo.todo-view .todo-live-state i { width: 6px; height: 6px; background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, .14); }
+    #todo.todo-view.todo-style-night .todo-live-state { border-color: #2b3f5c; color: #b6c6dc; background: #16223a; }
+
+    /* 对接中心页头右侧说明 */
+    #integration-center .integration-launcher-head p { color: var(--ht-label); font-size: 11px; font-weight: 500; letter-spacing: .02em; }
+    #integration-center .integration-launcher-head > span { color: var(--ht-note); font-size: 11px; }
+
+    /* 技能中心 / 技能库 / 销售蒸馏 的小字 */
+    .ssc-card-head small { font-size: 11px; color: var(--ht-note); letter-spacing: .01em; }
+    #sales-distillation .sales-training-quality-empty { font-size: 11px; color: var(--ht-note); }
+
+    /* 工具箱徽章：10.5px/700 → 11px/600（保留各自的 --tc 语义色） */
+    .tool-card-badge { font-size: 11px; font-weight: 600; letter-spacing: .01em; padding: 2px 9px; }
+    .tool-card-desc { color: var(--ht-label); }
+    .view-sub { color: var(--ht-label); font-size: 12.5px; }
+
+    /* ---------- 10. 全局顶栏右上：账号 / 角色 ---------- */
+    .topbar .user-identity b { font-size: 13px; font-weight: 600; color: var(--ht-value); letter-spacing: .01em; }
+    .topbar .user-identity span { font-size: 11px; color: var(--ht-note); letter-spacing: .02em; }
+    .topbar .top-pill { color: var(--ht-label); }
+    .topbar .top-pill b { color: var(--ht-value); font-variant-numeric: tabular-nums; }
+
+    /* ---------- 11. 其余零散右上小字 ---------- */
+    #sales-skill-center .ssc-card-head small { font-size: 11px; color: var(--ht-note); letter-spacing: .01em; }
+    #lead-finder .lead-verification-kicker { color: var(--brand); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+    #problems .problem-result-count { color: var(--ht-label); font-size: 11px; font-weight: 500; letter-spacing: .02em; }
+    #daily-reports .dy-date { color: var(--ht-label); font-size: 11px; font-weight: 500; }
+    #daily-reports .dy-date input { border-color: var(--ht-line); }
+  </style>
+  <style id="input-refine">
+    /* ==================================================================
+       输入框统一精致化 · 2026-10-14
+       ------------------------------------------------------------------
+       体检方式：CDP 遍历 52 个视图 + 26 类弹窗，量出 361 个表单控件的
+                 计算字号 / 字重 / 框高 / 圆角 / 占位符颜色。
+
+       体检结论（改前，这就是「土」的根因）：
+         1) **没有字号规范**。CSS 里共有 78 条规则各自给输入框写字号，
+            实际渲染出 9 档：9 / 10 / 11 / 12 / 13 / 13.33 / 14 / 16 / 18px。
+            其中 13.33px 是浏览器的 UA 默认值 —— 全站 34 个 <select> 和
+            多个 <textarea> 从来没被设过字号（基础里只写了
+            `button, input { font: inherit }`，漏了 select/textarea），
+            而 <input> 反而继承到 body 的 16px。
+            → 同一个弹窗里：输入框 16px、下拉框 13.33px、标签 12px。
+         2) **文字撑满输入框**。框高普遍只有 32px，16px 的字占去 50%
+            （`文字高 / 框高 = 0.50`），「新增商机」整个弹窗 54 个控件
+            全部是 0.50；产品维护 / 发货跟踪的搜索框是 16px 挤在 27px 里
+            （0.59），设置页公司资料与 OCR 配置更小到 10px 挤在 32px 里。
+         3) **框高与圆角各写各的**。框高出现 27 种（17 / 18 / 19 / 24.5 /
+            25.5 / 27 / 30 / 32 / 34 / 36 / 38 / 40px…），圆角 8 种
+            （0 / 3 / 6 / 7 / 8 / 9 / 10 / 12px），裸 <select> 只有 19px 高、
+            直角、原生外观（产品维护「全部币种」、技能库三个筛选）。
+         4) **占位符（Hint）不像提示**。57 个带 placeholder 的控件里
+            55 个吃的是浏览器默认灰 rgb(117,117,117)；16px 字号下它和
+            已填内容几乎一样重，用户会以为「里面已经有字了」；而且全站
+            **没有任何一条 `:focus::placeholder` 规则** —— 点进去提示不消失。
+         5) 备注页标题框更直接：无选中时 `titleEditor.value = "暂无备忘"`
+            把提示写进了 value，点它当然不消失（已改为走 placeholder）。
+
+       统一规范（本块是唯一真相；新增界面把选择器补进对应分组即可）：
+         字号  常规 13px（= --fs-sm）· 高密度表格内联 12px · 大标题型 14px
+         字重  常规 400 · 标题型 600
+         占位符 一律 #94a3b6（视觉重量明显低于正文），聚焦即透明消失
+         聚焦环 一律品牌色描边 + var(--brand-ring) 光环（原来三套：teal/
+                var(--brand)/不可见）
+         高度  不再逐处重写 —— 只在下面「几何归一」里收拾已经跑偏的裸控件
+       ================================================================== */
+    :root {
+      --ctrl-fs: 13px;          /* 常规表单控件字号 */
+      --ctrl-fs-dense: 12px;    /* 高密度表格内联编辑 */
+      --ctrl-ph: #94a3b6;       /* 占位符统一色（与页头「说明」层同色） */
+      --ctrl-line: #dbe3ee;     /* 控件描边（比 --line 略冷） */
+    }
+
+    /* ---------- 1. 字号归一：一处定档，不可被历史规则压回 ---------- */
+    /* 78 条历史规则落在这两档之外的全部作废。用 !important 是刻意的：
+       输入框字号必须只有一个来源，否则下一次又会长出第 10 档。 */
+    input,
+    select,
+    textarea {
+      font-family: inherit;
+      font-size: var(--ctrl-fs) !important;
+      font-weight: 400 !important;
+      letter-spacing: 0;
+    }
+
+    /* 1.1 例外：刻意放大的，只有这三处 */
+    .mail-subject-field input {
+      font-size: 15px !important;
+      font-weight: 600 !important;
+    }
+    .login-field input,
+    .login-field select {
+      font-size: 14px !important;
+    }
+
+    /* 1.2 高密度档 12px：表格内联编辑与紧凑矩阵 */
+    .items-table td input,
+    #maintenance-center .mt-matrix input,
+    #maintenance-center .mt-matrix select,
+    .memo-meta-input,
+    .exam-bank-toolbar input,
+    .question-bank-toolbar select,
+    .website-table input,
+    #lead-finder .lead-verification-grid input,
+    #lead-finder .lead-verification-grid textarea,
+    #lead-finder .lead-table input,
+    .prospect-toolbar input,
+    .prospect-bulkbar select,
+    .prospect-custom-dates input {
+      font-size: var(--ctrl-fs-dense) !important;
+    }
+
+    /* 1.3 标题型 14px：备注标题（原 18px/800，像个大标题不像输入框） */
+    .memo-title-input {
+      font-size: 14px !important;
+      font-weight: 600 !important;
+      letter-spacing: -.005em;
+    }
+
+    /* ---------- 2. 占位符（Hint）：统一色 + 聚焦即消失 ---------- */
+    input::placeholder,
+    textarea::placeholder {
+      color: var(--ctrl-ph) !important;
+      opacity: 1 !important;
+      font-weight: 400 !important;
+    }
+    /* 「如果是 Hint，点击后就应该消失」——聚焦即透明，
+       不再和已填内容混在一起。失焦自动回来。 */
+    input:focus::placeholder,
+    textarea:focus::placeholder {
+      color: transparent !important;
+    }
+    /* 键盘用户同理（有些浏览器 :focus 不含 :focus-visible 场景） */
+    input:focus-visible::placeholder,
+    textarea:focus-visible::placeholder {
+      color: transparent !important;
+    }
+
+    /* ---------- 3. 聚焦反馈归一：一律品牌色 + 品牌光环 ---------- */
+    /* 改前全站有 41 条聚焦规则、6 套互不相干的光环色：
+       teal rgba(15,118,110,.x)（晨白主题下是海蓝主题的遗留色）、#5ba99f、
+       #72a9a3、#91a9e9、#87a7eb、#8fc5b8、#91b8ad、var(--td-brand-color)。
+       现在统一为 var(--brand) 描边 + var(--brand-ring) 光环；
+       语义色除外（#b42318 的「单证缺字段」红环保留）。
+       这里的每个选择器都与原规则逐字相同 —— 靠「本块在文档最后」取胜，
+       不用 !important，避免压制后续语义态。 */
+    .form-field input:focus,
+    .form-field select:focus,
+    .form-field textarea:focus,
+    .memo-list-tools > input:focus,
+    .memo-meta-input:focus,
+    .memo-editor:focus,
+    .doc-style-bar select:focus,
+    .doc-item-grid select:focus,
+    .customer-view-select:focus,
+    #lead-finder .lead-table input:focus,
+    #lead-finder .lead-form-grid .lead-field select:focus,
+    #lead-finder .lead-brief-prompt textarea:focus,
+    .mail-goal-field textarea:focus,
+    .engine-source-select:focus,
+    .page-toolbar .field-search input:focus,
+    .page-toolbar .select:focus,
+    .product-modal .form-item textarea:focus,
+    .shipment-modal .form-field textarea:focus,
+    .items-table td input:focus,
+    .question-bank-editor-panel .form-field textarea:focus,
+    .login-field select:focus,
+    .modal-body input:focus,
+    .modal-body select:focus,
+    .modal-body textarea:focus,
+    .outreach-policy-modal .form-grid > label > input[type="number"]:focus,
+    #prospect-list .form-field textarea:focus,
+    .prospect-toolbar-v2 select:focus,
+    .cl-inputs input:focus,
+    .cl-select:focus,
+    .ac-company-select:focus,
+    .ac-search input:focus,
+    #integration-center .local-runner-prompt-field textarea:focus,
+    .oj-toolbar input:focus,
+    .oj-toolbar select:focus,
+    #agent-skills .agent-tuning-command input:focus,
+    #agent-skills .agent-skills-toolbar input:focus,
+    #agent-skills .agent-skills-toolbar select:focus,
+    #leads .lead-inquiry-section textarea:focus,
+    #whatsapp .wa-threads-head input:focus,
+    #whatsapp .wa-compose textarea:focus,
+    #whatsapp .wa-bind-box input:focus,
+    .customs-field input:focus,
+    .customs-item-edit-row input:focus,
+    .customer-pool-toolbar input:focus,
+    .customer-pool-toolbar select:focus,
+    .customer-filter-row input:focus,
+    .customer-filter-row select:focus,
+    .lead-filter-row input:focus,
+    .lead-filter-row select:focus,
+    .pipeline-toolbar input:focus,
+    .pipeline-closed-filters input:focus,
+    .agent-skills-toolbar input:focus,
+    .agent-skills-toolbar select:focus,
+    .prospect-toolbar input:focus,
+    .trade-recognition-template-bar input:focus,
+    .trade-document-import-form input:focus,
+    .trade-document-import-form select:focus,
+    .trade-document-import-form textarea:focus,
+    .document-seller-bank textarea:focus,
+    .data-table td input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-ring);
+      outline: 0;
+    }
+    /* 备注标题是「只有底边线」的输入框，聚焦时不要长出一整圈方框 */
+    .memo-title-input:focus {
+      border-color: transparent;
+      border-bottom-color: var(--brand);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 0 0 3px var(--brand-ring);
+    }
+
+    /* ---------- 4. 几何归一：收拾跑偏的控件 ---------- */
+    /* 4.0 圆角：全站 14 种取值（0/3/4/5/6/7/8/9/10/12/16px + 3 个变量）
+       收敛为唯一一种 --radius-sm。半径只会变小不会变大，不撑破布局。
+       复选框 / 单选 / 滑块 / 文件 / 取色不吃圆角（会被切变形）。 */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+    select,
+    textarea {
+      border-radius: var(--radius-sm) !important;
+    }
+    /* 例外只有两个：
+       ① 登录页是独立一屏（紫调、柔角 12px），保留自己的设计语言；
+       ② 备注标题是「只有一条底线」的输入框，圆角会把底线两端翘起来。 */
+    .login-field input,
+    .login-field select {
+      border-radius: 12px !important;
+    }
+    input.memo-title-input {
+      border-radius: 0 !important;
+    }
+
+    /* 4.1 没被任何类选择器管过的原生 <select> 兜底：
+       此前是 19px 高 + 直角 + UA 外观。 */
+    select {
+      min-height: 30px;
+      border: 1px solid var(--ctrl-line);
+      background-color: var(--surface);
+      color: var(--ink);
+    }
+    select:disabled,
+    input:disabled,
+    textarea:disabled {
+      color: #a2adbd;
+      background-color: var(--surface-2);
+      cursor: not-allowed;
+    }
+
+    /* 4.2 搜索框：产品维护 / 发货跟踪（16px 挤在 27px 的直角框里） */
+    .pc-toolbar .field-search input,
+    .sh-toolbar-right .field-search input {
+      height: 32px;
+      padding: 0 10px;
+      border: 1px solid var(--ctrl-line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    /* 4.3 产品维护工具栏的币种下拉（原 19px 高） */
+    .pc-toolbar select {
+      min-height: 30px;
+      padding: 0 6px;
+    }
+
+    /* 4.4 设置页「公司资料 / OCR / CLI」：10px 小字 + 19~25px 小下拉 */
+    .company-profile-form input,
+    .company-profile-form select,
+    .company-profile-form textarea {
+      min-height: 32px;
+      border-color: var(--ctrl-line);
+    }
+    .company-profile-form select {
+      padding: 0 8px;
+    }
+    .company-profile-form textarea {
+      padding: 8px 10px;
+      line-height: 1.55;
+    }
+
+    /* 4.5 其余零散：兑换日志筛选 / 数据库维护 / 搜客定时频率 */
+    .exchange-log-filters select,
+    .database-control-field select,
+    .lead-schedule-frequency select {
+      min-height: 30px;
+      border-radius: var(--radius-sm);
+      border-color: var(--ctrl-line);
+      padding: 0 6px;
+    }
+    .database-control-field input {
+      min-height: 32px;
+      border-radius: var(--radius-sm);
+      border-color: var(--ctrl-line);
+      padding: 0 9px;
+    }
+
+    /* 4.6 搜客雷达校验网格：11px/700 的输入框提到 12px/500 + 正常框形 */
+    #lead-finder .lead-verification-grid input {
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-weight: 500 !important;
+    }
+    #lead-finder .lead-verification-grid input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-ring);
+    }
+
+    /* 4.7 待办快速新增：整条 42px 高，里面却写 12px */
+    #todo.todo-view .quick-add input {
+      font-size: var(--ctrl-fs) !important;
+    }
+
+    /* ---------- 5. 表单提示行（输入框下方的说明）与新增规范对齐 ---------- */
+    .field-hint {
+      color: #94a3b6;
+      font-size: 12px;
+      line-height: 1.5;
     }
   </style>
   <script type="module" src="/src/prototype-api.ts"></script>

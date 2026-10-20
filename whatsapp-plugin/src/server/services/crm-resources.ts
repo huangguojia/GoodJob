@@ -25,6 +25,14 @@ export const RESOURCE_LIST_PATH = "/api/agent/resources";
 export const RESOURCE_RECOMMEND_PATH = "/api/agent/resources/recommend";
 export const RESOURCE_FEEDBACK_PATH = "/api/agent/resources/feedback";
 export const RESOURCE_STATS_PATH = "/api/agent/resources/stats";
+/**
+ * 资料库目录快照（文件中心的治理视图）。
+ *
+ * 与 `RESOURCE_LIST_PATH` 的分工：`list` 回答「有哪些资料可以推」（四源混合、
+ * 只出 published、按可达性过滤），`catalog` 回答「资料库里有什么、治理到什么程度」
+ * （单看文件中心，带词表 / 质量标记 / 两池归属 / 含草稿与归档的全量计数 + `since` 增量）。
+ */
+export const RESOURCE_CATALOG_PATH = "/api/agent/resources/catalog";
 
 export function resourceRevealPath(sourceType: ResourceSourceType | string, id: string): string {
   return `/api/agent/resources/${encodeURIComponent(sourceType)}/${encodeURIComponent(id)}/reveal`;
@@ -67,6 +75,15 @@ export interface CrmResourceCandidate {
   match: CrmResourceMatch;
   reasons: CrmResourceReason[];
   hitTerms: string[];
+  /**
+   * 人工校订标记（只有 file 源有意义）。
+   *
+   * ⚠️ CRM 侧**一直在返回**这两个字段，插件此前没声明、于是整个丢掉了 ——
+   * 表现就是「核心池 / 长尾池」在检索里真的分了权重，界面上却完全看不出来。
+   */
+  verified?: boolean;
+  /** 两池归属：core = 已校订 / 非 file 源；longtail = 未校订的 file 资料（检索已 ×0.5）。 */
+  pool?: "core" | "longtail";
 }
 
 export interface CrmResourceRetrieval {
@@ -120,6 +137,74 @@ export interface CrmResourceStatsResponse {
     adoptionRate: number;
     sendRate: number;
   }>;
+  warnings: string[];
+}
+
+/** 目录快照里的一条资料（`GET /api/agent/resources/catalog` 的 items 元素）。 */
+export interface CrmCatalogItem {
+  id: string;
+  title: string;
+  category: string;
+  tags: string[];
+  description: string;
+  fileType: string;
+  version: string;
+  /** published（目录里只会出现这个）/ draft / review / archived。 */
+  status: string;
+  verified: boolean;
+  pool: "core" | "longtail";
+  /**
+   * 点了能不能拿到东西。false = 「待补链接」——
+   * 插件应当把它标出来，而不是摆一个必然取不到地址的按钮。
+   */
+  hasExternalLink: boolean;
+  /** 治理软校验命中项：标题过短 / 缺少说明 / 缺少标签 / 缺少链接。 */
+  qualityFlags: string[];
+  accessCount: number;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 资料库目录快照（文件中心的只读治理视图）。
+ *
+ * **仍然不含任何 URL** —— 这是 `RESOURCE-HUB-DESIGN` 的硬约定：真实地址的唯一出口是 reveal。
+ * `hasExternalLink` 只说"有没有"，不说"是什么"。
+ */
+export interface CrmResourceCatalog {
+  revision: {
+    generatedAt: string;
+    /** 下次请求该传回去的 `since`。空串 = 目录里一份 published 都没有。 */
+    latestUpdatedAt: string;
+    total: number;
+    /** 治理口径摘要：计数没变就不必重画面板。 */
+    fingerprint: string;
+  };
+  vocabulary: {
+    categories: Array<{ value: string; usageCount: number }>;
+    tags: Array<{ value: string; usageCount: number }>;
+  };
+  governance: {
+    /** 这几个按**全量可见**算（含草稿 / 待审 / 已归档）——要催的正是它们。 */
+    total: number;
+    published: number;
+    draft: number;
+    review: number;
+    archived: number;
+    verified: number;
+    unverified: number;
+    /** 两池：corePool = 已校订（检索 ×1.0），longTailPool = 未校订（检索 ×0.5）。 */
+    corePool: number;
+    longTailPool: number;
+    missingLink: number;
+    orphans: number;
+    qualityFlags: Record<string, number>;
+    byCategory: Array<{ category: string; total: number; verified: number; missingLink: number }>;
+  };
+  items: CrmCatalogItem[];
+  /** 因 `limit` 未返回的条数（>0 表示目录没看全，界面应当说出来）。 */
+  truncated: number;
   warnings: string[];
 }
 
@@ -181,7 +266,10 @@ export class ResourceHubClient {
           sourceType: options.sourceType,
           category: options.category,
           fileType: options.fileType,
-          limit: options.limit
+          limit: options.limit,
+          // 插件面板的目录检索只给「点了能拿到东西」的资料（CRM 侧可达性闸，G5）。
+          // CRM 自己的治理视图不传这个参数，那里「待补链接」正是要展示的对象。
+          reachable: "1"
         }
       }
     );
@@ -232,6 +320,23 @@ export class ResourceHubClient {
     return crmRequestJson<CrmResourceStatsResponse>(this.transport, userId, RESOURCE_STATS_PATH, {
       method: "GET",
       query: { days }
+    });
+  }
+
+  /**
+   * 资料库目录快照（文件中心的治理视图）。
+   *
+   * 与 `list` 的区别不只是字段多几个：`list` 是**为了推**（四源混合、只出 published、
+   * 默认按可达性过滤掉没链接的），`catalog` 是**为了治**（只看文件中心，带词表、
+   * 质量标记、两池归属、含草稿与归档的全量计数）。所以它**不过滤可达性** ——
+   * 「待补链接」正是要治理的对象，滤掉就看不见了。
+   *
+   * `since` 传上次响应的 `revision.latestUpdatedAt` 即得增量。
+   */
+  async catalog(userId: string, options: { since?: string; limit?: number } = {}): Promise<CrmResourceCatalog> {
+    return crmRequestJson<CrmResourceCatalog>(this.transport, userId, RESOURCE_CATALOG_PATH, {
+      method: "GET",
+      query: { since: options.since, limit: options.limit }
     });
   }
 }

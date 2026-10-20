@@ -20,7 +20,9 @@ const denied = [
   "/api/integrations/tools/tool_a/test",
   "/api/agent/plan",
   "/api/agent/runs/one",
-  "/api/agent/api/request"
+  "/api/agent/api/request",
+  "/api/kb/training/runs",
+  "/api/kb/training/candidates/publish"
 ];
 denied.forEach((path) => assert.ok(deniedAgentApiReason(path), `${path} 必须被拒绝`));
 

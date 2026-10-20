@@ -757,6 +757,16 @@ export interface CustomerActivity {
   operatorId: string;
   nextReminder: string;
   createdAt: string;
+  /**
+   * 最近一次编辑时间。从未编辑过则为 undefined（老数据也是）。
+   *
+   * 为什么要有这两个字段：WhatsApp 自动同步会**自动**写入跟进记录，
+   * 人修正它是常态。没有留痕就分不清「机器写的」和「人改过的」，
+   * 出问题时无法追溯——而自动写入恰恰是最需要能追溯的那一类数据。
+   */
+  updatedAt?: string;
+  /** 最近一次编辑人。注意与 `operatorId`（**记录创建人**）是两回事。 */
+  editedBy?: string;
 }
 
 export interface CustomerAcquisitionSourceEvent {
@@ -1003,7 +1013,7 @@ export interface KnowledgeAsset {
   id: string;
   title: string;
   category: string;
-  status: "published" | "draft" | "review";
+  status: "published" | "draft" | "review" | "archived";
   ownerId: string;
   teamId?: string;
   version: string;
@@ -1014,6 +1024,10 @@ export interface KnowledgeAsset {
   description?: string;
   tags?: string[];
   accessCount?: number;
+  /** 人工校订标记（两池分层：核心池 verified ×1.0 / 长尾池 ×0.5）。默认 false。 */
+  verified?: boolean;
+  /** 归档原因（人工归档 / 批量归档 / 版本线性化覆盖），仅 status=archived 时有意义。 */
+  archivedReason?: string;
   lastAccessedAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -4152,7 +4166,7 @@ export interface Deal {
   archivedAt?: string;
 }
 
-export type DealEventType = "created" | "updated" | "stage" | "follow_up" | "quote" | "sample" | "negotiation" | "payment" | "document" | "won" | "lost" | "archived";
+export type DealEventType = "created" | "updated" | "stage" | "follow_up" | "quote" | "sample" | "negotiation" | "payment" | "document" | "won" | "lost" | "archived" | "restored";
 
 export interface DealEvent {
   id: string;

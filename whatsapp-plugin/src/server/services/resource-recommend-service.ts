@@ -14,6 +14,7 @@ import {
   toCrmConversation,
   type CrmRecommendationResponse,
   type CrmResourceCandidate,
+  type CrmResourceCatalog,
   type CrmResourceMatch,
   type CrmResourceReason,
   type CrmResourceStatsResponse,
@@ -100,6 +101,16 @@ export interface SuggestedResource {
   match: CrmResourceMatch;
   reasons: CrmResourceReason[];
   hitTerms: string[];
+  /**
+   * 人工校订过 = 核心池。
+   *
+   * ⚠️ 这是本轮补上的一层：CRM 侧**早就在返回** `verified` / `pool`，但插件这边
+   * ① `CrmResourceCandidate` 没声明这两个字段、② `toSuggested()` 是显式列举字段的，
+   * 于是两道关都把它们滤掉了 —— 检索里真的按两池打了分，界面上却看不出来。
+   */
+  verified: boolean;
+  /** 两池归属：core = 已校订（检索 ×1.0）；longtail = 未校订（检索已 ×0.5）。 */
+  pool: "core" | "longtail";
   /** CLI 复排给出的挑选理由（空串 = 未复排）。 */
   why: string;
   /** CLI 复排给出的、可直接发给客户的一句话（**永不自作主张发送**，由业务员决定）。 */
@@ -148,6 +159,15 @@ export interface ResourceSuggestInput extends Omit<ResourceSearchInput, "q"> {
   withAi?: boolean;
   model?: string;
   effort?: string;
+  /**
+   * 调用方这一轮要的引擎（`rules | ai | cli | auto`）。
+   *
+   * 只用来判断「这一发是不是快稿」：`engine=rules` 的语义是不跑模型，
+   * 而资料复排本身就是一次模型调用，所以按约定一并关掉（见 suggest() 里的 useAi）。
+   * 声明在这里而不是靠 `any` 透传 —— 之前漏了这个字段，`npm run typecheck`
+   * 的第二份配置（tsconfig.server.json）一直红着，而默认配置查不出来。
+   */
+  engine?: string;
 }
 
 interface Retrieval {
@@ -191,6 +211,10 @@ export function toSuggested(candidate: CrmResourceCandidate): SuggestedResource 
     match: candidate.match,
     reasons: [...(candidate.reasons ?? [])],
     hitTerms: [...(candidate.hitTerms ?? [])],
+    verified: candidate.verified === true,
+    // 缺省口径与 CRM 一致（verified → core，否则 longtail）。`pool` 缺省成 core 会给出
+    // 错的徽章 —— 非 file 源在 CRM 侧恒为核心池，而 recommend 只给 file 源打 longtail。
+    pool: candidate.pool ?? (candidate.verified === true ? "core" : "longtail"),
     why: "",
     suggestedLine: ""
   };
@@ -276,6 +300,17 @@ export class ResourceRecommendService {
   }
 
   /**
+   * 资料库目录快照：文件中心有什么、治理到什么程度、类目词表长什么样。
+   *
+   * 与 `stats` 同一档：**允许抛错**。它是独立的治理面板数据，不挂在回复链上 ——
+   * 失败时把上游原因如实抛给路由（502），比在插件侧伪造一份「空目录」诚实得多。
+   */
+  async catalog(ownerUserId: string, options: { since?: string; limit?: number } = {}): Promise<CrmResourceCatalog> {
+    if (!this.hub) throw new CrmUnavailableError(this.unavailableReason());
+    return this.hub.catalog(ownerUserId, options);
+  }
+
+  /**
    * 只要资料（快，不调模型）。给面板一个「立刻有东西」的初值。
    *
    * 两种模式：
@@ -320,7 +355,15 @@ export class ResourceRecommendService {
       result.tookMs = Date.now() - started;
       return result;
     };
-    if (input.withAi === false) return finish();
+    /**
+     * `engine=rules` 的语义是「这条路不跑模型」，而**资料复排本身就是一次模型调用**。
+     * 两者是两个独立开关，只关掉回复那条时，实测回复 70ms 就绪、整个响应仍被复排
+     * 卡 11.5 秒（10/20：默认 11517ms / 0 条资料，withAi:false 70ms / 1 条）。
+     * 所以调用方只给了 `engine` 时按这条约定兜底关闭复排；显式 `withAi:true` 仍然尊重 ——
+     * 「我要慢的、但挑得准一点」不该被这个默认值挡掉。
+     */
+    const useAi = input.withAi === true ? true : input.withAi === false ? false : input.engine !== "rules";
+    if (!useAi) return finish();
     if (!retrieval.candidates.length) return finish();
     if (!this.cli) {
       result.warnings.push("本机 CLI 未接入，资料挑选已降级为算法排序");

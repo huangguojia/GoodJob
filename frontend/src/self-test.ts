@@ -577,7 +577,7 @@ assert.doesNotMatch(apiLayer, /正在生成开发信/, "开发信进入时不得
 assert.match(apiLayer, /scenario: developmentEmailScenario,[\s\S]*goal: developmentEmailGoal,[\s\S]*requireAi/, "开发信 AI 请求必须携带场景、自然语言目标和明确生成开关");
 assert.match(apiLayer, /developmentEmailScenario === "custom_goal" && !developmentEmailGoal/, "自然语言目标场景调用 AI 前必须校验目标");
 assert.match(apiLayer, /activateNavView\("development-email", \(\) => void generateDevelopmentEmailDraftPage\(\)\)/, "进入开发信页面只能加载基础模板");
-assert.match(apiLayer, /return state\.user\?\.theme \|\| getStoredTheme\(\) \|\| "rose";/, "系统无已保存主题时必须默认使用玫红");
+assert.match(apiLayer, /return state\.user\?\.theme \|\| getStoredTheme\(\) \|\| THEME_DEFAULT;/, "系统无已保存主题时必须回落到系统默认主题（晨白 Paper）");
 assert.match(apiLayer, /templateStyle: profile\?\.templateStyle \|\| "rose" as const/, "新建单据必须默认使用团队玫红主题");
 assert.match(apiLayer, /document\.type === "PI" && document\.templateStyle === "longtec"/, "PI 必须支持 Longtec 专用模板预览");
 assert.match(prototype, /id="docTemplateInput">[\s\S]*value="longtec"/, "单据编辑器必须提供 Longtec 可选模板");
@@ -606,5 +606,435 @@ assert.match(apiLayer, /syncLfindTaskPolling/, "Lfind 必须异步轮询任务�
 assert.match(apiLayer, /searchReport/, "搜客候选必须接收每行搜索报告");
 assert.match(apiLayer, /renderLeadSearchReportCell/, "自动搜客表格必须展示每行搜索报告摘要");
 assert.match(apiLayer, /renderLeadSearchReportPanel/, "候选详情必须展示完整搜索报告和验证来源");
+
+// ---------------------------------------------------------------------------
+// 知识库训练工作台（P1）
+//
+// 这组断言守的是**最容易静默失效的地方**：控件 id 必须 index.html 与 prototype-api.ts
+// 两端都对得上（少一个就是「点了没反应」），以及前端调用的路由后端必须真的存在。
+// ---------------------------------------------------------------------------
+/**
+ * 断言源码里存在**生效的**代码行 —— 注释里出现同名字符串不算数。
+ *
+ * 这条是踩出来的：第一版用 `apiLayer.includes("bindKbTrainingEvents();")` 断言，
+ * 把调用整行注释掉后断言依然通过（注释里也有那串字符）。会红的自检才算自检。
+ */
+function kbHasLiveLine(source: string, matcher: (line: string) => boolean, message: string) {
+  const hit = source.split("\n").some((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
+    return matcher(line);
+  });
+  assert.ok(hit, message);
+}
+
+/**
+ * 取「某函数定义之后、下一个函数定义之前」的源码片段 —— 用于「这段逻辑必须落在这个函数里」的断言。
+ *
+ * 这条也是踩出来的：写「勾选后必须在 finally 里重读」时用的是
+ * `toggleKbKnowledgeEnabled[\s\S]{0,1600}?finally \{…await loadKbKnowledgeBases…`，
+ * 但同一文件后面还有两个函数也有 `finally` + 同样的调用，惰性匹配直接跳过去命中它们 ——
+ * 把该函数里的那一行删掉，断言依然全绿。凡"必须在这个函数里"的判据都得先切出函数体。
+ */
+function kbSourceBetween(source: string, fromMarker: string, toMarker: string): string {
+  const start = source.indexOf(fromMarker);
+  if (start < 0) return "";
+  const end = source.indexOf(toMarker, start + fromMarker.length);
+  return source.slice(start, end < 0 ? source.length : end);
+}
+
+assert.match(prototype, /<div class="view" id="kb-training">/, "index.html 必须提供知识库训练视图容器");
+assert.match(prototype, /data-view="kb-training"/, "知识库训练必须有导航入口");
+// ⚠️ 真实事故（用户报「为什么所有界面都有知识库训练？？？」）：视图自带的 <style> 里
+//    写成 `#kb-training { display:flex }`（权重 1,0,0），压掉了全局的
+//    `.view { display:none }`（权重 0,1,0）→ 该视图不再受活动态约束，**每个页面都渲染**。
+//    这类错误的通用形态是「以视图 id 为唯一主体、且体内写 display」，所以按视图清单逐个扫。
+//    注意：判据必须跑在**剥掉注释**的副本上 —— 上面那段说明文字里就写着 `#kb-training { display:flex }`，
+//    不剥注释的话断言会命中自己的注释（第一版就这么误报过一次）。
+const prototypeNoComments = prototype.replace(/\/\*[\s\S]*?\*\//gu, "");
+const kbViewIdList = [...prototype.matchAll(/<div class="view" id="([^"]+)"/gu)].map((match) => match[1]);
+kbViewIdList.forEach((viewId) => {
+  assert.doesNotMatch(
+    prototypeNoComments,
+    new RegExp(`#${viewId}\\s*\\{[^}]*display\\s*:`, "u"),
+    `视图 #${viewId} 的样式不得直接写 display —— 会压掉 .view{display:none}，该视图会在所有页面渲染（布局态请写 #${viewId}.active）`
+  );
+});
+assert.match(
+  prototypeNoComments,
+  /#kb-training\.active\s*\{[^}]*display:\s*flex/u,
+  "知识库训练激活态必须以 flex 渲染三屏（布局态限定在 .active 上）"
+);
+// 来源描述：资料从哪来 / 谁给的口径，跟着候选出处一起显示。三个落点缺一不可 ——
+// 少了输入框用户填不了；少了提交体填了也不生效；少了出处渲染生效了也看不见。
+assert.match(prototype, /id="kbSourceNote"/u, "屏 1 必须有「来源描述」输入框 #kbSourceNote");
+kbHasLiveLine(apiLayer, (line) => line.includes('"#kbSourceNote"'), "prototype-api.ts 必须读取 #kbSourceNote");
+assert.match(prototype, /data-kb-staged-note/u, "暂存清单每行必须有「来源描述」输入框");
+kbHasLiveLine(apiLayer, (line) => line.includes("kbStagedNote"), "暂存描述输入必须绑定 data-kb-staged-note（dataset.kbStagedNote）");
+kbHasLiveLine(apiLayer, (line) => line.includes("note: soloStaged && mainNote ? mainNote : item.note || undefined"), "暂存项提交时必须带上来源描述");
+kbHasLiveLine(apiLayer, (line) => line.includes("note: mainNote || undefined"), "正文框那一份提交时必须带上来源描述");
+assert.match(
+  kbSourceBetween(apiLayer, "function kbSourceRefHtml", "function kbCandidateStatusTag"),
+  /escapeHtml\(ref\.note\)/u,
+  "候选出处必须渲染来源描述（且要过 escapeHtml）"
+);
+// 出处三件套随发布到插件：试问引用卡片必须显示「《文件》§段落 · 描述」。
+// KbProbeCitation 要有三件套字段；kbProbeCitationHtml 里要拼《标题》并渲染出处行（都过 escapeHtml）。
+assert.match(
+  apiLayer,
+  /interface KbProbeCitation\s*\{[^}]*sourceTitle\?[^}]*sourceAnchor\?[^}]*sourceNote\?/u,
+  "KbProbeCitation 必须声明出处三件套（sourceTitle/sourceAnchor/sourceNote）"
+);
+assert.match(
+  kbSourceBetween(apiLayer, "function kbProbeCitationHtml", "function renderKbProbe"),
+  /citation\.sourceTitle \? `《\$\{citation\.sourceTitle\}》`/u,
+  "试问引用必须显示文件名（《文件》格式，出处整行统一过 escapeHtml）"
+);
+assert.match(
+  kbSourceBetween(apiLayer, "function kbProbeCitationHtml", "function renderKbProbe"),
+  /出处：\$\{escapeHtml\(sourceBits\)\}/u,
+  "试问引用必须渲染「出处：」整行（且要过 escapeHtml）"
+);
+kbHasLiveLine(apiLayer, (line) => line.trim() === '"kb-training": "知识库训练",', "viewLabels 必须注册知识库训练");
+kbHasLiveLine(apiLayer, (line) => line.trim() === '"kb-training": "training.read",', "知识库训练必须复用 training.read 权限");
+kbHasLiveLine(apiLayer, (line) => line.trim() === 'if (view === "kb-training") {', "进入知识库训练必须挂载加载钩子");
+kbHasLiveLine(apiLayer, (line) => line.trim() === "void loadKbTraining({ silent: true });", "进入知识库训练必须加载工作台（且为静默加载）");
+kbHasLiveLine(apiLayer, (line) => line.trim() === "bindKbTrainingEvents();", "知识库训练事件必须在启动时绑定一次");
+kbHasLiveLine(apiLayer, (line) => line.trim() === 'if (activeView === "kb-training" && view !== "kb-training") stopKbTrainingPoll();', "离开知识库训练必须停止轮询");
+kbHasLiveLine(apiLayer, (line) => line.includes('candidate.preselect && candidate.status === "pending"'), "预勾选必须直接采用后端算出的 preselect");
+assert.doesNotMatch(apiLayer, /shouldPreselect|KB_PRESELECT_CONFIDENCE/, "前端不得复制后端的预勾选规则（规则只在后端有一份）");
+const kbTrainingIds = [
+  "kbRefreshButton",
+  "kbSourceTitle",
+  "kbSourceAsset",
+  "kbSourceBody",
+  "kbSourceFile",
+  "kbUploadButton",
+  "kbStartRunButton",
+  "kbTargetKnowledgeBase",
+  "kbStagedList",
+  "kbSourceHint",
+  "kbRunList",
+  "kbCandidateSummary",
+  "kbCandidateStatusFilter",
+  "kbCandidateKindFilter",
+  "kbCandidateConfidenceFilter",
+  "kbCandidateGapOnly",
+  "kbCandidateList",
+  "kbCandidateNotice",
+  "kbCandidateSelectedCount",
+  "kbReviewSelectedButton",
+  "kbDropSelectedButton",
+  "kbPublishButton",
+  "kbProbeInput",
+  "kbProbeButton",
+  "kbProbeResult",
+  "kbProbeOpenButton",
+  "kbProbeModal",
+  "kbProbeModalClose",
+  "kbKnowledgeSummary",
+  "kbKnowledgeList",
+  "kbKnowledgeNotice",
+  "kbKnowledgeSearch"
+];
+kbTrainingIds.forEach((id) => {
+  assert.ok(prototype.includes(`id="${id}"`), `知识库训练缺少控件 #${id}`);
+  kbHasLiveLine(apiLayer, (line) => line.includes(`"#${id}"`), `prototype-api.ts 从未引用 #${id}（选择器拼错即静默不生效）`);
+});
+// 顶部搜索框只过滤卡片展示：判据落在真正过滤的那一行上。
+// 「归入哪个库」下拉仍走全量（renderKbTargetOptions 用 kbKnowledgeSorted() 原样取），
+// 提交口径不能被搜索框收窄 —— 收窄了用户搜着字发布，就会把成果发进没搜出来的库。
+kbHasLiveLine(apiLayer, (line) => line.includes("item.name.toLowerCase().includes(query)"), "知识库搜索必须按名称过滤卡片");
+kbHasLiveLine(apiLayer, (line) => line.includes("匹配 ${items.length} / 共 ${all.length} 个"), "搜索时摘要必须显示匹配数（否则不知道是筛过了还是真没有）");
+kbHasLiveLine(apiLayer, (line) => line.includes("没有匹配「"), "搜索无结果必须区分「没有匹配」与「还没有知识库」两种空态");
+// 试问验证必须是「按钮 → 弹窗」：弹窗复用全局 .modal-backdrop/.modal 语言
+//（自造一套浮层会让关闭/遮罩/Esc 的行为与其它弹窗不一致），且打开即聚焦输入框。
+assert.match(prototype, /class="modal-backdrop" id="kbProbeModal"/u, "试问验证必须用全局弹窗语言（.modal-backdrop + #kbProbeModal），不得自造浮层");
+assert.match(prototype, /id="kbProbeModalClose"[^>]*aria-label="关闭"/u, "试问弹窗必须有关闭键（aria-label=\"关闭\"）");
+kbHasLiveLine(apiLayer, (line) => line.includes('kbProbeModal.classList.add("active")'), "试问弹窗必须由「问一句试试」按钮打开（.active 显隐与全局弹窗一致）");
+kbHasLiveLine(apiLayer, (line) => line.includes('kbProbeModal.classList.remove("active")'), "试问弹窗必须可关闭（关闭键/遮罩点击）");
+kbHasLiveLine(apiLayer, (line) => line.includes('qs<HTMLInputElement>("#kbProbeInput")?.focus()'), "试问弹窗打开后必须聚焦输入框（打开即问）");
+// 指标条的 <small> 是「这格是什么」，不是「取值范围枚举」：
+// 曾经写成「CLI / 模型 / 未生效」，于是引擎正常工作时也摆着一个「未生效」，
+// 用户读到的结论是「我的引擎没生效」—— 真降级反而被这句话淹掉。
+assert.doesNotMatch(prototype, /<small>[^<]*未生效[^<]*<\/small>/u, "指标条说明位不得把「未生效」写成静态取值：引擎正常时会被读成「当前未生效」，真降级反而看不出");
+
+// ---------------------------------------------------------------------------
+// 知识库训练：试问屏必须与插件 resolve() 的真实出参对齐
+//
+// 这里守的是本轮修掉的一类错：前端曾经按「出处」的形状去渲染 `hits`
+// （读 title/snippet/score），结果每条都渲染成空壳 —— 而真相是 `hits` 是
+// `TrainingLibraryMatch`（{entry, similarity, matchedTerms}），`citations` 才是出处。
+// 契约不一致时界面不会报错，只会安静地少显示东西，所以必须由断言守住。
+// ---------------------------------------------------------------------------
+// 判据必须落在**真正渲染的那一行**上：只断言「出现过 probe.verdict」是不够的
+// —— 守卫条件 `if (probe.message && !probe.verdict)` 里也有它，把渲染那一行删掉照样通过。
+kbHasLiveLine(apiLayer, (line) => line.includes("escapeHtml(probe.verdict)"), "试问必须展示插件给的护栏判决（verdict）");
+kbHasLiveLine(apiLayer, (line) => line.includes("for (const warning of probe.warnings"), "试问必须展示插件给的提示（warnings）");
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("item.entry.question || item.entry.answer"),
+  "试问必须指出踩到的禁用场景（哪句被拦、为什么）"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("citations.filter((citation) => citation.kind === group.kind)"),
+  "试问的正文出处必须以 citations 分组渲染"
+);
+assert.doesNotMatch(
+  apiLayer,
+  /probe\.blocked|blocked\?:\s*boolean/u,
+  "插件 resolve() 没有 blocked 字段：前端不得伪造（假字段只会让界面永远少显示一句真话）"
+);
+assert.doesNotMatch(
+  apiLayer,
+  /\.\.\.\(probe\.hits \|\| \[\]\),\s*\.\.\.\(probe\.citations/u,
+  "hits 与 citations 是同一次检索的两种视图，相加会让同一条问答被列两遍、条数翻倍"
+);
+assert.match(
+  apiLayer,
+  /interface KbProbeMatch \{[\s\S]{0,400}?entry: KbProbeEntry;/u,
+  "hits 的类型必须是插件的 TrainingLibraryMatch（含 entry），不是出处形状"
+);
+
+// 行内编辑：人工确认闸必须能润色答案，否则不合口径的候选只有「丢弃」一条路。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.trim() === "body: JSON.stringify({ ids: chunk, action, edits: edits?.length ? edits : undefined })",
+  "确认时必须把 edits 一起提交（后端支持 edits，不传等于改了不生效）"
+);
+kbHasLiveLine(apiLayer, (line) => line.includes('data-kb-edit="answer"'), "编辑态必须有答案输入框");
+// 同上：光有字符串不够 —— 渲染处与聚焦选择器是两件事，缺一个就是「编辑框打不开或点不到」。
+assert.ok(
+  (apiLayer.match(/data-kb-edit="answer"/gu) || []).length >= 2,
+  "答案输入框必须既被渲染、也被聚焦逻辑引用（进编辑态要能直接开始打字）"
+);
+kbHasLiveLine(apiLayer, (line) => line.includes('"edit-confirm"'), "编辑态必须有「保存并确认」动作");
+
+// 多份资料：一次训练要能带上好几份（后端 text.items 上限 50 条）。
+assert.match(prototype, /id="kbSourceFile"[^>]*\bmultiple\b/u, "本地文件读取必须支持多选（一次只训一份是真实摩擦）");
+// 上传区是 div 不是 button：键盘可达性与拖拽导入必须手动补齐，缺了就是"只能用鼠标"。
+kbHasLiveLine(apiLayer, (line) => line.includes('upload.onkeydown = (event) =>'), "上传区必须键盘可达（Enter / 空格打开选择窗口）");
+kbHasLiveLine(apiLayer, (line) => line.includes("upload.ondrop = (event) =>"), "上传区必须支持拖拽导入（点选之外的第二条路）");
+kbHasLiveLine(apiLayer, (line) => line.includes("all.filter((item) => kbSourceFileKind(item.name) !== \"\")"), "拖入文件必须按扩展名过滤（二进制会被 text() 读成乱码语料）");
+// PDF / Word 不能走 file.text()：浏览器读不出正文，必须交后端抽取。
+kbHasLiveLine(apiLayer, (line) => line.includes("await kbExtractSourceFile(file)"), "PDF / Word 必须走后端抽取，不能本地当文本读");
+kbHasLiveLine(apiLayer, (line) => line.includes("void readKbLocalFiles(ok)"), "拖拽与点选必须共用同一套读入管线（两套管线迟早读出两种结果）");
+kbHasLiveLine(apiLayer, (line) => line.includes("sources: { text: { items } }"), "提交时必须以 text.items 携带多份资料（不是只发一份）");
+assert.doesNotMatch(
+  apiLayer,
+  /files:\s*\{ assetIds:/u,
+  "前端不得把关联资料同时塞进 files.assetIds：那条路径会把资料自身的说明当成一份语料喂进去"
+);
+kbHasLiveLine(apiLayer, (line) => line.includes("items.push({ title, body, assetId: assetId || undefined, note: mainNote || undefined })"), "正文框内容必须作为一份资料一起提交（含来源描述）");
+assert.ok(
+  (apiLayer.match(/kbTrainingState\.staged = \[\]/gu) || []).length >= 2,
+  "暂存清单必须既能提交后自动清空、也能手动清空"
+);
+
+// 降级可见（§9）：轮询失败不许刷屏、不许静默；截断必须说出来。
+// 断言计数而非「存在一处」：轮询与批次加载是两条独立的失败路径，
+// 只守其中一条，另一条改成弹 toast 就会每 3 秒刷满界面（同名字符串会掩盖它）。
+assert.ok(
+  (apiLayer.match(/if \(options\.silent\) kbNotePollFailure\(\);/gu) || []).length >= 2,
+  "轮询与批次加载两条失败路径都必须静默计数，不能每 3 秒弹一次错"
+);
+kbHasLiveLine(apiLayer, (line) => line.trim() === "if (kbTrainingState.pollStopped || kbTrainingState.editId) return;", "连续失败或编辑中必须停自动刷新");
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("kbTrainingState.candidateTotal > kbTrainingState.candidates.length"),
+  "候选被 limit 截断时必须明说（静默截断是历史踩过的坑）"
+);
+
+// 出处可点：候选的出处要能一键回到文件中心资料本身。
+kbHasLiveLine(apiLayer, (line) => line.includes("data-kb-asset="), "候选出处必须渲染成可点链接（关联了文件中心资料时）");
+kbHasLiveLine(apiLayer, (line) => line.includes('"[data-kb-asset]"'), "出处链接必须有事件处理");
+
+// ---------------------------------------------------------------------------
+// 知识库：公开 / 私用 + 账号级「默认知识库」多选启用
+//
+// 这一组守三件**错了也不会报错、只会安静地不对**的事：
+//  ① 勾选即启用 —— 一旦退回「勾完再点保存」，用户勾完就走，出稿没变化且无从察觉；
+//  ② 保存成功 ≠ 生效 —— 插件没推成功时必须**常驻**提示（清单在 CRM 生效、运行端还没生效）；
+//  ③ 别人的库改不动 —— 只渲染勾选框，不渲染「改名 / 切公开」按钮
+//     （渲染出来点了报错，比压根不渲染更糟：用户会以为是自己没权限）。
+// ---------------------------------------------------------------------------
+assert.doesNotMatch(
+  apiLayer,
+  /data-kb-kb-save/u,
+  "启用清单不得有「保存」按钮：勾选即启用，多一步就会有人勾完不点保存，然后以为生效了"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("data-kb-kb-enable=") && line.includes("item.enabled"),
+  "知识库勾选框必须反映当前启用状态（不看状态就渲染，界面会与真实清单不一致）"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("data-kb-kb-visibility=") && line.includes("item.isOwner"),
+  "别人的知识库不得渲染「公开 / 私用」按钮：别人的库只能勾选启用，改不动"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("data-kb-kb-rename=") && line.includes("item.isOwner"),
+  "别人的知识库不得渲染改名按钮（渲染出来点了报错比不渲染更糟）"
+);
+// 保存成功 ≠ 生效：这两条分支必须把「还没生效」留在屏幕上，而不是弹一个会消失的 toast。
+kbHasLiveLine(apiLayer, (line) => line.includes("!result.pluginPushed"), "插件未同步必须显式提示：清单在 CRM 生效、运行端还没生效");
+kbHasLiveLine(apiLayer, (line) => line.includes("result.rejected?.length"), "知识库被拒时必须说明是哪几个、为什么（静默忽略等于谎报成功）");
+assert.ok(
+  /finally \{[\s\S]*?await loadKbKnowledgeBases\(\{ silent: true \}\)/u.test(
+    kbSourceBetween(apiLayer, "async function toggleKbKnowledgeEnabled", "async function toggleKbKnowledgeVisibility")
+  ),
+  "勾选后必须以后端清单为准重读：失败时由后端把勾选状态改回来（乐观更新会在失败时留下假象）"
+);
+assert.doesNotMatch(
+  apiLayer,
+  /function setKbKnowledgeNotice[\s\S]{0,400}?setTimeout/u,
+  "知识库提示必须常驻：清单没同步到插件时出稿仍按旧清单走，自动消失的提示等于没说"
+);
+// 训练完成 / 发布候选之后都要静默重读知识库：条目数会变，不重读就看不到自己的成果进了哪个库。
+// 断言的是**那一处调用本身**（`void` 形式），不是"文件里出现过这串字符"——
+// 三个 finally 里的 `await` 形式也含同样的字符串，只数总量的话把这两处删掉也不会红。
+assert.ok(
+  (apiLayer.match(/void loadKbKnowledgeBases\(\{ silent: true \}\)/gu) || []).length >= 2,
+  "发起训练与发布候选后都必须静默重读知识库（否则「已发布 N 条」永远停在旧数字）"
+);
+// 试问必须回报「这次读了什么范围」：没命中时这是唯一能区分
+// 「被启用清单挡掉」与「库里压根没有这条语料」的证据，缺了用户只能靠猜。
+kbHasLiveLine(apiLayer, (line) => line.includes("probe.kbScope"), "试问必须展示检索范围（插件回报的 kbScope）");
+// 判据落在**给用户看的那句话**上：只断言 `scope.skippedByScope` 是不够的 ——
+// 同一行模板里它出现两次，删掉三元判断、留下插值照样通过。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("条因不在启用清单里被跳过"),
+  "检索范围必须包含「因不在启用清单里被跳过」的条数"
+);
+// 批次卡片要标明归属：发布是逐条带 kbId 的，卡片不显示，发布完就只能去知识库列表里反推。
+kbHasLiveLine(apiLayer, (line) => line.includes("kbKnowledgeNameOf(run.kbId)"), "批次卡片必须标明这批归入哪个知识库");
+// 面板每轮重绘都换掉 innerHTML：事件必须委托在容器上，逐行 addEventListener 会随重绘一起丢。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.trim() === 'const knowledgeList = qs<HTMLElement>("#kbKnowledgeList");',
+  "知识库面板的事件必须委托在容器上（行内按钮是每次重绘新建的）"
+);
+// 屏 1 的「这批成果归入哪个库」：不提供就等于每训一次多一个库，
+// 同一份资料反复提炼（第一次失败、补内容再提）会把「选择默认知识库」那张清单彻底搞乱。
+// 判据落在**真的提交了 kbId** 那一行上：只断言"有这个下拉"是抓不到"选了没发"的。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("...(targetKbId ? { kbId: targetKbId } : {})"),
+  "屏 1 选中的归属知识库必须真的提交，否则选了等于没选"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("kbKnowledgeSorted().filter((item) => item.isOwner)"),
+  "归属目标只列自己的知识库：别人的库后端会 403，列出来只会让用户点了报错"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("!result.knowledgeBaseSync.ok"),
+  "新建库后清单同步失败必须提示（否则运行端仍按旧清单出稿，界面却显示已启用）"
+);
+
+// 运行中必须能回答「还在跑吗」与「能不能停」：只有「运行中」三个字时，
+// 用户分不清在跑还是卡死，而这两种情况的下一步完全相反（等 vs 停下重来）。
+kbHasLiveLine(apiLayer, (line) => line.includes("批 · 已处理"), "运行中的批次必须显示批次级进度（第几批/共几批）");
+kbHasLiveLine(apiLayer, (line) => line.includes("data-kb-run-cancel="), "运行中的批次必须有停止入口");
+// 停止是「请求」不是「结果」：发出后按钮必须停在「正在停止…」而不是弹回可点状态，
+// 否则用户会以为没生效、反复点，而它本来就要等当前这批跑完。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("正在停止…（等当前这批结束）"),
+  "停止请求发出后必须显示等待态（否则用户会以为没生效）"
+);
+kbHasLiveLine(apiLayer, (line) => line.includes("data-kb-run-retry="), "失败/取消的批次必须能一键把资料填回来");
+// 第一批在飞时进度必然为 0：一条钉在 2% 的条子和「卡死」无法区分，
+// 必须切成不定长扫光并在文案里给出单批耗时，用户才敢决定「再等等」还是「停掉」。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("pendingFirstBatch ? \" is-pending\" : \"\""),
+  "第一批未返回时必须切到不定长进度（0% 与卡死无法区分）"
+);
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes("单批通常 1~2 分钟"),
+  "不定长进度必须写明单批耗时（否则用户仍然只能猜）"
+);
+kbHasLiveLine(
+  prototype,
+  (line) => line.includes("animation: kbBarIndeterminate"),
+  "不定长进度必须有扫光动画（否则是静止的 38% 色块）"
+);
+// 发布是确认之后的事：待确认的行不得渲染发布键（摆在那里就会有人点，点了必然被后端拒）。
+kbHasLiveLine(
+  apiLayer,
+  (line) => line.includes('candidate.status === "approved" ? `<button class="btn primary" data-kb-act="publish"'),
+  "发布键只给已确认的候选"
+);
+assert.match(prototype, /id="kbPipeline"/u, "知识库训练必须有流水线步骤条（这一屏最容易迷路）");
+assert.match(prototype, /id="kbEntriesModal"/u, "知识库必须能展开查看已发布条目（否则「已发布 N 条」只是个数字）");
+assert.match(prototype, /id="kbEntriesSearch"/u, "知识库条目必须可搜索");
+kbHasLiveLine(apiLayer, (line) => line.includes("openKbKnowledgeEntries(open)"), "知识库卡片必须有查看条目的入口");
+// 删除知识库：不可撤销，入口 + 二次确认缺一不可（只有创建者拿得到这个按钮，判据在后端）。
+kbHasLiveLine(apiLayer, (line) => line.includes('data-kb-kb-delete="${id}"'), "知识库卡片必须有删除入口");
+kbHasLiveLine(apiLayer, (line) => line.includes('title: "删除知识库"'), "删除知识库必须二次确认（不可撤销）");
+
+// 前后端路由对齐：前端调了而后端没有 = 上线即 404。后端目录不在时跳过（前端可单独跑）。
+let kbBackendServer = "";
+try {
+  kbBackendServer = readFileSync(new URL("../../backend/src/server.ts", import.meta.url), "utf8");
+} catch {
+  kbBackendServer = "";
+}
+if (kbBackendServer) {
+  const kbRoutes: Array<[string, string]> = [
+    ["post", "/api/kb/training/extract"],
+    ["post", "/api/kb/training/runs"],
+    ["get", "/api/kb/training/runs"],
+    ["get", "/api/kb/training/runs/:id"],
+    ["post", "/api/kb/training/runs/:id/cancel"],
+    ["get", "/api/kb/training/candidates"],
+    ["post", "/api/kb/training/candidates/review"],
+    ["post", "/api/kb/training/candidates/publish"],
+    ["post", "/api/kb/training/candidates/:id/revoke"],
+    ["get", "/api/kb/training/knowledge-bases"],
+    ["get", "/api/kb/training/knowledge-bases/:id/entries"],
+    ["put", "/api/kb/training/knowledge-bases/defaults"],
+    ["patch", "/api/kb/training/knowledge-bases/:id"],
+    ["delete", "/api/kb/training/knowledge-bases/:id"],
+    ["post", "/api/kb/training/probe"]
+  ];
+  kbRoutes.forEach(([method, path]) => {
+    assert.ok(kbBackendServer.includes(`app.${method}("${path}"`), `后端缺少 ${method.toUpperCase()} ${path}`);
+  });
+  [
+    "/api/kb/training/runs",
+    "/api/kb/training/candidates/review",
+    "/api/kb/training/candidates/publish",
+    "/revoke",
+    "/api/kb/training/knowledge-bases",
+    "/api/kb/training/probe"
+  ].forEach((fragment) => {
+    kbHasLiveLine(apiLayer, (line) => line.includes(fragment), `前端工作台缺少对 ${fragment} 的调用`);
+  });
+
+  // 批次候选计数必须四态齐全：界面那行「待确认 / 已确认 / 已发布 / 已丢弃」按状态对齐，
+  // 后端少给一态，界面对应的数字就恒为 0 —— 看起来像「还没确认过」，其实是没查。
+  let kbRepoSource = "";
+  try {
+    kbRepoSource = readFileSync(new URL("../../backend/src/kb-training/kb-training-repository.ts", import.meta.url), "utf8");
+  } catch {
+    kbRepoSource = "";
+  }
+  if (kbRepoSource.includes("countCandidatesByRun")) {
+    ["pending", "approved", "rejected", "published"].forEach((status) => {
+      assert.ok(
+        kbRepoSource.includes(`SUM(status = '${status}')`),
+        `批次候选计数缺少 ${status} 一态（界面「已确认 / 已丢弃」这类数字会恒为 0）`
+      );
+    });
+  }
+}
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

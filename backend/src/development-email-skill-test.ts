@@ -14,6 +14,8 @@ import {
   developmentEmailRecipientRole,
   developmentEmailSignature,
   developmentEmailStagePlan,
+  draftResearchSignals,
+  draftUsesResearch,
   englishOnly,
   ensureDevelopmentEmailSignature
 } from "./development-email-skill.js";
@@ -343,6 +345,146 @@ function main() {
       brief
     );
     check(good.ok, `兜底模板自身应通过质量自检，实际：${good.issues.join("；")}`);
+  }
+
+  // ── 10. 千人千面：同阶段、不同背调，必须写出两封真正不同的信 ──
+  {
+    const researchFor = (company: string, facts: Array<{ label: string; value: string }>) => ({
+      verdict: "可优先推进",
+      summary: `${company} 的公开资料`,
+      engine: "测试引擎",
+      facts,
+      opportunities: [] as string[],
+      talkTracks: [] as string[],
+      risks: [] as Array<{ level: string; title: string; detail: string }>
+    });
+    const make = (
+      company: string,
+      contactName: string,
+      email: string,
+      facts: Array<{ label: string; value: string }>
+    ) => assembleDevelopmentEmailBrief({
+      stageKey: "not_contacted",
+      sender: baseInput("not_contacted").sender,
+      recipient: { company, contactName, email, country: "Germany", market: "Germany", context: "" },
+      research: researchFor(company, facts)
+    });
+
+    const a = make("Nordwaage GmbH", "Purchasing Manager", "buy@nordwaage.de", [
+      { label: "业务", value: "explosion-proof weighing for chemical plants" },
+      { label: "官网", value: "https://nordwaage.de" }
+    ]);
+    const b = make("Packwerk AG", "Technical Manager", "tech@packwerk.ch", [
+      { label: "业务", value: "packaging and filling line integration" }
+    ]);
+    const draftA = buildDevelopmentEmailFallback(a);
+    const draftB = buildDevelopmentEmailFallback(b);
+
+    // 核心：换了一家客户，主题与正文都必须真的变
+    check(draftA.subject !== draftB.subject, "同阶段两家客户的主题必须不同");
+    check(draftA.body !== draftB.body, "同阶段两家客户的正文必须不同");
+    check(draftA.body.includes("Nordwaage GmbH") && !draftA.body.includes("Packwerk AG"), "A 的信只能出现 A 的公司名");
+    check(/explosion-proof|hazardous/iu.test(draftA.body), "A 的信必须引用 A 的背调角度（防爆）");
+    check(/packaging|filling/iu.test(draftB.body), "B 的信必须引用 B 的背调角度（包装线）");
+    check(!/explosion-proof|hazardous/iu.test(draftB.body), "B 的信不能串用 A 的角度");
+    // 个性化必须前置：第一段就要点出对方，而不是先自我介绍再看像不像群发
+    const aOpening = draftA.body.split("\n").slice(0, 4).join(" ");
+    check(
+      aOpening.includes("Nordwaage GmbH") || /explosion-proof|hazardous/iu.test(aOpening),
+      "个性化内容必须出现在正文第一段"
+    );
+
+    check(a.personalization.personalized && b.personalization.personalized, "有背调时应判定为已个性化");
+    check(a.personalization.factsUsed.length === 2, "应记录引用了哪几条背调事实");
+    check(a.personalization.difference.includes("背调事实"), "差异说明必须点明引用了背调事实");
+    check(draftUsesResearch(draftA.body, a), "A 的正文应被判定为引用了背调");
+    check(!draftUsesResearch("We supply industrial equipment and would like to talk.", a), "泛泛而谈不能算引用了背调");
+
+    // 角色决定收尾问题：采购问规格/交期，技术问技术数据，不该所有人都被问"15 分钟会议"
+    check(/specification|lead time/iu.test(a.personalization.ask), "采购角色应索取规格与交期");
+    check(/technical data|configuration/iu.test(b.personalization.ask), "技术角色应索取技术数据");
+    check(a.personalization.ask !== b.personalization.ask, "不同角色的 CTA 不能一模一样");
+
+    // 无背调时如实承认，不许假装千人千面
+    const bare = buildDevelopmentEmailFallback(assembleDevelopmentEmailBrief({
+      ...baseInput("not_contacted"),
+      recipient: { ...baseInput("not_contacted").recipient, context: "" },
+      research: null
+    }));
+    check(!bare.personalization.personalized, "无背调无角度时必须判定为未个性化");
+    check(bare.personalization.difference.includes("只差公司名"), "无背调时必须如实说明只差公司名");
+    check(bare.basis.includes("未引用背调"), "无背调时依据行必须写明未引用背调");
+
+    // 自检要能抓住「有背调却没引用」这种情况
+    const ignored = checkDevelopmentEmailDraft(
+      { subject: "Hello", body: "We supply industrial equipment and would like to work with your company. Could we talk?" },
+      a
+    );
+    check(ignored.issues.some((item) => item.includes("千人千面")), "有背调却没引用时，自检必须报「千人千面没生效」");
+    check(!checkDevelopmentEmailDraft(draftA, a).issues.some((item) => item.includes("千人千面")), "引用了背调的信不应误报");
+
+    // 提示词必须把个性化写成硬约束，并要求回传用了哪些事实
+    const prompt = buildDevelopmentEmailPrompt(a);
+    check(prompt.includes("Personalisation is mandatory"), "提示词必须把个性化设为硬约束");
+    check(prompt.includes("Personalisation plan"), "提示词必须带上个性化方案");
+    check(prompt.includes("factsUsed"), "提示词必须要求模型回传用了哪些事实");
+
+    // 回归：签名里的网址曾让**每一封**都判定成"引用了背调"——
+    // 「官网」这条事实里抽出 `https`，而签名里必有 `Website: https://…`。
+    const convertedBrief = assembleDevelopmentEmailBrief({
+      ...baseInput("converted"),
+      research: researchFor("Tanaka Scale Vietnam Co., Ltd", [
+        { label: "业务", value: "explosion-proof weighing for chemical plants" },
+        { label: "官网", value: "https://tanaka-scale-vietnam.com" }
+      ])
+    });
+    const convertedDraft = buildDevelopmentEmailFallback(convertedBrief);
+    check(!draftResearchSignals(convertedBrief).includes("https"), "协议词 https 不能进背调信号（签名里每封都有）");
+    check(
+      !draftUsesResearch(convertedDraft.body, convertedBrief),
+      "只有样板行（签名 / 网址）的流程确认信，不能判定成引用了背调"
+    );
+    check(!convertedDraft.personalization.personalized, "流程确认信没引用背调时，必须如实说未个性化");
+    check(
+      !convertedDraft.personalization.difference.includes("多引用了"),
+      "没引用背调时不许在差异说明里谎称引用了背调"
+    );
+    check(
+      String(convertedDraft.personalization.trace[0] || "").includes("没有引用背调"),
+      "没引用背调时，依据清单开头必须说明「素材没用上」，不能让「引用背调事实 1 条」被读成已经用了"
+    );
+
+    // 反向：剥样板行不能把行业词一起误杀。
+    // 这家客户的业务里只提取到「weighing」一个角度 —— 而 weighing 同时出现在我司产品线里，
+    // 若为了防误判把产品词整类删掉，"Is weighing on your roadmap?" 这种真的问对了的话
+    // 就会被判成没引用背调（上一版踩过这个坑）。
+    const followBrief = assembleDevelopmentEmailBrief({
+      ...baseInput("following_up"),
+      recipient: { ...baseInput("following_up").recipient, context: "" },
+      research: researchFor("Tanaka Scale Vietnam Co., Ltd", [
+        { label: "业务", value: "weighing scales distributor for local industry" }
+      ])
+    });
+    check(
+      followBrief.personalization.angles.length === 1 && followBrief.personalization.angles[0] === "weighing equipment",
+      "构造前提：这家的角度只提取到称重"
+    );
+    const followDraft = buildDevelopmentEmailFallback(followBrief);
+    check(/weighing/iu.test(followDraft.body), "跟进信应点到对方的称重业务");
+    check(
+      draftUsesResearch(followDraft.body, followBrief),
+      "跟进信里问到了对方所在行业，应算引用了背调（不能因为这个词我司也卖就判成没引用）"
+    );
+
+    // 词边界回归：'director' 里含 'cto'，曾把「Technical Director」判成 CEO
+    check(
+      developmentEmailRecipientRole("Doctor", "doctor@clinic.example").key !== "decision_maker",
+      "不能把 Doctor 里的 cto 当成 CEO"
+    );
+    check(
+      developmentEmailRecipientRole("Technical Director", "tech@x.com").key === "decision_maker",
+      "Director 属于决策层"
+    );
   }
 
   console.log(JSON.stringify({ ok: true, checked }, null, 2));

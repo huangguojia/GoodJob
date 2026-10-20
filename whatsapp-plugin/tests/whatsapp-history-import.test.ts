@@ -24,6 +24,33 @@ describe("WhatsApp history import parser", () => {
     expect(preview.firstMessageAt).toBe("2026-08-09T15:15:00.000Z");
   });
 
+  // 中文区域导出是「年在前」格式：按日月年在前解析会把 2026 错切成 2015（「26/10/15」）。
+  it("parses year-first exports without corrupting the year", () => {
+    const content = [
+      "[2026/10/15, 08:55] +86 181 6320 1984: 你好",
+      "[2026/10/15, 20:05] +86 181 6320 1984: 下午好"
+    ].join("\n");
+    const parsed = parseWhatsAppHistory(content);
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages[0]).toMatchObject({ sender: "+86 181 6320 1984", occurredAt: "2026-10-15T08:55:00.000Z" });
+    expect(parsed.messages[1]).toMatchObject({ occurredAt: "2026-10-15T20:05:00.000Z" });
+  });
+
+  // 中文时段可以写在时间前后（「上午8:55」「8:55 下午」都出现在真机导出里）。
+  it("understands Chinese day-period markers", () => {
+    const content = [
+      "[上午8:55, 15/10/2026] Buyer: hi",
+      "[2026/10/15, 下午12:30] Buyer: noon",
+      "[2026/10/15, 上午12:30] Buyer: midnight"
+    ].join("\n");
+    const parsed = parseWhatsAppHistory(content);
+    expect(parsed.messages.map((message) => message.occurredAt)).toEqual([
+      "2026-10-15T08:55:00.000Z",
+      "2026-10-15T12:30:00.000Z",
+      "2026-10-15T00:30:00.000Z"
+    ]);
+  });
+
   it("creates stable idempotency keys", () => {
     const message = { occurredAt: "2026-08-09T15:15:00.000Z", sender: "Buyer", body: "Hello" };
     const first = historyMessageId({ accountId: "account", phone: "+491234567890", message });

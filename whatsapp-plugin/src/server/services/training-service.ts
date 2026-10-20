@@ -12,6 +12,8 @@ import type {
 } from "../../shared/types.js";
 import { Repository } from "../db/repository.js";
 import { DomainError } from "../errors.js";
+import { sanitizeCliEffort, sanitizeCliModel, type CliEngine } from "./cli-engine.js";
+import { extractJsonObject } from "./json-extract.js";
 import { TranslationService, detectLanguage } from "./translation.js";
 
 /** 单次训练最多读取的会话数，避免一次点击扫全库。 */
@@ -20,6 +22,8 @@ const MAX_TRAINING_CONVERSATIONS = 200;
 const MAX_STYLE_EXAMPLES = 40;
 const MAX_EXAMPLE_CHARS = 600;
 const AI_PROMPT_VERSION = "reply-training-v1";
+/** CLI 提炼一次档案的时限。档案提炼比单条摘要重（样本最多 40 组），给足 3 分钟。 */
+const REFINE_TIMEOUT_MS = 180_000;
 
 const DEFAULT_GUARDRAILS = [
   "不承诺价格、折扣、交期或库存，除非训练样本或 CRM 数据里有明确依据",
@@ -120,17 +124,22 @@ function cleanText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-/** 媒体消息在库里只有占位正文，训练时要还原成可读的占位符而不是丢掉上下文。 */
-function readableBody(message: ChatMessage): string {
+/**
+ * 媒体消息在库里只有占位正文，训练时要还原成可读的占位符而不是丢掉上下文。
+ * **幂等**：导出预览已经处理过一遍的消息再进来，不得把媒体前缀叠成「[图片] [图片] xxx」
+ * （`train()` 现在直接复用 preview 的消息，这条是防双写的闸）。
+ */
+function readableBody(message: Pick<ChatMessage, "body" | "messageType">): string {
   const body = cleanText(message.body);
   if (message.messageType !== "text") {
     const label = MEDIA_TYPE_LABELS[message.messageType] ?? `[${message.messageType}]`;
-    return body && !PLACEHOLDER_PATTERN.test(body) ? `${label} ${body}` : label;
+    if (!body || PLACEHOLDER_PATTERN.test(body)) return label;
+    return body.startsWith(`${label} `) ? body : `${label} ${body}`;
   }
   return body;
 }
 
-function isTrainable(message: ChatMessage): boolean {
+function isTrainable(message: Pick<ChatMessage, "messageType" | "body">): boolean {
   if (message.messageType === "system") return false;
   const body = cleanText(message.body);
   if (!body) return false;
@@ -192,8 +201,13 @@ export function renderTrainingExport(preview: TrainingExportPreview): string {
 /**
  * 把连续消息还原成「客户问 → 我方答」的问答对。
  * 连续多条我方消息会被合并成一次回复，贴近真实对话的节奏。
+ *
+ * 入参只要求真正用到的四个字段：既吃 `ChatMessage`，也吃导出预览里的
+ * `TrainingExportMessage` —— `train()` 复用 preview 已查好的消息，不用再查一遍库。
  */
-function buildExchanges(conversationId: string, messages: ChatMessage[]): Exchange[] {
+type TrainableMessage = Pick<ChatMessage, "body" | "direction" | "messageType" | "occurredAt">;
+
+function buildExchanges(conversationId: string, messages: ReadonlyArray<TrainableMessage>): Exchange[] {
   const exchanges: Exchange[] = [];
   let pendingInbound: string[] = [];
   let pendingInboundAt = "";
@@ -312,10 +326,69 @@ function unwrapJson(content: string): string {
   return fenced?.[1] ?? trimmed;
 }
 
+/** 档案提炼的输入。CLI 与 AI 两条通道共用同一份，不允许各自拼提示词。 */
+export interface RefinePromptPayload {
+  accountId: string | null;
+  accountName: string | null;
+  style: StyleStats;
+  examples: TrainingStyleSample[];
+  stats: { conversations: number; messages: number; exchanges: number };
+}
+
+/**
+ * 出境脱敏：真实样本会原样进提示词，而 AI Provider 通道是真·外呼（CLI 是本机无所谓，
+ * 但提示词必须两通道逐字同源 —— 所以**统一都在这里洗**，不按通道分叉）。
+ * 学语气不需要知道具体是 5000 件还是 8000 美元：长数字/价格/电话/邮箱/链接换成占位符，
+ * 结构和语感原样保留。
+ */
+function scrubSample(value: string): string {
+  return value
+    .replace(/https?:\/\/\S+/giu, "[链接]")
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/gu, "[邮箱]")
+    .replace(/\+?\d[\d\s-]{6,}\d/gu, "[号码]")
+    .replace(/\d+(?:\.\d+)?\s*%/gu, "[百分比]")
+    .replace(/\d{3,}/gu, "[数字]");
+}
+
+/**
+ * 档案提炼提示词的唯一来源（CLI 与 AI 逐字同源，只差喂法 —— 与 followup-sync 的
+ * `buildSummaryPromptParts` 同一模式）。测试可以直接 import 做两条通道的 parity 断言。
+ */
+export function buildRefinePromptParts(payload: RefinePromptPayload): { system: string; user: string } {
+  const system = [
+    "You build a reusable reply-style profile for a B2B export sales team from their own WhatsApp history.",
+    "Return one valid JSON object only, written in Chinese.",
+    "Never invent facts about the company, its products, certifications or prices.",
+    `Follow this schema exactly: {"summary":string,"tone":string,"guidelines":string[],"signaturePhrases":string[],"guardrails":string[]}.`,
+    "guidelines must be actionable writing rules (length, structure, language, follow-up question style).",
+    "signaturePhrases must be short verbatim phrases that actually appear in the samples.",
+    "guardrails must state what the assistant must never do.",
+    `Profile version: ${AI_PROMPT_VERSION}.`
+  ].join(" ");
+  const user = JSON.stringify({
+    account: { id: payload.accountId, name: payload.accountName },
+    statistics: payload.stats,
+    observedStyle: {
+      tone: payload.style.tone,
+      averageReplyLength: payload.style.averageLength,
+      emojiRate: Number(payload.style.emojiRate.toFixed(2)),
+      languages: payload.style.languages
+    },
+    sampleExchanges: payload.examples.slice(0, 20).map((example) => ({
+      ...example,
+      inbound: scrubSample(example.inbound),
+      reply: scrubSample(example.reply)
+    }))
+  });
+  return { system, user };
+}
+
 export class TrainingService {
   constructor(
     private readonly repository: Repository,
-    private readonly translation?: TranslationService
+    private readonly translation?: TranslationService,
+    /** 本机 WorkBuddy CLI。给定时档案提炼优先走 CLI 托管，其次才是配置的 AI 模型。 */
+    private readonly cli?: CliEngine
   ) {}
 
   private async selectConversations(ownerUserId: string, input: TrainingExportInput): Promise<{
@@ -377,7 +450,8 @@ export class TrainingService {
         occurredAt: message.occurredAt,
         direction: message.direction,
         body: readableBody(message),
-        messageType: message.messageType
+        messageType: message.messageType,
+        sourceLanguage: message.sourceLanguage
       }));
       const inboundCount = exported.filter((message) => message.direction === "inbound").length;
       const outboundCount = exported.length - inboundCount;
@@ -461,13 +535,32 @@ export class TrainingService {
     };
   }
 
-  async train(ownerUserId: string, input: TrainingTrainInput): Promise<TrainingProfile> {
+  /**
+   * 训练一份回复风格档案。
+   *
+   * 返回 `reused=true` 表示**输入指纹与同名档案完全一致**：直接复用上次结果，不再跑
+   * 模型（点两次「开始训练」不该花两次 CLI/模型的钱）。要强制重训就换个名字或改范围。
+   */
+  async train(ownerUserId: string, input: TrainingTrainInput): Promise<{ profile: TrainingProfile; reused: boolean }> {
     const name = input.name.trim();
     if (name.length < 1) throw new DomainError("TRAINING_NAME_REQUIRED", 400, "请给训练档案起一个名字");
 
-    const from = normalizeDateBoundary(input.from, false);
-    const to = normalizeDateBoundary(input.to, true);
     const preview = await this.previewExport(ownerUserId, { ...input, format: "json" });
+
+    // 输入指纹：范围 + 数据内容 + 提示词版本。数据一个字没变就别再花钱跑模型 ——
+    // 与 web-import 的内容指纹幂等同一思路；想强制重训，换个名字或改时间范围即可。
+    const inputFingerprint = createHash("sha256").update(JSON.stringify({
+      promptVersion: AI_PROMPT_VERSION,
+      useAi: Boolean(input.useAi),
+      providerId: input.useAi ? input.providerId ?? null : null,
+      scope: { accountId: input.accountId ?? null, conversationIds: input.conversationIds ?? null, from: input.from ?? null, to: input.to ?? null },
+      data: preview.records.map((record) => [record.conversationId, record.messages.map((message) => [message.occurredAt, message.direction, message.body])])
+    })).digest("hex");
+    const existingProfiles = await this.repository.listTrainingProfiles(ownerUserId);
+    const reusedProfile = existingProfiles.find((profile) =>
+      profile.name === name && profile.engine !== "web-import" && profile.inputFingerprint === inputFingerprint
+    );
+    if (reusedProfile) return { profile: reusedProfile, reused: true };
 
     const exchanges: Exchange[] = [];
     let outbound: string[] = [];
@@ -475,11 +568,11 @@ export class TrainingService {
     const languages = new Set<string>();
     let messageCount = 0;
 
+    // preview.records 里的消息已经是「按范围过滤 + readableBody 处理」后的成品，
+    // 直接复用，不再逐会话重查 listMessages（以前这里把 DB 读取量整整翻了一倍）。
     for (const record of preview.records) {
-      const messages = await this.repository.listMessages(record.conversationId, ownerUserId);
-      const filtered = this.filterMessages(messages, from, to);
-      exchanges.push(...buildExchanges(record.conversationId, filtered));
-      for (const message of filtered) {
+      exchanges.push(...buildExchanges(record.conversationId, record.messages));
+      for (const message of record.messages) {
         if (!isTrainable(message)) continue;
         const body = readableBody(message);
         messageCount += 1;
@@ -501,7 +594,6 @@ export class TrainingService {
 
     let engine: TrainingProfile["engine"] = "rules";
     let model: string | null = null;
-    let warning: string | null = null;
     let summary = this.buildRuleSummary(preview, style, examples.length);
     let tone = style.tone;
     let guidelines = style.guidelines;
@@ -511,34 +603,59 @@ export class TrainingService {
     const accountIds = new Set(preview.records.map((record) => record.accountId));
     const accountId = input.accountId ?? (accountIds.size === 1 ? [...accountIds][0] : null);
 
-    if (input.useAi && input.providerId && this.translation) {
+    /**
+     * 提炼链与跟进同步同一口径（curation-engine.ts 在跟进侧的对应物）：
+     * **CLI 托管 → 配置的 AI 模型 → 规则提炼**。
+     * `rules` 不是失败态 —— 它是永远可用的确定性兜底（只做统计，不调模型），
+     * 所以这里没有「占位档案」一说；但 CLI / AI 调用失败要如实写进 `error`，不许静默。
+     */
+    const refinePayload = {
+      accountId,
+      accountName: accountId ? preview.records.find((record) => record.accountId === accountId)?.accountName ?? null : null,
+      style,
+      examples,
+      stats: {
+        conversations: preview.conversationCount,
+        messages: messageCount,
+        exchanges: exchanges.length
+      }
+    };
+    const warnings: string[] = [];
+    const applyRefined = (
+      refined: { summary: string; tone: string; guidelines: string[]; signaturePhrases: string[]; guardrails: string[]; model: string },
+      refinedEngine: TrainingProfile["engine"]
+    ): void => {
+      summary = refined.summary;
+      tone = refined.tone;
+      guidelines = refined.guidelines;
+      signaturePhrases = refined.signaturePhrases.length ? refined.signaturePhrases : signaturePhrases;
+      guardrails = refined.guardrails.length ? refined.guardrails : DEFAULT_GUARDRAILS;
+      model = refined.model;
+      engine = refinedEngine;
+    };
+
+    let refined = false;
+    if (this.cli && (await this.cli.status()).available) {
       try {
-        const refined = await this.refineWithAi(ownerUserId, input.providerId, {
-          accountId,
-          accountName: accountId ? preview.records.find((record) => record.accountId === accountId)?.accountName ?? null : null,
-          style,
-          examples,
-          stats: {
-            conversations: preview.conversationCount,
-            messages: messageCount,
-            exchanges: exchanges.length
-          }
-        });
-        summary = refined.summary;
-        tone = refined.tone;
-        guidelines = refined.guidelines;
-        signaturePhrases = refined.signaturePhrases.length ? refined.signaturePhrases : signaturePhrases;
-        guardrails = refined.guardrails.length ? refined.guardrails : DEFAULT_GUARDRAILS;
-        engine = "ai";
-        model = refined.model;
+        applyRefined(await this.refineWithCli(refinePayload), "cli");
+        refined = true;
       } catch (error) {
-        warning = `AI 提炼失败，已使用规则结果：${error instanceof Error ? error.message : "未知错误"}`;
+        warnings.push(`CLI 提炼失败：${error instanceof Error ? error.message : "未知错误"}`);
       }
     }
+    if (!refined && input.useAi && input.providerId && this.translation) {
+      try {
+        applyRefined(await this.refineWithAi(ownerUserId, input.providerId, refinePayload), "ai");
+        refined = true;
+      } catch (error) {
+        warnings.push(`AI 提炼失败，已使用规则结果：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    }
+    const warning = warnings.length ? warnings.join("；") : null;
 
     const timestamps = preview.records.flatMap((record) => [record.firstMessageAt, record.lastMessageAt]).filter((value): value is string => Boolean(value));
     const now = new Date().toISOString();
-    return this.repository.saveTrainingProfile({
+    const profile = await this.repository.saveTrainingProfile({
       id: `trn_${hash(`${ownerUserId}:${name}:${now}`)}`,
       ownerUserId,
       accountId,
@@ -563,8 +680,12 @@ export class TrainingService {
       error: warning,
       trainedAt: now,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      hitCount: 0,
+      lastHitAt: null,
+      inputFingerprint
     });
+    return { profile, reused: false };
   }
 
   /** 内容指纹：同一条语料反复推送不该反复建档/刷新时间戳。 */
@@ -635,6 +756,9 @@ export class TrainingService {
       sourceFrom: input.source?.from ?? null,
       sourceTo: input.source?.to ?? null,
       error: null,
+      // web-import 覆盖已有档案时必须原样带回 hit 计数：这是自动聊的使用回流，重存不能清零。
+      hitCount: existing?.hitCount ?? 0,
+      lastHitAt: existing?.lastHitAt ?? null,
       trainedAt: now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
@@ -652,39 +776,30 @@ export class TrainingService {
     ].join("");
   }
 
+  /** CLI 通道。提示词与 AI 通道**逐字同源**（同一份 system + user，只差喂法）。 */
+  private async refineWithCli(
+    payload: RefinePromptPayload
+  ): Promise<{ summary: string; tone: string; guidelines: string[]; signaturePhrases: string[]; guardrails: string[]; model: string }> {
+    const parts = buildRefinePromptParts(payload);
+    const run = await this.cli!.run({
+      prompt: `${parts.system}\n\n${parts.user}`,
+      model: sanitizeCliModel(""),
+      effort: sanitizeCliEffort(""),
+      maxTurns: 2,
+      timeoutMs: REFINE_TIMEOUT_MS
+    });
+    const parsed = aiStyleSchema.parse(JSON.parse(unwrapJson(extractJsonObject(run.text))));
+    return { ...parsed, model: run.model };
+  }
+
+  /** AI Provider 通道。 */
   private async refineWithAi(
     ownerUserId: string,
     providerId: string,
-    payload: {
-      accountId: string | null;
-      accountName: string | null;
-      style: StyleStats;
-      examples: TrainingStyleSample[];
-      stats: { conversations: number; messages: number; exchanges: number };
-    }
+    payload: RefinePromptPayload
   ): Promise<{ summary: string; tone: string; guidelines: string[]; signaturePhrases: string[]; guardrails: string[]; model: string }> {
-    const system = [
-      "You build a reusable reply-style profile for a B2B export sales team from their own WhatsApp history.",
-      "Return one valid JSON object only, written in Chinese.",
-      "Never invent facts about the company, its products, certifications or prices.",
-      `Follow this schema exactly: {"summary":string,"tone":string,"guidelines":string[],"signaturePhrases":string[],"guardrails":string[]}.`,
-      "guidelines must be actionable writing rules (length, structure, language, follow-up question style).",
-      "signaturePhrases must be short verbatim phrases that actually appear in the samples.",
-      "guardrails must state what the assistant must never do.",
-      `Profile version: ${AI_PROMPT_VERSION}.`
-    ].join(" ");
-    const user = JSON.stringify({
-      account: { id: payload.accountId, name: payload.accountName },
-      statistics: payload.stats,
-      observedStyle: {
-        tone: payload.style.tone,
-        averageReplyLength: payload.style.averageLength,
-        emojiRate: Number(payload.style.emojiRate.toFixed(2)),
-        languages: payload.style.languages
-      },
-      sampleExchanges: payload.examples.slice(0, 20)
-    });
-    const completion = await this.translation!.completeStructuredJson(providerId, ownerUserId, system, user);
+    const parts = buildRefinePromptParts(payload);
+    const completion = await this.translation!.completeStructuredJson(providerId, ownerUserId, parts.system, parts.user);
     const parsed = aiStyleSchema.parse(JSON.parse(unwrapJson(completion.content)));
     return { ...parsed, model: completion.model };
   }

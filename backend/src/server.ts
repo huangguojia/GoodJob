@@ -16,7 +16,7 @@ import { createTradeDocumentImportAnalysis, parseTradeDocumentImport, TRADE_DOCU
 import { applyTradeDocumentRecognitionTemplate, buildTradeDocumentRecognitionTemplate, matchTradeDocumentRecognitionTemplate } from "./trade-document-recognition-template.js";
 import { once } from "node:events";
 import { resolveTxt } from "node:dns/promises";
-import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, userExpired, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
+import { AUTH_COOKIE_NAME, CSRF_COOKIE_NAME, canManageAccount, canManageAccounts, canManageRole, canSeeOwner, canSeePersonalData, canSeeTeam, createCsrfToken, csrfCookieOptions, hasIamPermission, hasIamScope, hashPassword, isPlatformIdentity, PLUGIN_TOKEN_TTL_SECONDS, publicUser, requireAuth, sessionCookieOptions, signMfaSetupToken, signToken, userExpired, validateAuthSecurity, verifyMfaSetupToken, verifyPassword } from "./auth.js";
 import { AccessControlOverviewError, buildAccessControlOverview } from "./access-control-overview.js";
 import { assertAiBaseUrlAllowed } from "./ai-http-security.js";
 import {
@@ -31,6 +31,7 @@ import {
   extractJsonObject
 } from "./ai-model-runtime.js";
 import { parseCustomerIntakeResult } from "./customer-intake-parse.js";
+import { followupSyncPayloadSchema, runWhatsappFollowupSync } from "./whatsapp-followup-sync.js";
 import {
   OFFICE_BINARY_EXTENSIONS,
   officeDocumentToText,
@@ -93,10 +94,14 @@ import {
 import {
   MAX_VECTOR_CANDIDATES as MAX_RESOURCE_VECTOR_CANDIDATES,
   RESOURCE_HUB_EMBEDDING_MODEL,
+  RESOURCE_RETENTION_DAYS,
   RESOURCE_SOURCE_TYPES,
   collectHubResources,
+  collectHubResourcesDetailed,
   getResourceHubRepository,
+  knowledgeAssetTeamId,
   resourceKey,
+  resourceReachable,
   resourceTerms,
   revealHubResource,
   scoreHubResources,
@@ -105,6 +110,11 @@ import {
   type ResourceEventStatsEntry,
   type ResourceSourceType
 } from "./resource-hub.js";
+import {
+  getKnowledgeGovernanceRepository,
+  normalizeVocabularyValue,
+  type KnowledgeVocabularyType
+} from "./knowledge-governance.js";
 import {
   AgentTriggerRunner,
   createAgentTriggerRule,
@@ -197,7 +207,9 @@ import {
   developmentEmailMarketName,
   developmentEmailSignature,
   developmentEmailStagePlan,
+  draftUsesResearch,
   ensureDevelopmentEmailSignature,
+  finalizePersonalization,
   type DevelopmentEmailBrief
 } from "./development-email-skill.js";
 import {
@@ -286,6 +298,25 @@ import { createMysqlStore } from "./mysql-store.js";
 import { validateIntegrationControlPlaneConfig } from "./integrations/integration-runtime-config.js";
 import { integrationHttpRouter } from "./integrations/integration-http-routes.js";
 import { getExchangeRepository } from "./exchange/exchange-repository.js";
+import { getKbTrainingRepository, type KbTrainingCandidate } from "./kb-training/kb-training-repository.js";
+import {
+  isKbTrainingEnabled,
+  publishKbCandidates,
+  startKbTraining,
+  type KbAssetRef,
+  type KbTrainingSourceSpec
+} from "./kb-training/kb-training-service.js";
+import { shouldPreselect } from "./kb-training/kb-training-prompt.js";
+import { extractKbSource, KbSourceExtractError, KB_SOURCE_MAX_BYTES } from "./kb-training/kb-source-extract.js";
+import {
+  deleteKnowledgeBase,
+  listKnowledgeBases,
+  linkKnowledgeBaseToRun,
+  parseKbVisibility,
+  renameOrShareKnowledgeBase,
+  resolveKnowledgeBaseForRun,
+  saveEnabledKnowledgeBases
+} from "./kb-training/kb-knowledge-base-service.js";
 import { BullMqIntegrationQueueDispatcher } from "./integrations/integration-queue.js";
 import { syncSystemConnectorCatalog } from "./integrations/connector-catalog.js";
 import { IntegrationControlPlaneService } from "./integrations/integration-service.js";
@@ -901,7 +932,9 @@ app.use("/api/agent", requireAuth, asyncRoute(async (req, res, next) => {
 }));
 app.use(["/api/knowledge", "/api/exams", "/api/exam-questions", "/api/exam-attempts"], requireAuth, asyncRoute(async (req, res, next) => {
   const knowledgeAssetSelfService = req.originalUrl.startsWith("/api/knowledge/assets")
-    && !req.path.endsWith("/publish");
+    && !req.path.endsWith("/publish")
+    && !req.path.endsWith("/archive")
+    && !req.path.endsWith("/batch");
   const readLikeAction = req.method === "GET"
     || knowledgeAssetSelfService
     || req.path.endsWith("/submit")
@@ -909,6 +942,13 @@ app.use(["/api/knowledge", "/api/exams", "/api/exam-questions", "/api/exam-attem
     || req.path.endsWith("/start")
     || req.originalUrl.startsWith("/api/exam-attempts/");
   await enforceIamTenantPermission(req, res, next, readLikeAction ? "training.read" : "training.manage");
+}));
+/**
+ * 知识库训练工作台：读用 training.read、写用 training.manage。
+ * 与文件中心同权限位 —— 训练库的上游就是文件中心，权限口径不该分叉。
+ */
+app.use("/api/kb", requireAuth, asyncRoute(async (req, res, next) => {
+  await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "training.read" : "training.manage");
 }));
 app.use("/api/products", requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "product.read" : "product.manage");
@@ -1711,16 +1751,14 @@ function canApproveTradeDocuments(user?: SessionUser) {
 }
 
 function canSeeKnowledgeAsset(user: SessionUser, asset: ReturnType<typeof getStore>["knowledgeAssets"][number]) {
-  const owner = getStore().users.find((item) => item.id === asset.ownerId);
-  const teamId = asset.teamId || owner?.teamId || "all";
+  const teamId = knowledgeAssetTeamId(getStore(), asset);
   if (teamId !== user.teamId || isPlatformIdentity(user)) return false;
   if (asset.status === "published") return true;
   return canSeeOwner(user, asset.ownerId, teamId);
 }
 
 function canEditKnowledgeAsset(user: SessionUser, asset: ReturnType<typeof getStore>["knowledgeAssets"][number]) {
-  const owner = getStore().users.find((item) => item.id === asset.ownerId);
-  const teamId = asset.teamId || owner?.teamId || "all";
+  const teamId = knowledgeAssetTeamId(getStore(), asset);
   if (teamId !== user.teamId || isPlatformIdentity(user)) return false;
   if (asset.ownerId === user.id) return true;
   return canManageTraining(user) && canSeeOwner(user, asset.ownerId, teamId);
@@ -1763,8 +1801,119 @@ const knowledgeAssetInputSchema = z.object({
   shareCode: z.string().trim().max(64).optional().default(""),
   fileType: z.enum(knowledgeFileTypes).default("other"),
   description: z.string().trim().max(2000).optional().default(""),
-  tags: z.array(z.string().trim().min(1).max(60)).max(30).optional().default([])
+  tags: z.array(z.string().trim().min(1).max(60)).max(30).optional().default([]),
+  /** 人工校订标记：仅 training.manage 可置 1（两池分层依据，默认 0）。 */
+  verified: z.boolean().optional()
 });
+
+/**
+ * 质量四项（入库闸的「结构化必填」软校验）。
+ *
+ * 不做硬拦截 —— 标题=文件名、无说明、无标签、无链接的资料仍然可以入库（那是现实），
+ * 但要**可见**：发布时作为 qualityFlags 返回，列表页显示「待补」徽章，让治理有抓手。
+ * 硬拦截只会把资料逼到别处去，拦不住脏，只是拦住了可见性。
+ */
+/**
+ * 「这份资料点了能不能拿到东西」。
+ *
+ * 抽成独立函数、而不是继续内联在 `knowledgeQualityFlags` 里：面向插件的目录快照
+ * 要把这件事单独透出去（`hasExternalLink`），写两遍必然分叉 —— 而两套口径下
+ * 「缺链接 12 份」与「12 份点了没反应」对不上账，治理面板就没人信了。
+ * 与 `resource-hub.ts::resourceReachable` 对 file 源的判定保持一致。
+ */
+function knowledgeAssetHasLink(asset: { sourceUrl?: string; sourceType?: string }) {
+  return Boolean(asset.sourceUrl) && asset.sourceType !== "legacy";
+}
+
+function knowledgeQualityFlags(asset: {
+  title?: string;
+  description?: string;
+  tags?: string[];
+  sourceUrl?: string;
+  sourceType?: string;
+}) {
+  const flags: string[] = [];
+  if (String(asset.title || "").trim().length < 6) flags.push("标题过短");
+  if (!String(asset.description || "").trim()) flags.push("缺少说明");
+  if (!Array.isArray(asset.tags) || !asset.tags.length) flags.push("缺少标签");
+  if (!knowledgeAssetHasLink(asset)) flags.push("缺少链接");
+  return flags;
+}
+
+/** 词表近似建议：供「类目不在词表」时给用户「是不是想选这个」。 */
+function knowledgeVocabularySuggestions(
+  entries: Array<{ value: string; normalized: string; enabled: boolean }>,
+  value: string,
+  limit = 5
+) {
+  const target = normalizeVocabularyValue(value);
+  const targetChars = new Set([...target]);
+  return entries
+    .filter((entry) => entry.enabled)
+    .map((entry) => {
+      const entryChars = new Set([...entry.normalized]);
+      let score = entry.normalized.includes(target) || target.includes(entry.normalized) ? 2 : 0;
+      const overlap = [...targetChars].filter((ch) => entryChars.has(ch)).length;
+      score += overlap / Math.max(1, Math.max(entryChars.size, targetChars.size));
+      return { value: entry.value, score };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((item) => item.value);
+}
+
+/**
+ * 查重：同团队内按归一化 URL（主键）或标题（次键）找已有资料。
+ *
+ * 不建表 —— knowledgeAssets 在内存 store 里，现算成本为零，还避免第二处真相。
+ * 与训练库指纹（training-library-service.ts）同思想，只是不落库。
+ */
+function findKnowledgeDuplicate(
+  store: ReturnType<typeof getStore>,
+  teamId: string,
+  input: { sourceUrl?: string; title?: string },
+  excludeId?: string
+) {
+  const normalizedUrl = String(input.sourceUrl || "").trim().toLowerCase();
+  const normalizedTitle = normalizeVocabularyValue(input.title || "");
+  const scoped = store.knowledgeAssets.filter(
+    (item) => item.id !== excludeId && item.status !== "archived" && knowledgeAssetTeamId(store, item) === teamId
+  );
+  const sameUrl = normalizedUrl
+    ? scoped.find((item) => String(item.sourceUrl || "").trim().toLowerCase() === normalizedUrl)
+    : undefined;
+  const sameTitle = normalizedTitle.length >= 4
+    ? scoped.find((item) => normalizeVocabularyValue(item.title) === normalizedTitle)
+    : undefined;
+  return { sameUrl, sameTitle };
+}
+
+/**
+ * 类目校验：必须命中词表。返回 { ok, entry?, created?, suggestions }。
+ *
+ * `allowCreate` = 调用方有 training.manage。把关人自己录入时允许隐式扩词表
+ * （否则新团队第一条资料被空词表拦死），但会把「新建了词条」返回给调用方提示；
+ * 普通业务员只能从已有词表里选 —— 这才是「受控」的意义。
+ */
+async function validateKnowledgeCategory(teamId: string, category: string, allowCreate: boolean) {
+  const repository = getKnowledgeGovernanceRepository();
+  const entries = await repository.list(teamId, "category");
+  const normalized = normalizeVocabularyValue(category);
+  const hit = entries.find((entry) => entry.normalized === normalized && entry.enabled);
+  if (hit) return { ok: true as const, entry: hit, created: false, suggestions: [] as string[] };
+  const enabled = entries.filter((entry) => entry.enabled);
+  if (allowCreate && !enabled.length) {
+    // 词表整体为空：新团队的第一条资料，直接建条放行
+    const entry = await repository.ensure(teamId, "category", category);
+    return { ok: true as const, entry, created: true, suggestions: [] as string[] };
+  }
+  return {
+    ok: false as const,
+    entry: null,
+    created: false,
+    suggestions: enabled.length ? knowledgeVocabularySuggestions(entries, category) : []
+  };
+}
 
 const skillResourceInputSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -2919,15 +3068,29 @@ app.get("/api/admin/updates/config", requireAuth, asyncRoute(async (req, res) =>
 
 const loginSchema = z.object({
   email: z.string().trim().email().max(180).transform((value) => value.toLowerCase()),
-  password: z.string().min(1).max(128)
+  password: z.string().min(1).max(128),
+  /**
+   * 谁在登录。`plugin` = WhatsApp 扩展 / 本机插件控制台（跨源、无 cookie、只读 body 里的 token）。
+   * 不传或传 `web` = 网页端，仍是 8 小时。
+   */
+  client: z.enum(["web", "plugin"]).optional()
 });
 
-function sendLoginSession(res: Response, sessionUser: SessionUser, mfaVerified = false) {
-  const token = signToken(sessionUser, { mfaVerified });
+function sendLoginSession(res: Response, sessionUser: SessionUser, mfaVerified = false, options: { client?: "web" | "plugin" } = {}) {
+  const pluginClient = options.client === "plugin";
+  const token = pluginClient
+    ? signToken(sessionUser, { mfaVerified, ttlSeconds: PLUGIN_TOKEN_TTL_SECONDS })
+    : signToken(sessionUser, { mfaVerified });
+  res.setHeader("Cache-Control", "no-store");
+  if (pluginClient) {
+    // 不种 cookie：扩展从 web.whatsapp.com 调 CRM，跨源 cookie 本来也带不过去、拿不到，
+    // 种下去只会让「网页登录态」和「插件登录态」隐式共用一个 8 小时的开关。
+    res.json({ token, user: sessionUser, client: "plugin" });
+    return;
+  }
   const csrfToken = createCsrfToken();
   res.cookie(AUTH_COOKIE_NAME, token, sessionCookieOptions());
   res.cookie(CSRF_COOKIE_NAME, csrfToken, csrfCookieOptions());
-  res.setHeader("Cache-Control", "no-store");
   res.json({ token, csrfToken, user: sessionUser });
 }
 
@@ -2971,7 +3134,7 @@ app.post("/api/auth/login", loginLimiter, asyncRoute(async (req, res) => {
       return;
     }
   }
-  sendLoginSession(res, sessionUser);
+  sendLoginSession(res, sessionUser, false, { client: body.client });
 }));
 
 app.post("/api/auth/mfa/enroll", loginLimiter, asyncRoute(async (req, res) => {
@@ -9292,6 +9455,24 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       evidence: brief.evidence,
       missing: brief.missing,
       angles: brief.angles,
+      // 千人千面的依据：这封信具体引用了什么、和同阶段别人的信差在哪。
+      // 界面必须能回答「模板哪来的、有没有用背调」，所以原样带出去，不让前端猜。
+      // 注意必须用 finalBody 再校准一次：AI / CLI 会重写正文，
+      // 请求时那份 brief 的 personalized 只说明「手上有素材」，不等于「真的用上了」。
+      personalization: (() => {
+        const calibrated = finalizePersonalization(brief.personalization, finalBody, brief);
+        return {
+          hook: calibrated.hook,
+          relevance: calibrated.relevance,
+          subjectAngle: calibrated.subjectAngle,
+          ask: calibrated.ask,
+          factsUsed: calibrated.factsUsed,
+          angles: calibrated.angles,
+          trace: calibrated.trace,
+          difference: calibrated.difference,
+          personalized: calibrated.personalized
+        };
+      })(),
       researchUsed: Boolean(researchRecord),
       researchId: researchRecord?.id || "",
       researchScore: researchRecord?.score ?? null,
@@ -9493,6 +9674,70 @@ app.post("/api/customers/:id/activities", requireAuth, asyncRoute(async (req, re
   if (body.nextReminder) customer.nextReminder = body.nextReminder;
   void store.persist().catch((err) => console.error("customer activity persist failed:", err));
   res.json({ activity, customer: customerWithPipeline(customer, req.user!) });
+}));
+
+/**
+ * 编辑一条客户跟进记录（2026-10-14）。
+ *
+ * 为什么必须有这个接口：WhatsApp 自动同步会把对话摘要**自动**写进跟进历史，
+ * 而 `customerActivities` 同时是业绩报表里 `followUpCount` 的数据源
+ * （见 `/api/reports` 的 performance 分支）。机器写的摘要必然有不准的时候，
+ * 人得能改 —— 没有这个接口，自动写入就是**不可逆**的。
+ *
+ * 留痕规则：`createdAt` 与 `operatorId` 是「谁在什么时候创建」的事实，**不可改写**；
+ * 编辑只写 `updatedAt` / `editedBy`。这样「机器写的、人改过的」始终分得清。
+ */
+app.patch("/api/customers/:id/activities/:activityId", requireAuth, asyncRoute(async (req, res) => {
+  const schema = z.object({
+    content: z.string().trim().min(1).max(2000).optional(),
+    type: z.enum(["call", "email", "whatsapp", "wechat", "meeting", "note"]).optional(),
+    nextReminder: z.string().trim().max(100).optional()
+  }).refine((value) => Object.keys(value).length > 0, { message: "至少要修改一个字段" });
+  const body = schema.parse(req.body || {});
+  const store = getStore();
+  const customer = findWritableCustomer(req.user!, req.params.id, res);
+  if (!customer) return;
+  // 必须同时校验 activityId **属于** 这个客户：否则只要知道 id 就能跨客户改记录
+  const activity = store.customerActivities.find(
+    (item) => item.id === req.params.activityId && item.customerId === customer.id
+  );
+  if (!activity) {
+    res.status(404).json({ message: "跟进记录不存在或不属于该客户" });
+    return;
+  }
+  if (body.content !== undefined) activity.content = body.content;
+  if (body.type !== undefined) activity.type = body.type;
+  if (body.nextReminder !== undefined) {
+    activity.nextReminder = body.nextReminder;
+    if (body.nextReminder) customer.nextReminder = body.nextReminder;
+  }
+  activity.updatedAt = new Date().toISOString();
+  activity.editedBy = req.user!.id;
+  void store.persist().catch((err) => console.error("customer activity persist failed:", err));
+  res.json({ activity, customer: customerWithPipeline(customer, req.user!) });
+}));
+
+/**
+ * 撤销一条客户跟进记录（2026-10-14）。
+ *
+ * 这是自动同步的**安全网**：记录写错了客户、或整条都是噪音时，
+ * 必须能干净地撤掉，而不是留一条改不干净的痕迹。
+ * DELETE 在 Agent 契约里自动落到 `explicit_confirmation`，不需要手工登记。
+ */
+app.delete("/api/customers/:id/activities/:activityId", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const customer = findWritableCustomer(req.user!, req.params.id, res);
+  if (!customer) return;
+  const index = store.customerActivities.findIndex(
+    (item) => item.id === req.params.activityId && item.customerId === customer.id
+  );
+  if (index < 0) {
+    res.status(404).json({ message: "跟进记录不存在或不属于该客户" });
+    return;
+  }
+  const [removed] = store.customerActivities.splice(index, 1);
+  void store.persist().catch((err) => console.error("customer activity persist failed:", err));
+  res.json({ removed: removed.id, customer: customerWithPipeline(customer, req.user!) });
 }));
 
 app.post("/api/customers/:id/meeting-notes", requireAuth, asyncRoute(async (req, res) => {
@@ -10701,6 +10946,243 @@ app.post("/api/whatsapp/binding/twilio/start", requireAuth, asyncRoute(async (re
   res.json({ binding: publicWhatsAppBinding(binding) });
 }));
 
+/**
+ * WhatsApp 跟进同步 · CRM 侧大脑（2026-10-15，用户拍板「结论在 CRM 做」）。
+ *
+ * 插件只保留会话库与触发（定时 tick / 扩展按钮），把当天消息打包 POST 过来；
+ * 匹配客户、生成结论（CRM 自己配置的 AI 模型，带 `getAiConfig` 的用例无关首选）、
+ * 直写跟进/线索、站内信全部在这里完成 —— 插件时代的 CLI 档不搬（CRM 的 CLI 走
+ * Runner 重通道，逐会话摘要用它既慢又绕），模型不可用时降级口径与插件一致。
+ * 插件用自签 owner 身份 JWT 调用（与 GET /api/customers 同一套鉴权）。
+ */
+/**
+ * WhatsApp 插件 ↔ CRM 这条链路也走「对接中心」留痕：自动登记一个内置对接方，
+ * 每次收发都落报文日志（方向 / 来源 IP / 请求响应体）。
+ *
+ * 铁律协调：报文日志里的**消息正文会被占位符替换**（「原文不落 CRM 库」照旧成立），
+ * 结构、条数、方向、时间戳全部保留；要看正文走客户详情的「查看对话」（按需拉取）。
+ */
+const WHATSAPP_EXCHANGE_ENDPOINT_NAME = "WhatsApp 插件（自动登记）";
+
+async function ensureWhatsappExchangeEndpoint(teamId: string, ownerId: string) {
+  const repository = getExchangeRepository();
+  if (!repository) return null;
+  const existing = await repository.findEndpointByName(teamId, WHATSAPP_EXCHANGE_ENDPOINT_NAME);
+  if (existing) return existing;
+  return repository.createEndpoint({
+    teamId,
+    ownerId,
+    name: WHATSAPP_EXCHANGE_ENDPOINT_NAME,
+    direction: "both",
+    baseUrl: process.env.WHATSAPP_PLUGIN_BASE_URL || "http://127.0.0.1:3100",
+    authType: "bearer",
+    authName: "",
+    authSecret: "",
+    extraHeadersJson: "{}",
+    description: "WhatsApp 浏览器扩展插件与 CRM 的同步链路（系统自动登记）：跟进同步、对话原文按需拉取。",
+    onReceive: "log",
+    enabled: true
+  });
+}
+
+/** 报文里出现 messages 数组就把每条 body 换成占位（保留结构；原文不落库）。 */
+function redactWhatsappBodies(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactWhatsappBodies);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const clone: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (key === "body" && typeof item === "string") {
+      clone[key] = `【正文 ${item.length} 字 · 略】`;
+    } else if (key === "authorization") {
+      clone[key] = "Bearer ***";
+    } else {
+      clone[key] = redactWhatsappBodies(item);
+    }
+  }
+  return clone;
+}
+
+function whatsappLogBody(value: unknown): string {
+  try {
+    return JSON.stringify(redactWhatsappBodies(value)).slice(0, 200_000);
+  } catch {
+    return String(value).slice(0, 200_000);
+  }
+}
+
+/** 落报文日志：失败绝不影响主流程（打日志留痕即可）。 */
+function logWhatsappExchange(input: Parameters<NonNullable<ReturnType<typeof getExchangeRepository>>["insertMessage"]>[0]) {
+  const repository = getExchangeRepository();
+  if (!repository) return;
+  repository.insertMessage(input).catch((error) => console.error("exchange log failed:", error));
+}
+
+app.post("/api/whatsapp/followup-sync", requireAuth, asyncRoute(async (req, res) => {
+  const started = Date.now();
+  let payload: import("./whatsapp-followup-sync.js").FollowupSyncPayload;
+  try {
+    payload = followupSyncPayloadSchema.parse(req.body);
+  } catch (error) {
+    void ensureWhatsappExchangeEndpoint(req.user!.teamId, req.user!.id).then((endpoint) => {
+      if (!endpoint) return;
+      logWhatsappExchange({
+        teamId: req.user!.teamId,
+        endpointId: endpoint.id,
+        endpointName: endpoint.name,
+        direction: "inbound",
+        topic: "whatsapp.followup-sync",
+        method: req.method,
+        url: req.originalUrl.split("?")[0] || "/api/whatsapp/followup-sync",
+        requestHeadersJson: JSON.stringify(redactWhatsappBodies(req.headers as Record<string, unknown>)).slice(0, 200_000),
+        requestBody: whatsappLogBody(req.body),
+        status: "failed",
+        httpStatus: 400,
+        responseHeadersJson: "{}",
+        responseBody: JSON.stringify({ message: error instanceof Error ? error.message : "报文校验失败" }),
+        durationMs: Date.now() - started,
+        errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "报文校验失败",
+        leadId: "",
+        sourceIp: req.ip || req.socket?.remoteAddress || ""
+      });
+    }).catch(() => {});
+    throw error;
+  }
+  const store = getStore();
+  const result = await runWhatsappFollowupSync(req.user!, payload, {
+    customersOf: (user) => ownedCustomersFor(user, "mine").map((customer) => ({
+      id: customer.id,
+      whatsapp: customer.whatsapp || "",
+      whatsappPhone: customer.whatsapp || store.whatsappBindings.find((binding) => binding.customerId === customer.id)?.phoneNumber || ""
+    })),
+    aiConfig: (user) => getAiConfig(user),
+    createLead: (user, input) => createLeadFromSource(user, input as Parameters<typeof createLeadFromSource>[1])
+  });
+  res.json(result);
+  // 同步完成后落对接中心日志（fire-and-forget）：方向=接收、来源 IP=插件所在机器。
+  void ensureWhatsappExchangeEndpoint(req.user!.teamId, req.user!.id).then((endpoint) => {
+    if (!endpoint) return;
+    const failed = result.failures.length > 0;
+    logWhatsappExchange({
+      teamId: req.user!.teamId,
+      endpointId: endpoint.id,
+      endpointName: endpoint.name,
+      direction: "inbound",
+      topic: "whatsapp.followup-sync",
+      method: req.method,
+      url: req.originalUrl.split("?")[0] || "/api/whatsapp/followup-sync",
+      requestHeadersJson: JSON.stringify(redactWhatsappBodies(req.headers as Record<string, unknown>)).slice(0, 200_000),
+      requestBody: whatsappLogBody(payload),
+      // partial（部分会话失败）不算整条失败——仍是「已接收」，失败原因进 errorMessage。
+      status: "received",
+      httpStatus: 200,
+      responseHeadersJson: "{}",
+      responseBody: whatsappLogBody(result),
+      durationMs: Date.now() - started,
+      errorMessage: failed ? result.failures.slice(0, 5).join("；").slice(0, 1000) : "",
+      leadId: "",
+      sourceIp: req.ip || req.socket?.remoteAddress || ""
+    });
+  }).catch(() => {});
+}));
+
+/**
+ * 「跟进/旅程上点图标看对话原文」的供给端。原文不落 CRM 库（老铁律）——
+ * 它一直在插件的会话库里，这里只是带着 owner 身份去插件按 activityId 取当天那份。
+ * 插件挂了/没配置时回 502，前端图标点了会看到明确的错误提示而不是静默。
+ */
+app.get("/api/whatsapp/followup-transcript/:activityId", requireAuth, asyncRoute(async (req, res) => {
+  const pluginBase = (process.env.WHATSAPP_PLUGIN_BASE_URL || "http://127.0.0.1:3100").replace(/\/+$/u, "");
+  const activityId = encodeURIComponent(String(req.params.activityId || ""));
+  const started = Date.now();
+  const sourceIp = req.ip || req.socket?.remoteAddress || "";
+  const upstreamUrl = `${pluginBase}/api/v1/automation/followup-sync/transcript/activity/${activityId}`;
+  try {
+    const upstream = await fetch(upstreamUrl, {
+      headers: { authorization: `Bearer ${signToken(req.user!)}` },
+      signal: AbortSignal.timeout(8_000)
+    });
+    const body = await upstream.json().catch(() => ({}));
+    // 前端 api() 的错误展示只认 `message` 字段，这里统一带上。
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ ...body, message: body.message || body.error || "对话记录读取失败" });
+      // 出站失败同样留痕（响应体是错误信息，不含原文）。
+      void ensureWhatsappExchangeEndpoint(req.user!.teamId, req.user!.id).then((endpoint) => {
+        if (!endpoint) return;
+        logWhatsappExchange({
+          teamId: req.user!.teamId,
+          endpointId: endpoint.id,
+          endpointName: endpoint.name,
+          direction: "outbound",
+          topic: "whatsapp.transcript",
+          method: "GET",
+          url: upstreamUrl,
+          requestHeadersJson: JSON.stringify({ authorization: "Bearer ***", "x-trigger-source-ip": sourceIp }),
+          requestBody: "",
+          status: "failed",
+          httpStatus: upstream.status,
+          responseHeadersJson: "{}",
+          responseBody: whatsappLogBody(body),
+          durationMs: Date.now() - started,
+          errorMessage: String(body.error || body.message || "对话记录读取失败").slice(0, 1000),
+          leadId: "",
+          sourceIp
+        });
+      }).catch(() => {});
+      return;
+    }
+    res.json(body);
+    // 出站成功留痕：响应正文里的消息原文同样替换成占位（原文不落库，要看走「查看对话」）。
+    void ensureWhatsappExchangeEndpoint(req.user!.teamId, req.user!.id).then((endpoint) => {
+      if (!endpoint) return;
+      logWhatsappExchange({
+        teamId: req.user!.teamId,
+        endpointId: endpoint.id,
+        endpointName: endpoint.name,
+        direction: "outbound",
+        topic: "whatsapp.transcript",
+        method: "GET",
+        url: upstreamUrl,
+        requestHeadersJson: JSON.stringify({ authorization: "Bearer ***", "x-trigger-source-ip": sourceIp }),
+        requestBody: "",
+        status: "ok",
+        httpStatus: upstream.status,
+        responseHeadersJson: "{}",
+        responseBody: whatsappLogBody(body),
+        durationMs: Date.now() - started,
+        errorMessage: "",
+        leadId: "",
+        sourceIp
+      });
+    }).catch(() => {});
+  } catch (error) {
+    const message = `WhatsApp 插件服务不可达（${error instanceof Error ? error.message : "未知错误"}）`;
+    void ensureWhatsappExchangeEndpoint(req.user!.teamId, req.user!.id).then((endpoint) => {
+      if (!endpoint) return;
+      logWhatsappExchange({
+        teamId: req.user!.teamId,
+        endpointId: endpoint.id,
+        endpointName: endpoint.name,
+        direction: "outbound",
+        topic: "whatsapp.transcript",
+        method: "GET",
+        url: upstreamUrl,
+        requestHeadersJson: JSON.stringify({ authorization: "Bearer ***", "x-trigger-source-ip": sourceIp }),
+        requestBody: "",
+        status: "failed",
+        httpStatus: null,
+        responseHeadersJson: "{}",
+        responseBody: "",
+        durationMs: Date.now() - started,
+        errorMessage: message.slice(0, 1000),
+        leadId: "",
+        sourceIp
+      });
+    }).catch(() => {});
+    res.status(502).json({ error: message, code: "PLUGIN_UNREACHABLE" });
+  }
+}));
+
 // Twilio Webhook 接收消息
 app.post("/api/whatsapp/webhook/twilio", asyncRoute(async (req, res) => {
   const signature = String(req.headers["x-twilio-signature"] || "");
@@ -11641,6 +12123,95 @@ app.post("/api/deals/:id/archive", requireAuth, asyncRoute(async (req, res) => {
   res.json({ deal });
 }));
 
+app.post("/api/deals/:id/restore", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (!deal.archivedAt) {
+    res.status(400).json({ message: "该商机不在归档状态" });
+    return;
+  }
+  // 「拉回来」刻意只做一件事：取消归档标记。阶段保持不变（仍是成交/丢单），
+  // 佣金同步、客户成交状态、报表口径等关联数据一律不动 —— 想重新跟进同款，
+  // 用「复制商机」从询盘开一张新的。
+  deal.archivedAt = undefined;
+  createDealEvent({
+    dealId: deal.id,
+    type: "restored",
+    content: "归档商机已恢复（仅取消归档，阶段与关联数据未变更）",
+    operatorId: req.user!.id,
+    fromStage: deal.stage,
+    toStage: deal.stage,
+    nextAction: deal.nextAction,
+    nextActionAt: deal.nextActionAt
+  });
+  await store.persist();
+  res.json({ deal });
+}));
+
+app.post("/api/deals/:id/duplicate", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const deal = store.deals.find((item) => item.id === req.params.id);
+  if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+    res.status(404).json({ message: "商机不存在" });
+    return;
+  }
+  if (deal.archivedAt) {
+    res.status(400).json({ message: "已归档商机不能复制，请先在关闭商机列表恢复" });
+    return;
+  }
+  if (!ensureDealCustomerWritable(req.user!, deal, res)) return;
+  const now = new Date().toISOString();
+  const sourceItems = deal.items?.length
+    ? deal.items
+    : [{ id: "", productId: "", product: deal.product, model: "", quantity: deal.quantity, unitPrice: deal.unitPrice }];
+  // 明细全部重发新 id：两个商机的明细行必须是独立记录，不能共享主键。
+  const items = sourceItems.map((item, index) => ({
+    id: `deal_item_${Date.now()}_${index + 1}`,
+    productId: item.productId || "",
+    product: item.product,
+    model: item.model || "",
+    quantity: Number(item.quantity || 0),
+    unitPrice: Number(item.unitPrice || 0)
+  }));
+  const copy: Deal = {
+    ...structuredClone(deal),
+    id: `d_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    title: `${deal.title}（副本）`.slice(0, 200),
+    stage: "询盘",
+    product: dealProductSummary(items),
+    quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+    unitPrice: items.length === 1 ? items[0].unitPrice : 0,
+    items,
+    amountType: "estimate",
+    nextAction: deal.nextAction || "跟进商机",
+    nextActionAt: deal.nextActionAt || now.slice(0, 10),
+    stageChangedAt: now,
+    closedAt: undefined,
+    wonReason: undefined,
+    lostReason: undefined,
+    lostReasonCategory: undefined,
+    revisitAt: undefined,
+    archivedAt: undefined
+  };
+  store.deals.unshift(copy);
+  createDealEvent({
+    dealId: copy.id,
+    type: "created",
+    content: `复制自商机「${deal.title}」，从询盘重新开始；原商机的时间线与单据不随复制`,
+    operatorId: req.user!.id,
+    toStage: "询盘",
+    nextAction: copy.nextAction,
+    nextActionAt: copy.nextActionAt,
+    createdAt: now
+  });
+  await store.persist();
+  res.json({ deal: copy });
+}));
+
 app.delete("/api/deals/:id", requireAuth, asyncRoute(async (req, res) => {
   const store = getStore();
   const deal = store.deals.find((item) => item.id === req.params.id);
@@ -11813,10 +12384,12 @@ app.get("/api/deals/closed", requireAuth, (req, res) => {
   const pageSize = Math.min(50, Math.max(5, Number(req.query.pageSize || 20)));
   const keyword = String(req.query.keyword || "").trim().toLowerCase();
   const status = String(req.query.status || "all");
+  const stage = String(req.query.stage || "");
   const month = String(req.query.month || "");
   const filtered = store.deals
     .filter((deal) => canSeeOwner(req.user!, deal.ownerId, deal.teamId) && (deal.stage === "成交" || deal.stage === "丢单"))
-    .filter((deal) => status === "all" || deal.stage === status)
+    .filter((deal) => status === "all" || deal.stage === status || (status === "archived" && Boolean(deal.archivedAt)))
+    .filter((deal) => !stage || stage === "all" || deal.stage === stage)
     .filter((deal) => {
       const customer = store.customers.find((item) => item.id === deal.customerId);
       const text = `${deal.title} ${deal.product} ${customer?.company || ""} ${customer?.country || ""} ${deal.lostReasonCategory || ""}`.toLowerCase();
@@ -11834,7 +12407,8 @@ app.get("/api/deals/closed", requireAuth, (req, res) => {
     counts: {
       won: filtered.filter((deal) => deal.stage === "成交").length,
       lost: filtered.filter((deal) => deal.stage === "丢单").length,
-      revisit: filtered.filter((deal) => deal.stage === "丢单" && deal.revisitAt).length
+      revisit: filtered.filter((deal) => deal.stage === "丢单" && deal.revisitAt).length,
+      archived: filtered.filter((deal) => deal.archivedAt).length
     }
   });
 });
@@ -13330,6 +13904,500 @@ app.delete("/api/peers/:id", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
+// 知识库训练（KB Training）：发起批次 / 候选确认 / 发布回写 / 试问代理
+//
+// 见 docs/KNOWLEDGE-TRAINING-DEV-PLAN.md。P1 的闭环是「一份资料 → 一批候选 →
+// 人工确认 → 发布到插件 → 现场试问」。治理控制面，与 /api/exchange 同级，
+// 在 agent-api-policy 里整条前缀禁用（Agent 通道不得直接操作）。
+// ---------------------------------------------------------------------------
+const kbSourcesSchema = z.object({
+  /** 文件中心资料：P1 只用它们提供**出处**（标题/版本）；正文不在库里。 */
+  files: z.object({
+    assetIds: z.array(z.string().trim().min(1).max(64)).max(50)
+  }).optional(),
+  /** P1 的语料主体：粘贴 / 上传的资料正文。 */
+  text: z.object({
+    items: z.array(z.object({
+      title: z.string().trim().max(200).optional(),
+      body: z.string().max(200_000).optional(),
+      assetId: z.string().trim().max(64).optional(),
+      // 来源描述（选填）：这份资料从哪来 / 谁写的 / 什么时候的口径。
+      // 它进候选的 sourceRef 供人核对出处，**不**进运行端提示词（描述不是知识内容）。
+      note: z.string().trim().max(200).optional()
+    })).max(50)
+  }).optional(),
+  /** 会话源（P2）：P1 收到就如实报「未开放」，不静默忽略。 */
+  conversations: z.object({
+    since: z.string().trim().max(40).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional()
+  }).optional()
+});
+
+function kbTrainingRepositoryOr503(res: Response) {
+  const repository = getKbTrainingRepository();
+  if (!repository) {
+    res.status(503).json({ message: "知识库训练模块未启用（当前存储不支持）" });
+    return null;
+  }
+  return repository;
+}
+
+/** 统一开关：关掉即回到「没有这批功能」，不需要回滚代码。 */
+function kbTrainingEnabledOr503(res: Response): boolean {
+  if (isKbTrainingEnabled()) return true;
+  res.status(503).json({ message: "知识库训练已关闭（KB_TRAINING_ENABLED=0）", code: "KB_TRAINING_DISABLED" });
+  return false;
+}
+
+/** 资料 id → 元数据。只取调用者可见的资产 —— 别的团队的资料不能当出处。 */
+function kbAssetIndex(actor: SessionUser, ids: string[]): Map<string, KbAssetRef> {
+  const wanted = new Set(ids.map((id) => String(id || "").trim()).filter(Boolean));
+  const index = new Map<string, KbAssetRef>();
+  if (!wanted.size) return index;
+  for (const asset of getStore().knowledgeAssets) {
+    if (!wanted.has(asset.id) || !canSeeKnowledgeAsset(actor, asset)) continue;
+    index.set(asset.id, {
+      id: asset.id,
+      title: asset.title,
+      version: asset.version || "",
+      description: asset.description || ""
+    });
+  }
+  return index;
+}
+
+/** CLI 失败时的降级档：本团队里已启用且填了 key 的模型，取最近更新的那个。 */
+function kbAiConfigFor(actor: SessionUser): AiModelConfig | undefined {
+  return getStore().aiModelConfigs
+    .filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId && item.enabled && item.apiKey && item.baseUrl && item.model)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+}
+
+function kbSourceAssetIds(spec: KbTrainingSourceSpec): string[] {
+  return [
+    ...(spec.files?.assetIds ?? []),
+    ...(spec.text?.items ?? []).map((item) => item.assetId ?? "")
+  ];
+}
+
+/** 候选出参：补 `preselect`（预勾选标记）。规则在纯函数里，前端只负责照着勾。 */
+function kbCandidatePayload(candidate: KbTrainingCandidate) {
+  return { ...candidate, preselect: shouldPreselect(candidate) };
+}
+
+/** 调插件训练库（发布 / 撤回 / 试问共用一条通道，统一带操作者身份的令牌）。 */
+async function callPluginTrainingLibrary(
+  actor: SessionUser,
+  path: string,
+  init: { method: string; body?: unknown }
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const pluginBase = (process.env.WHATSAPP_PLUGIN_BASE_URL || "http://127.0.0.1:3100").replace(/\/+$/u, "");
+  const response = await fetch(`${pluginBase}${path}`, {
+    method: init.method,
+    headers: { authorization: `Bearer ${signToken(actor)}`, "content-type": "application/json" },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: AbortSignal.timeout(15_000)
+  });
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  return { ok: response.ok, status: response.status, data };
+}
+
+/**
+ * 资料正文抽取（PDF / DOCX / 文本）——训练入口的第一步。
+ *
+ * 为什么不放到前端：浏览器读不了 PDF / Word；也不能只让用户「自己转成 txt」——
+ * 用户手里的资料九成是 PDF/Word，那等于把功能关在门外。
+ * 这里只做**抽取**（不做理解），抽取结果回前端暂存，提交训练时才真正发给模型。
+ */
+app.post("/api/kb/training/extract", requireAuth, express.raw({ type: () => true, limit: KB_SOURCE_MAX_BYTES }), asyncRoute(async (req, res) => {
+  // 类型判定交给字节（%PDF- / ZIP 头），不信 content-type：前端固定发 octet-stream，
+  // 但其它调用方可能带 application/pdf。若上游已有 urlencoded/json 解析器先吃掉了 body，
+  // 这里会拿到空 buffer —— 报「文件是空的」，比静默抽空正文好排查。
+  if (!kbTrainingEnabledOr503(res)) return;
+  const encodedFileName = String(req.headers["x-file-name"] || "").trim();
+  let fileName = "";
+  try {
+    fileName = decodeURIComponent(encodedFileName);
+  } catch {
+    res.status(400).json({ message: "文件名编码无效" });
+    return;
+  }
+  fileName = path.basename(fileName).replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 255);
+  const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  try {
+    const extracted = await extractKbSource({
+      fileName,
+      buffer,
+      declaredMime: String(req.headers["x-file-type"] || "").trim()
+    });
+    res.json(extracted);
+  } catch (error) {
+    if (error instanceof KbSourceExtractError) {
+      res.status(error.status).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+}));
+
+app.post("/api/kb/training/runs", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const body = z.object({
+    sources: kbSourcesSchema.default({}),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    /** 归属知识库。不给就新建一个（默认私用），名字取自首份语料标题。 */
+    kbId: z.string().trim().max(64).optional(),
+    kbName: z.string().trim().max(200).optional()
+  }).parse(req.body || {});
+  const spec = body.sources as KbTrainingSourceSpec;
+  const assets = kbAssetIndex(req.user!, kbSourceAssetIds(spec));
+  const actor = { id: req.user!.id, teamId: req.user!.teamId };
+  // 先定库再开训：库是资产，批次是"哪次训练喂了它"，所以库必须比批次先存在。
+  // 定库失败（比如指定了别人的库）要**明确报错**，不能退回"随便建一个"。
+  const knowledgeBase = await resolveKnowledgeBaseForRun({
+    actor,
+    spec,
+    kbId: body.kbId,
+    name: body.kbName
+  });
+  const run = await startKbTraining({
+    actor,
+    spec,
+    kbId: knowledgeBase.id,
+    deps: { assets, aiConfig: kbAiConfigFor(req.user!) }
+  });
+  await linkKnowledgeBaseToRun(knowledgeBase.id, run.id, actor.teamId, actor.id);
+  // ⚠️ 新建库会**自动把这个库勾进创建者的启用清单**（见 createKnowledgeBase），
+  //    而清单的唯一权威在 CRM、执行在插件 —— 所以清单一变就必须推，否则会出现
+  //    「面板上勾着这个库、运行端却按旧清单出稿」：用户看不见，也没有任何东西会触发下一次同步。
+  //    老用户会因此从「从未配置（自有语料全用）」切成「严格按清单」，但清单里本来就是他自己的全部库，
+  //    对自己的语料覆盖范围完全一致；真正被排除的只有"他本来就没启用过的那些库"。
+  //    指定了已有 kbId 时不推：那种情况下清单没变。
+  let knowledgeBaseSync: { ok: boolean; error?: string } = { ok: true };
+  if (!String(body.kbId ?? "").trim()) {
+    const enabledIds = await repository.listEnabledKnowledgeBaseIds(actor.id);
+    knowledgeBaseSync = await pushKbEnabledToPlugin(req.user!, enabledIds).catch((error: unknown) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : "插件不可达"
+    }));
+    if (!knowledgeBaseSync.ok) {
+      console.warn(`[kb] 启用清单同步失败（知识库 ${knowledgeBase.id}）：${knowledgeBaseSync.error}`);
+    }
+  }
+  res.status(201).json({ run, knowledgeBase, knowledgeBaseSync });
+}));
+
+app.post("/api/kb/training/runs/:id/cancel", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const id = String(req.params.id || "").trim();
+  if (!/^kbr_[a-z0-9]{4,40}$/u.test(id)) {
+    res.status(400).json({ message: "训练批次号无效" });
+    return;
+  }
+  const run = await repository.getRun(id, req.user!.teamId);
+  if (!run) {
+    res.status(404).json({ message: "训练批次不存在" });
+    return;
+  }
+  if (run.status !== "running") {
+    res.status(409).json({ message: `这批已经${run.status === "cancelled" ? "取消" : "结束"}，不需要再取消` });
+    return;
+  }
+  const accepted = await repository.requestRunCancel(id, req.user!.teamId);
+  // 取消是**请求**不是结果：正在飞的那批模型调用结束后才会停。界面据此把按钮切到「正在停止…」，
+  // 直接报「已取消」会在真正停下来之前就开始撒谎。
+  res.json({ accepted, run: await repository.getRun(id, req.user!.teamId) });
+}));
+
+app.get("/api/kb/training/runs", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const query = z.object({ limit: z.coerce.number().int().min(1).max(100).catch(30) }).parse(req.query);
+  res.json({ runs: await repository.listRuns(req.user!.teamId, query.limit) });
+}));
+
+app.get("/api/kb/training/runs/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const run = await repository.getRun(String(req.params.id || ""), req.user!.teamId);
+  if (!run) {
+    res.status(404).json({ message: "训练批次不存在" });
+    return;
+  }
+  // 批次详情顺带把该批候选一起给前端：轮询一次就能刷新「提炼结果」，少一次往返。
+  const candidates = await repository.listCandidates(req.user!.teamId, { runId: run.id, status: "all", limit: 100 });
+  res.json({
+    run,
+    counts: await repository.countCandidatesByRun(req.user!.teamId, run.id),
+    candidates: candidates.map(kbCandidatePayload)
+  });
+}));
+
+app.get("/api/kb/training/candidates", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const query = z.object({
+    status: z.enum(["pending", "approved", "rejected", "published", "all"]).catch("pending"),
+    runId: z.string().trim().max(64).catch(""),
+    kind: z.enum(["qa", "snippet", "policy", "forbidden", "all"]).catch("all"),
+    gap: z.enum(["1", "0"]).catch("0"),
+    limit: z.coerce.number().int().min(1).max(100).catch(20),
+    cursor: z.coerce.number().int().min(0).catch(0)
+  }).parse(req.query);
+  const items = await repository.listCandidates(req.user!.teamId, {
+    status: query.status,
+    runId: query.runId || undefined,
+    kind: query.kind,
+    gapOnly: query.gap === "1",
+    limit: query.limit + 1,
+    offset: query.cursor
+  });
+  const hasMore = items.length > query.limit;
+  res.json({
+    items: items.slice(0, query.limit).map(kbCandidatePayload),
+    nextCursor: hasMore ? query.cursor + query.limit : null
+  });
+}));
+
+app.post("/api/kb/training/candidates/review", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const body = z.object({
+    ids: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
+    action: z.enum(["confirm", "drop"]),
+    edits: z.array(z.object({
+      id: z.string().trim().min(1).max(64),
+      question: z.string().trim().max(2_000).optional(),
+      answer: z.string().trim().max(4_000).optional(),
+      tags: z.array(z.string().trim().min(1).max(60)).max(20).optional()
+    })).max(20).optional()
+  }).parse(req.body || {});
+  const updated = await repository.reviewCandidates(
+    req.user!.teamId,
+    body.ids,
+    body.action,
+    body.edits ?? [],
+    req.user!.id
+  );
+  res.json({ candidates: updated.map(kbCandidatePayload) });
+}));
+
+app.post("/api/kb/training/candidates/publish", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const body = z.object({
+    ids: z.array(z.string().trim().min(1).max(64)).min(1).max(20)
+  }).parse(req.body || {});
+  // ⚠️ 这里**没有**「发布给谁」参数，是刻意的：跨账号共用走的不是"把语料复制到别人名下"，
+  //    而是「库切公开 → 对方在他的启用清单里勾上」（见 PUT /api/kb/training/knowledge-bases/defaults）。
+  //    复制一份的坏处是两份会各自漂移：你改了 A 库，对方的副本还是老的，而且他停用不掉。
+  //    旧的 `targetOwnerId` 占位符已删除 —— 收下却不用 = 静默无效参数，比不提供更糟。
+  const actor = req.user!;
+  const result = await publishKbCandidates({
+    actor: { id: actor.id, teamId: actor.teamId },
+    ids: body.ids,
+    publishToPlugin: async (candidate, context) => {
+      const response = await callPluginTrainingLibrary(actor, "/api/v1/training/library", {
+        method: "POST",
+        body: {
+          kind: candidate.kind,
+          question: candidate.question || undefined,
+          answer: candidate.answer,
+          tags: candidate.tags,
+          languages: candidate.languages,
+          // kbId 必须带上：插件要靠它判断「这条语料该不该出现在某个账号的出稿里」。
+          // 空串 = 老批次（无归属），插件侧按"历史条目"处理，仍然只对它自己的 owner 生效。
+          kbId: context.kbId || undefined,
+          // 出处三件套（哪个文件 / 哪一段 / 来源描述）：插件引用卡片显示「《文件》§段落 · 描述」。
+          // 不进插件运行端提示词，只服务人核对出处。
+          sourceTitle: candidate.sourceRef?.title || undefined,
+          sourceAnchor: candidate.sourceRef?.anchor || undefined,
+          sourceNote: candidate.sourceRef?.note || undefined
+        }
+      });
+      if (!response.ok) {
+        const message = String(response.data.message || response.data.error || "").trim();
+        throw new Error(message || `插件返回 HTTP ${response.status}`);
+      }
+      const entryId = String(response.data.id || "");
+      if (!entryId) throw new Error("插件没有返回条目 id，血缘无法回写");
+      // 插件撞指纹时返回 200 + 既有条目 —— 那不是失败，是「已经在了」。
+      return { entryId, existing: response.status === 200 };
+    }
+  });
+  res.json(result);
+}));
+
+app.post("/api/kb/training/candidates/:id/revoke", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const candidate = await repository.getCandidate(String(req.params.id || ""), req.user!.teamId);
+  if (!candidate) {
+    res.status(404).json({ message: "候选不存在" });
+    return;
+  }
+  if (!candidate.publishedEntryId) {
+    res.status(400).json({ message: "该候选还没有发布过，无需撤回" });
+    return;
+  }
+  // 插件侧置 archived（保留行留痕，不硬删）—— 复用它的候选确认通道（action=drop）。
+  const response = await callPluginTrainingLibrary(req.user!, "/api/v1/training/library/confirm", {
+    method: "POST",
+    body: { ids: [candidate.publishedEntryId], action: "drop" }
+  }).catch((error: unknown) => {
+    throw new Error(`插件不可达：${error instanceof Error ? error.message : "未知错误"}`);
+  });
+  if (!response.ok) {
+    res.status(response.status).json({ message: String(response.data.message || response.data.error || "插件撤回失败") });
+    return;
+  }
+  await repository.markCandidateRevoked(candidate.id, req.user!.teamId, req.user!.id);
+  const fresh = await repository.getCandidate(candidate.id, req.user!.teamId);
+  res.json({ candidate: fresh ? kbCandidatePayload(fresh) : null });
+}));
+
+// ---------------------------------------------------------------------------
+// 知识库（训练成果的资产形态）：公开 / 私用 + 账号级「默认知识库」多选启用
+//
+// 为什么要有一个"库"这一层：批次是执行日志（会失败、会堆），知识库是资产（有名字、
+// 有创建者、能被别人勾选启用）。「出稿读哪些语料」最终由**启用清单**决定，而不是
+// "库里有什么就全用"——这一层就是「多不伤、扁平的多才伤」的落地。
+// ---------------------------------------------------------------------------
+
+/** 把启用清单推给插件。插件是运行端：自动回复在它内部跑，没有 CRM 请求上下文，只能由 CRM 主动推。 */
+async function pushKbEnabledToPlugin(actor: SessionUser, kbIds: string[]): Promise<{ ok: boolean; error?: string }> {
+  const response = await callPluginTrainingLibrary(actor, "/api/v1/training/kb-subscriptions", {
+    method: "PUT",
+    body: { kbIds }
+  });
+  if (response.ok) return { ok: true };
+  return {
+    ok: false,
+    error: String(response.data.message || response.data.error || `插件返回 HTTP ${response.status}`)
+  };
+}
+
+app.get("/api/kb/training/knowledge-bases", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const result = await listKnowledgeBases({ id: req.user!.id, teamId: req.user!.teamId });
+  res.json(result);
+}));
+
+app.get("/api/kb/training/knowledge-bases/:id/entries", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const id = String(req.params.id || "").trim();
+  const knowledgeBase = await repository.getKnowledgeBase(id, req.user!.teamId);
+  if (!knowledgeBase) {
+    res.status(404).json({ message: "知识库不存在或不属于当前团队" });
+    return;
+  }
+  // 可见性由 listKnowledgeBases 定义（自有 + 团队公开）；这里再守一道，避免直接猜 id 就能看别人的私库。
+  const visible = await repository.listKnowledgeBases(req.user!.teamId, req.user!.id);
+  if (!visible.some((item) => item.id === id)) {
+    res.status(403).json({ message: "这个知识库没有公开给你" });
+    return;
+  }
+  const entries = await repository.listPublishedCandidatesByKnowledgeBase(req.user!.teamId, id);
+  res.json({ knowledgeBase: visible.find((item) => item.id === id), entries: entries.map(kbCandidatePayload) });
+}));
+
+app.put("/api/kb/training/knowledge-bases/defaults", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const body = z.object({
+    kbIds: z.array(z.string().trim().min(1).max(64)).max(200)
+  }).parse(req.body || {});
+  const actor = { id: req.user!.id, teamId: req.user!.teamId };
+  const result = await saveEnabledKnowledgeBases({
+    actor,
+    kbIds: body.kbIds,
+    pushToPlugin: (kbIds) => pushKbEnabledToPlugin(req.user!, kbIds)
+  });
+  // 插件没推成功**照样返回 200 + 明确标记**：清单在 CRM 侧已经存下了，
+  // 谎报 500 会让用户以为没保存而反复重试。但 `pluginPushed=false` 必须让界面能看见。
+  res.json(result);
+}));
+
+app.patch("/api/kb/training/knowledge-bases/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const repository = kbTrainingRepositoryOr503(res);
+  if (!repository) return;
+  const body = z.object({
+    name: z.string().trim().min(1).max(200).optional(),
+    /** 只认 owner / team；界面上的「私用 / 公开」就是这两个值。 */
+    visibility: z.enum(["owner", "team"]).optional()
+  }).parse(req.body || {});
+  const knowledgeBase = await renameOrShareKnowledgeBase(
+    { id: req.user!.id, teamId: req.user!.teamId },
+    String(req.params.id || ""),
+    {
+      ...(body.name === undefined ? {} : { name: body.name }),
+      ...(body.visibility === undefined ? {} : { visibility: parseKbVisibility(body.visibility) })
+    }
+  );
+  res.json({ knowledgeBase });
+}));
+
+app.delete("/api/kb/training/knowledge-bases/:id", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const result = await deleteKnowledgeBase({
+    actor: { id: req.user!.id, teamId: req.user!.teamId },
+    id: String(req.params.id || ""),
+    // 先插件后 CRM：插件 `drop` 幂等（已归档再归档不报错），失败时重试能收敛。
+    // 一次最多 20 条是插件 `confirm` 的硬上限，超出必须分批 —— 少批一次就会漏下线。
+    archiveEntries: async (entryIds) => {
+      for (let index = 0; index < entryIds.length; index += 20) {
+        const chunk = entryIds.slice(index, index + 20);
+        const response = await callPluginTrainingLibrary(req.user!, "/api/v1/training/library/confirm", {
+          method: "POST",
+          body: { ids: chunk, action: "drop" }
+        });
+        if (!response.ok) {
+          const message = String(response.data.message || response.data.error || "").trim();
+          throw new Error(message || `插件返回 HTTP ${response.status}`);
+        }
+      }
+    }
+  });
+  res.json(result);
+}));
+
+app.post("/api/kb/training/probe", requireAuth, asyncRoute(async (req, res) => {
+  if (!kbTrainingEnabledOr503(res)) return;
+  const body = z.object({
+    body: z.string().trim().min(1).max(10_000),
+    accountId: z.string().trim().max(64).optional()
+  }).parse(req.body || {});
+  // 试问严格代理插件自己的 match：**同源**才能保证"试问看到的就是真实链路会用的"。
+  const response = await callPluginTrainingLibrary(req.user!, "/api/v1/training/library/match", {
+    method: "POST",
+    body: { body: body.body, accountId: body.accountId }
+  }).catch((error: unknown) => {
+    throw new Error(`WhatsApp 插件服务不可达：${error instanceof Error ? error.message : "未知错误"}`);
+  });
+  if (!response.ok) {
+    res.status(response.status).json({ message: String(response.data.message || response.data.error || "试问失败") });
+    return;
+  }
+  res.json(response.data);
+}));
+
+// ---------------------------------------------------------------------------
 // 系统对接模块：对接方管理 + 报文收发 + 报文日志
 // ---------------------------------------------------------------------------
 const exchangeInboundLimiter = rateLimit({
@@ -13711,27 +14779,74 @@ app.post("/api/knowledge/assets", requireAuth, asyncRoute(async (req, res) => {
     res.status(400).json({ message: "提取码仅适用于百度网盘分享链接" });
     return;
   }
+
+  const warnings: string[] = [];
+
+  /* --- 入库闸 ①：类目必须在受控词表内（不在则给近似建议） --- */
+  const categoryCheck = await validateKnowledgeCategory(req.user!.teamId, body.category, canManageTraining(req.user));
+  if (!categoryCheck.ok) {
+    res.status(400).json({
+      message: `类目「${body.category}」不在词表内，请从词表选择或先由资料维护人添加`,
+      code: "CATEGORY_NOT_IN_VOCABULARY",
+      suggestions: categoryCheck.suggestions
+    });
+    return;
+  }
+  if (categoryCheck.created) warnings.push(`新类目「${categoryCheck.entry?.value}」已加入词表`);
+
+  /* --- 入库闸 ②：查重（同团队同链接硬拦，同标题软警示） --- */
+  const duplicate = findKnowledgeDuplicate(store, req.user!.teamId, {
+    sourceUrl: source.sourceUrl,
+    title: body.title
+  });
+  if (duplicate.sameUrl) {
+    res.status(409).json({
+      message: `同一链接的资料已存在：「${duplicate.sameUrl.title}」`,
+      code: "DUPLICATE_SOURCE_URL",
+      duplicateOf: duplicate.sameUrl.id
+    });
+    return;
+  }
+  if (duplicate.sameTitle) warnings.push(`已有同名资料「${duplicate.sameTitle.title}」，请确认不是重复入库`);
+
+  /* --- 入库闸 ③：标签不在词表的自动建条（自由标签但可治理） --- */
+  const tagRepository = getKnowledgeGovernanceRepository();
+  const tagEntries = await tagRepository.list(req.user!.teamId, "tag");
+  const knownTags = new Set(tagEntries.filter((entry) => entry.enabled).map((entry) => entry.normalized));
+  const newTags: string[] = [];
+  const tags = [...new Set(body.tags)];
+  for (const tag of tags) {
+    if (knownTags.has(normalizeVocabularyValue(tag))) continue;
+    await tagRepository.ensure(req.user!.teamId, "tag", tag);
+    newTags.push(tag);
+  }
+  if (newTags.length) warnings.push(`新标签已加入词表：${newTags.join("、")}`);
+
   const now = new Date().toISOString();
+  const verified = body.verified === true && canManageTraining(req.user);
   const asset = {
     id: `k_${randomUUID()}`,
     status: canManageTraining(req.user) ? "draft" as const : "review" as const,
     ownerId: req.user!.id,
     teamId: req.user!.teamId,
     title: body.title,
-    category: body.category,
+    category: categoryCheck.entry ? categoryCheck.entry.value : body.category,
     version: body.version,
     ...source,
     shareCode: source.sourceType === "baidu_share" ? body.shareCode : "",
     fileType: body.fileType,
     description: body.description,
-    tags: [...new Set(body.tags)],
+    tags,
+    verified,
     accessCount: 0,
     createdAt: now,
     updatedAt: now
   };
   store.knowledgeAssets.unshift(asset);
   await store.persist();
-  res.json({ asset });
+  await tagRepository.bumpUsage(req.user!.teamId, "category", [asset.category]);
+  if (tags.length) await tagRepository.bumpUsage(req.user!.teamId, "tag", tags);
+  res.json({ asset, qualityFlags: knowledgeQualityFlags(asset), warnings });
 }));
 
 app.patch("/api/knowledge/assets/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -13759,20 +14874,74 @@ app.patch("/api/knowledge/assets/:id", requireAuth, asyncRoute(async (req, res) 
     res.status(400).json({ message: "提取码仅适用于百度网盘分享链接" });
     return;
   }
+
+  const warnings: string[] = [];
+
+  /* 编辑路径同样过入库闸：类目必须命中词表（改了类目才校验，没改不打扰）。 */
+  let nextCategory = asset.category;
+  if (body.category !== undefined) {
+    const categoryCheck = await validateKnowledgeCategory(req.user!.teamId, body.category, canManageTraining(req.user));
+    if (!categoryCheck.ok) {
+      res.status(400).json({
+        message: `类目「${body.category}」不在词表内，请从词表选择或先由资料维护人添加`,
+        code: "CATEGORY_NOT_IN_VOCABULARY",
+        suggestions: categoryCheck.suggestions
+      });
+      return;
+    }
+    nextCategory = categoryCheck.entry ? categoryCheck.entry.value : body.category;
+  }
+
+  /* 编辑路径同样查重：改链接撞库硬拦，改标题撞名软警示。 */
+  const duplicate = findKnowledgeDuplicate(
+    store,
+    req.user!.teamId,
+    { sourceUrl: source.sourceUrl, title: body.title ?? asset.title },
+    asset.id
+  );
+  if (body.sourceUrl !== undefined && duplicate.sameUrl) {
+    res.status(409).json({
+      message: `同一链接的资料已存在：「${duplicate.sameUrl.title}」`,
+      code: "DUPLICATE_SOURCE_URL",
+      duplicateOf: duplicate.sameUrl.id
+    });
+    return;
+  }
+  if (body.title !== undefined && duplicate.sameTitle) {
+    warnings.push(`已有同名资料「${duplicate.sameTitle.title}」，请确认不是重复`);
+  }
+
+  const tagRepository = getKnowledgeGovernanceRepository();
+  let nextTags = asset.tags || [];
+  if (body.tags !== undefined) {
+    nextTags = [...new Set(body.tags)];
+    const tagEntries = await tagRepository.list(req.user!.teamId, "tag");
+    const knownTags = new Set(tagEntries.filter((entry) => entry.enabled).map((entry) => entry.normalized));
+    const newTags: string[] = [];
+    for (const tag of nextTags) {
+      if (knownTags.has(normalizeVocabularyValue(tag))) continue;
+      await tagRepository.ensure(req.user!.teamId, "tag", tag);
+      newTags.push(tag);
+    }
+    if (newTags.length) warnings.push(`新标签已加入词表：${newTags.join("、")}`);
+  }
+
   Object.assign(asset, {
     ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(body.category !== undefined ? { category: body.category } : {}),
+    category: nextCategory,
     ...(body.version !== undefined ? { version: body.version } : {}),
     ...(body.fileType !== undefined ? { fileType: body.fileType } : {}),
     ...(body.description !== undefined ? { description: body.description } : {}),
-    ...(body.tags !== undefined ? { tags: [...new Set(body.tags)] } : {}),
+    ...(body.tags !== undefined ? { tags: nextTags } : {}),
     ...source,
     shareCode: source.sourceType === "baidu_share" ? shareCode : "",
+    ...(body.verified !== undefined && canManageTraining(req.user) ? { verified: body.verified === true } : {}),
     status: canManageTraining(req.user) ? asset.status : "review",
     updatedAt: new Date().toISOString()
   });
   await store.persist();
-  res.json({ asset });
+  if (body.tags !== undefined && nextTags.length) await tagRepository.bumpUsage(req.user!.teamId, "tag", nextTags);
+  res.json({ asset, qualityFlags: knowledgeQualityFlags(asset), warnings });
 }));
 
 app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (req, res) => {
@@ -13786,10 +14955,30 @@ app.patch("/api/knowledge/assets/:id/publish", requireAuth, asyncRoute(async (re
     res.status(404).json({ message: "资料不存在" });
     return;
   }
+  /* 版本线性化：同团队、同标题、同类目、已发布的其他资料自动归档 ——
+     否则同一份资料的不同版本会并列出现在推荐位，谁新谁旧无从判断。 */
+  const normalizedTitle = normalizeVocabularyValue(asset.title);
+  const superseded = store.knowledgeAssets.filter(
+    (item) =>
+      item.id !== asset.id
+      && item.status === "published"
+      && normalizeVocabularyValue(item.title) === normalizedTitle
+      && normalizeVocabularyValue(item.category) === normalizeVocabularyValue(asset.category)
+      && knowledgeAssetTeamId(store, item) === knowledgeAssetTeamId(store, asset)
+  );
+  const now = new Date().toISOString();
+  for (const item of superseded) {
+    item.status = "archived";
+    item.updatedAt = now;
+  }
   asset.status = "published";
-  asset.updatedAt = new Date().toISOString();
+  asset.updatedAt = now;
   await store.persist();
-  res.json({ asset });
+  res.json({
+    asset,
+    qualityFlags: knowledgeQualityFlags(asset),
+    archivedSuperseded: superseded.map((item) => ({ id: item.id, title: item.title, version: item.version }))
+  });
 }));
 
 app.post("/api/knowledge/assets/:id/access", requireAuth, asyncRoute(async (req, res) => {
@@ -13813,6 +15002,16 @@ app.post("/api/knowledge/assets/:id/access", requireAuth, asyncRoute(async (req,
   asset.lastAccessedAt = new Date().toISOString();
   asset.updatedAt = asset.updatedAt || asset.lastAccessedAt;
   await store.persist();
+  // CRM 内打开资料同样记一条 revealed（旁路，失败不影响 access 返回）——
+  // 否则报表的 revealed 只反映扩展侧行为，业务员在 CRM 内的查看完全不进报表（G11）。
+  void recordResourceHubEvents([{
+    ownerId: req.user!.id,
+    teamId: req.user!.teamId,
+    resourceType: "file",
+    resourceId: asset.id,
+    eventType: "revealed",
+    channel: "crm-access"
+  }]);
   res.json({
     asset,
     access: {
@@ -13834,6 +15033,265 @@ app.delete("/api/knowledge/assets/:id", requireAuth, asyncRoute(async (req, res)
   await store.persist();
   res.json({ asset, deleted: true });
 }));
+
+/* ========================= 资料治理：受控词表 ========================= */
+/* 权限由 /api/knowledge 中间件统一给：GET → training.read，写 → training.manage。 */
+
+const knowledgeVocabularyInputSchema = z.object({
+  type: z.enum(["category", "tag"]),
+  value: z.string().trim().min(1).max(100)
+});
+
+app.get("/api/knowledge/vocabulary", requireAuth, asyncRoute(async (req, res) => {
+  const type = z.enum(["category", "tag"]).optional().catch(undefined).parse(req.query.type);
+  const entries = await getKnowledgeGovernanceRepository().list(req.user!.teamId, type);
+  res.json({ entries });
+}));
+
+app.post("/api/knowledge/vocabulary", requireAuth, asyncRoute(async (req, res) => {
+  const body = knowledgeVocabularyInputSchema.parse(req.body || {});
+  // ensure 语义：同归一化值已存在则返回既有条，不报错（「建议新类目」落到已有时静默复用）
+  const entry = await getKnowledgeGovernanceRepository().ensure(req.user!.teamId, body.type, body.value);
+  res.json({ entry });
+}));
+
+app.patch("/api/knowledge/vocabulary/:id", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    value: z.string().trim().min(1).max(100).optional(),
+    enabled: z.boolean().optional()
+  }).parse(req.body || {});
+  const entry = await getKnowledgeGovernanceRepository().update(req.user!.teamId, req.params.id, body);
+  if (!entry) {
+    res.status(404).json({ message: "词条不存在" });
+    return;
+  }
+  res.json({ entry });
+}));
+
+/**
+ * 合并词条：{ fromId, toValue } → 把资料里用旧值的 category/tags 批量改成新值，停用旧词条。
+ * 破坏性操作（改的是存量资料），前端必须二次确认。
+ */
+app.post("/api/knowledge/vocabulary/merge", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({
+    fromId: z.string().trim().min(1),
+    toValue: z.string().trim().min(1).max(100)
+  }).parse(req.body || {});
+  const repository = getKnowledgeGovernanceRepository();
+  const entries = await repository.list(req.user!.teamId);
+  const source = entries.find((entry) => entry.id === body.fromId);
+  if (!source) {
+    res.status(404).json({ message: "被合并的词条不存在" });
+    return;
+  }
+  if (source.normalized === normalizeVocabularyValue(body.toValue)) {
+    res.status(400).json({ message: "新值与被合并词条相同" });
+    return;
+  }
+  // 目标词条必须是同类型的词表成员（不存在则建）
+  const target = await repository.ensure(req.user!.teamId, source.type, body.toValue);
+
+  const store = getStore();
+  const teamId = req.user!.teamId;
+  let affected = 0;
+  for (const asset of store.knowledgeAssets) {
+    if (knowledgeAssetTeamId(store, asset) !== teamId) continue;
+    if (source.type === "category") {
+      if (normalizeVocabularyValue(asset.category) === source.normalized) {
+        asset.category = target.value;
+        asset.updatedAt = new Date().toISOString();
+        affected += 1;
+      }
+    } else if (Array.isArray(asset.tags)) {
+      const next = asset.tags.map((tag) => (normalizeVocabularyValue(tag) === source.normalized ? target.value : tag));
+      if (next.join("\u0000") !== asset.tags.join("\u0000")) {
+        asset.tags = [...new Set(next)];
+        asset.updatedAt = new Date().toISOString();
+        affected += 1;
+      }
+    }
+  }
+  if (affected) await store.persist();
+  // 停用旧词条（保留行以留痕：老资料若仍引用旧值，面板上还能看到它是「已停用」而不是凭空消失）
+  await repository.update(teamId, source.id, { enabled: false });
+  await repository.bumpUsage(teamId, target.type, [target.value]);
+  res.json({ merged: { from: source.value, to: target.value, type: source.type }, affected });
+}));
+
+/* ========================= 资料治理：批量与归档 ========================= */
+
+app.patch("/api/knowledge/assets/:id/archive", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ reason: z.string().trim().max(200).optional().default("") }).parse(req.body || {});
+  const store = getStore();
+  const asset = store.knowledgeAssets.find((item) => item.id === req.params.id && canEditKnowledgeAsset(req.user!, item));
+  if (!asset) {
+    res.status(404).json({ message: "资料不存在或无权归档" });
+    return;
+  }
+  asset.status = "archived";
+  asset.updatedAt = new Date().toISOString();
+  asset.archivedReason = body.reason;
+  await store.persist();
+  res.json({ asset, qualityFlags: knowledgeQualityFlags(asset) });
+}));
+
+app.post("/api/knowledge/assets/batch", requireAuth, asyncRoute(async (req, res) => {
+  if (!canManageTraining(req.user)) {
+    res.status(403).json({ message: "只有主管和管理员可以批量维护资料" });
+    return;
+  }
+  const body = z.object({
+    ids: z.array(z.string().trim().min(1)).min(1).max(200),
+    action: z.enum(["publish", "archive", "set-category", "add-tags"]),
+    category: z.string().trim().min(1).max(100).optional(),
+    tags: z.array(z.string().trim().min(1).max(60)).max(30).optional()
+  }).parse(req.body || {});
+
+  const store = getStore();
+  const teamId = req.user!.teamId;
+  const repository = getKnowledgeGovernanceRepository();
+  const ok: string[] = [];
+  const failed: Array<{ id: string; reason: string }> = [];
+  const now = new Date().toISOString();
+
+  // set-category 先统一校验词表，避免「一半改了、一半没改」
+  let nextCategory: string | null = null;
+  if (body.action === "set-category") {
+    if (!body.category) {
+      res.status(400).json({ message: "缺少目标类目" });
+      return;
+    }
+    const check = await validateKnowledgeCategory(teamId, body.category, true);
+    if (!check.ok) {
+      res.status(400).json({
+        message: `类目「${body.category}」不在词表内`,
+        code: "CATEGORY_NOT_IN_VOCABULARY",
+        suggestions: check.suggestions
+      });
+      return;
+    }
+    nextCategory = check.entry ? check.entry.value : body.category;
+  }
+
+  // add-tags 先统一建词条
+  if (body.action === "add-tags") {
+    if (!body.tags?.length) {
+      res.status(400).json({ message: "缺少要添加的标签" });
+      return;
+    }
+    const entries = await repository.list(teamId, "tag");
+    const known = new Set(entries.filter((entry) => entry.enabled).map((entry) => entry.normalized));
+    for (const tag of body.tags) {
+      if (!known.has(normalizeVocabularyValue(tag))) await repository.ensure(teamId, "tag", tag);
+    }
+  }
+
+  for (const id of [...new Set(body.ids)]) {
+    const asset = store.knowledgeAssets.find((item) => item.id === id);
+    if (!asset) {
+      failed.push({ id, reason: "资料不存在" });
+      continue;
+    }
+    if (!canEditKnowledgeAsset(req.user!, asset)) {
+      failed.push({ id, reason: "无权编辑" });
+      continue;
+    }
+    if (body.action === "publish") {
+      asset.status = "published";
+    } else if (body.action === "archive") {
+      asset.status = "archived";
+      asset.archivedReason = "批量归档";
+    } else if (body.action === "set-category") {
+      asset.category = nextCategory as string;
+    } else {
+      asset.tags = [...new Set([...(asset.tags || []), ...(body.tags || [])])];
+    }
+    asset.updatedAt = now;
+    ok.push(id);
+  }
+  if (ok.length) await store.persist();
+  if (ok.length && body.action === "set-category" && nextCategory) {
+    await repository.bumpUsage(teamId, "category", [nextCategory]);
+  }
+  if (ok.length && body.action === "add-tags" && body.tags?.length) {
+    await repository.bumpUsage(teamId, "tag", body.tags);
+  }
+  res.json({ ok, failed, requested: body.ids.length });
+}));
+
+/**
+ * 治理看数（文件中心指标卡 + 资源中心治理 Tab 共用）。
+ * 只做只读聚合；埋点摘要失败只降级该块，不拖垮整个接口。
+ */
+app.get("/api/knowledge/assets/governance", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const teamId = req.user!.teamId;
+  const visible = store.knowledgeAssets.filter((asset) => canSeeKnowledgeAsset(req.user!, asset));
+  const teamAssets = store.knowledgeAssets.filter((asset) => knowledgeAssetTeamId(store, asset) === teamId);
+
+  const flagCounts: Record<string, number> = {};
+  const missingLink: Array<{ id: string; title: string; category: string }> = [];
+  for (const asset of visible) {
+    for (const flag of knowledgeQualityFlags(asset)) {
+      flagCounts[flag] = (flagCounts[flag] || 0) + 1;
+    }
+    if (!asset.sourceUrl || asset.sourceType === "legacy") {
+      missingLink.push({ id: asset.id, title: asset.title, category: asset.category });
+    }
+  }
+
+  // 孤儿：owner 已删除（team 归属无从判定）——与迁移里的 orphanIds 同一口径
+  const orphans = teamAssets
+    .filter((asset) => !store.users.some((user) => user.id === asset.ownerId))
+    .map((asset) => ({ id: asset.id, title: asset.title, ownerId: asset.ownerId, category: asset.category }));
+
+  const warnings: string[] = [];
+  let retrieval: { totals: Record<string, number>; adoptionRate: number; sendRate: number; items: number } | null = null;
+  try {
+    const stats = await getResourceHubRepository().eventStats(teamId, new Date(Date.now() - 30 * 86_400_000));
+    const totals = emptyEventCounts();
+    let accepted = 0;
+    let revealed = 0;
+    let sent = 0;
+    for (const entry of stats.values()) {
+      totals.exposed += entry.exposed;
+      totals.revealed += entry.revealed;
+      totals.accepted += entry.accepted;
+      totals.dismissed += entry.dismissed;
+      totals.sent += entry.sent;
+      accepted += entry.accepted;
+      revealed += entry.revealed;
+      sent += entry.sent;
+    }
+    retrieval = {
+      totals,
+      adoptionRate: accepted / Math.max(1, revealed),
+      sendRate: sent / Math.max(1, revealed),
+      items: stats.size
+    };
+  } catch {
+    warnings.push("埋点统计未取到");
+  }
+
+  res.json({
+    counts: {
+      total: visible.length,
+      published: visible.filter((asset) => asset.status === "published").length,
+      draft: visible.filter((asset) => asset.status === "draft").length,
+      review: visible.filter((asset) => asset.status === "review").length,
+      archived: visible.filter((asset) => asset.status === "archived").length,
+      verified: visible.filter((asset) => asset.verified).length,
+      missingLink: missingLink.length,
+      orphans: orphans.length
+    },
+    qualityFlags: flagCounts,
+    missingLink: missingLink.slice(0, 100),
+    orphans: orphans.slice(0, 100),
+    retrieval,
+    warnings
+  });
+}));
+
 
 app.get("/api/exam-questions", requireAuth, (req, res) => {
   if (!requireTrainingManager(req, res)) return;
@@ -19771,13 +21229,23 @@ app.post("/api/agent/knowledge/documents/:id/:action", requireAuth, asyncRoute(a
 
 const resourceSourceTypeSchema = z.enum([...RESOURCE_SOURCE_TYPES]);
 
+/** 四源的中文名：warnings 与界面提示统一从这里取，别在各处写死。 */
+const RESOURCE_SOURCE_LABELS: Record<ResourceSourceType, string> = {
+  file: "文件中心",
+  skill: "Skill 资源",
+  knowledge: "智能体知识",
+  product: "产品库"
+};
+
 const resourceListQuerySchema = z.object({
   q: z.string().trim().max(200).catch(""),
   sourceType: z.enum([...RESOURCE_SOURCE_TYPES, "all"]).catch("all"),
   category: z.string().trim().max(80).catch(""),
   fileType: z.string().trim().max(30).catch(""),
   limit: z.coerce.number().int().min(1).max(50).catch(20),
-  offset: z.coerce.number().int().min(0).max(2000).catch(0)
+  offset: z.coerce.number().int().min(0).max(2000).catch(0),
+  /** 传 "1" 时按可达性规则过滤（点了能拿到东西）。缺省不过滤 —— CRM 治理视图要能看到「待补链接」资料。 */
+  reachable: z.enum(["0", "1"]).optional()
 });
 
 const resourceRecommendSchema = z.object({
@@ -19811,6 +21279,27 @@ const resourceFeedbackSchema = z.object({
 });
 
 /**
+ * 目录快照一份最多回多少条。
+ *
+ * 与 `resource-hub.ts::MAX_SCAN_PER_SOURCE` 同量级（400）：两个数字要是一大一小，
+ * 「目录里没有但推荐里有」这种解释不清的现象就会出现。截断**必须明说**
+ * （返回 `truncated`），静默截断正是这套治理要修掉的那类毛病。
+ */
+const MAX_RESOURCE_CATALOG_ITEMS = 400;
+
+/**
+ * 目录快照的查询参数。
+ *
+ * `since` 是**增量游标**：传上次响应的 `revision.latestUpdatedAt` 就只回变过的条目。
+ * 刻意不做 offset 分页 —— 插件要的是一份「能画类目树、能提示质量」的快照，
+ * 切片拼不出完整的类目树；条目本身另有 `limit` 封顶，且截断数会明说。
+ */
+const resourceCatalogQuerySchema = z.object({
+  since: z.string().trim().max(40).catch(""),
+  limit: z.coerce.number().int().min(1).max(MAX_RESOURCE_CATALOG_ITEMS).catch(200)
+});
+
+/**
  * 埋点是**旁路**：仓库不可用或写失败都不许影响主流程（与「背调留档写库失败不拖垮返回」同口径）。
  */
 async function recordResourceHubEvents(items: ResourceEventInput[]): Promise<number> {
@@ -19832,6 +21321,54 @@ async function resourceHubSentCounts(teamId: string): Promise<Map<string, number
   } catch {
     return new Map();
   }
+}
+
+/** 反馈回流摘要的缓存时长。报表与排序共用，避免每次推荐都全表 GROUP BY。 */
+const RESOURCE_FEEDBACK_CACHE_TTL_MS = 60_000;
+let resourceFeedbackCache: {
+  teamId: string;
+  at: number;
+  data: Map<string, { revealed: number; accepted: number; dismissed: number }>;
+} | null = null;
+
+/**
+ * 近 30 天反馈摘要（P3-2 的输入）。键 `${sourceType}:${id}`。
+ *
+ * 反馈是**旁路**：读不到就返回空表，排序照常进行 —— 不能因为埋点表有问题
+ * 就让业务员看不到推荐。缓存 60s，报表 Tab 也复用同一份。
+ */
+async function resourceHubFeedbackSummary(teamId: string) {
+  const now = Date.now();
+  if (resourceFeedbackCache && resourceFeedbackCache.teamId === teamId
+    && now - resourceFeedbackCache.at < RESOURCE_FEEDBACK_CACHE_TTL_MS) {
+    return resourceFeedbackCache.data;
+  }
+  const data = new Map<string, { revealed: number; accepted: number; dismissed: number }>();
+  const repository = getResourceHubRepository();
+  if (!repository) return data;
+  try {
+    const stats = await repository.eventStats(teamId, new Date(now - 30 * 86_400_000));
+    for (const entry of stats.values()) {
+      data.set(resourceKey(entry.resourceType, entry.resourceId), {
+        revealed: entry.revealed,
+        accepted: entry.accepted,
+        dismissed: entry.dismissed
+      });
+    }
+    resourceFeedbackCache = { teamId, at: now, data };
+  } catch {
+    // 读不到就不加权（保留上一次缓存也无意义：宁可这次保守）
+  }
+  return data;
+}
+
+/**
+ * 词法归一化 v2 开关（P3-1）。默认**关** —— 核心排序变更不拿业务员体感赌，
+ * 先开关上线、用回测脚本对完 Top5 重合度再打开。
+ */
+function resourceLexicalV2Enabled() {
+  const raw = String(process.env.RESOURCE_LEXICAL_V2 || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "on";
 }
 
 /**
@@ -19865,11 +21402,14 @@ app.get("/api/agent/resources", requireAuth, (req, res) => {
     category: query.category,
     fileType: query.fileType
   });
-  const ranked = scoreHubResources(resources, { query: query.q, limit: query.offset + query.limit + 1 });
+  // 插件面板的目录检索传 reachable=1：别把点了拿不到东西的资料摆给业务员。
+  // CRM 自己的目录（治理对象包含「待补链接」）不传，保持全量可见。
+  const visible = query.reachable === "1" ? resources.filter(resourceReachable) : resources;
+  const ranked = scoreHubResources(visible, { query: query.q, limit: query.offset + query.limit + 1 });
   const page = ranked.slice(query.offset, query.offset + query.limit);
   res.json({
     resources: page,
-    total: resources.length,
+    total: visible.length,
     nextCursor: ranked.length > query.offset + query.limit
       ? page[page.length - 1]
         ? `${page[page.length - 1].updatedAt}|${page[page.length - 1].id}`
@@ -19881,13 +21421,162 @@ app.get("/api/agent/resources", requireAuth, (req, res) => {
   });
 });
 
+/**
+ * 资料库目录快照 —— 面向插件（3100）的「文件中心」只读视图，**含治理口径**。
+ *
+ * 与 `GET /api/agent/resources` 的分工很清楚：那个回答「这次该发哪几份」
+ * （四源混合 + 打分排序，给推荐位用），这个回答「资料库里有什么、治理到什么程度」。
+ * 它**只覆盖 `knowledge_assets` 一个源** —— 插件面板要画的类目树、要提示的
+ * 「N 份未校订」「M 份缺链接」必须和 CRM 文件中心同一个口径；把 skill / 产品 /
+ * 智能体知识混进来，这些数字就对不上账，治理提示也就没人信了。
+ *
+ * 三件必须守住的事：
+ * 1. `items` 只给 **published**：目录要能展示「待补链接」的资料（那是治理对象本身），
+ *    但草稿 / 已归档不给 —— 插件点 reveal 取不到（`collectKnowledgeAssets` 只收
+ *    published），摆出来就是个必然 404 的按钮。而 `governance` 计数按**全量可见**算，
+ *    否则「草稿 8 份」这种该催的数字永远看不见。
+ * 2. `since` 是增量游标：响应里的 `revision.latestUpdatedAt` 就是下次该传的值。
+ * 3. 计数口径与 `GET /api/knowledge/assets/governance` **同源**
+ *    （`canSeeKnowledgeAsset` + `knowledgeQualityFlags`）。两处口径分叉比没有接口更糟。
+ *
+ * 不返回任何 `sourceUrl`：真实地址的唯一出口仍然是 `/reveal`（RESOURCE-HUB-DESIGN §「真实外链只有一个出口」）。
+ */
+app.get("/api/agent/resources/catalog", requireAuth, asyncRoute(async (req, res) => {
+  const query = resourceCatalogQuerySchema.parse(req.query);
+  const actor = req.user!;
+  const store = getStore();
+  const warnings: string[] = [];
+
+  const visible = store.knowledgeAssets.filter((asset) => canSeeKnowledgeAsset(actor, asset));
+  const published = visible.filter((asset) => asset.status === "published");
+
+  // ---- 治理计数：全量可见（含草稿 / 待审 / 已归档）—— 要催的正是这几个数 ----
+  const counts = {
+    total: visible.length,
+    published: published.length,
+    draft: visible.filter((asset) => asset.status === "draft").length,
+    review: visible.filter((asset) => asset.status === "review").length,
+    archived: visible.filter((asset) => asset.status === "archived").length
+  };
+
+  const qualityFlags: Record<string, number> = {};
+  const byCategory = new Map<string, { category: string; total: number; verified: number; missingLink: number }>();
+  let verified = 0;
+  let missingLink = 0;
+  for (const asset of published) {
+    const label = asset.category || "未分类";
+    const bucket = byCategory.get(label) ?? { category: label, total: 0, verified: 0, missingLink: 0 };
+    bucket.total += 1;
+    if (asset.verified) {
+      verified += 1;
+      bucket.verified += 1;
+    }
+    if (!knowledgeAssetHasLink(asset)) {
+      missingLink += 1;
+      bucket.missingLink += 1;
+    }
+    for (const flag of knowledgeQualityFlags(asset)) qualityFlags[flag] = (qualityFlags[flag] || 0) + 1;
+    byCategory.set(label, bucket);
+  }
+
+  // 孤儿：owner 已不存在（团队归属无从判定）—— 与迁移里的 orphanIds 同口径
+  const orphans = visible.filter((asset) => !store.users.some((user) => user.id === asset.ownerId)).length;
+
+  // ---- 条目：只看 published，按 updatedAt 倒序；给了 since 就只出变过的 ----
+  const updatedAtOf = (asset: { updatedAt?: string; createdAt?: string }) => String(asset.updatedAt || asset.createdAt || "");
+  const ordered = [...published].sort((left, right) => updatedAtOf(right).localeCompare(updatedAtOf(left)));
+  const changed = query.since ? ordered.filter((asset) => updatedAtOf(asset) > query.since) : ordered;
+  const page = changed.slice(0, query.limit);
+
+  const items = page.map((asset) => ({
+    id: asset.id,
+    title: asset.title,
+    category: asset.category || "",
+    tags: [...(asset.tags ?? [])],
+    description: asset.description || "",
+    fileType: asset.fileType || "other",
+    version: asset.version || "",
+    status: asset.status,
+    verified: asset.verified === true,
+    /** 两池归属，与检索排序同一口径：已校订进核心池，未校订的留在长尾池。 */
+    pool: asset.verified === true ? ("core" as const) : ("longtail" as const),
+    hasExternalLink: knowledgeAssetHasLink(asset),
+    qualityFlags: knowledgeQualityFlags(asset),
+    accessCount: Number(asset.accessCount || 0),
+    author: store.users.find((user) => user.id === asset.ownerId)?.name || "",
+    createdAt: String(asset.createdAt || ""),
+    updatedAt: updatedAtOf(asset)
+  }));
+
+  // ---- 词表：插件画类目筛选 / 标签 chips 用。读不到就降级，绝不 500 ----
+  let vocabulary: {
+    categories: Array<{ value: string; usageCount: number }>;
+    tags: Array<{ value: string; usageCount: number }>;
+  } = { categories: [], tags: [] };
+  try {
+    const entries = await getKnowledgeGovernanceRepository().list(actor.teamId);
+    const pick = (type: "category" | "tag") =>
+      entries
+        .filter((entry) => entry.type === type && entry.enabled)
+        .sort((left, right) => right.usageCount - left.usageCount || left.value.localeCompare(right.value))
+        .map((entry) => ({ value: entry.value, usageCount: entry.usageCount }));
+    vocabulary = { categories: pick("category"), tags: pick("tag") };
+  } catch {
+    // 词表是旁路：拿不到时插件仍能用 items 里的 category 现凑类目，不该让整个目录作废
+    warnings.push("词表未取到");
+  }
+
+  const latestUpdatedAt = ordered.length ? updatedAtOf(ordered[0]) : "";
+  res.json({
+    revision: {
+      generatedAt: new Date().toISOString(),
+      /** 下次请求该传的 `since`。空串 = 目录里一份 published 都没有。 */
+      latestUpdatedAt,
+      total: counts.published,
+      /**
+       * 治理口径摘要。插件拿它当「要不要重画面板」的廉价判据 ——
+       * 比逐字段 diff 省事，也比只看 latestUpdatedAt 稳（归档这类动作改了计数、
+       * 却未必动 updatedAt，只看时间戳会漏掉）。
+       */
+      fingerprint: `${counts.total}:${counts.published}:${counts.archived}:${verified}:${missingLink}:${latestUpdatedAt}`
+    },
+    vocabulary,
+    governance: {
+      ...counts,
+      verified,
+      unverified: counts.published - verified,
+      /** 两池：核心池 = 已校订（检索 ×1.0），长尾池 = 未校订（检索 ×0.5）。 */
+      corePool: verified,
+      longTailPool: counts.published - verified,
+      missingLink,
+      orphans,
+      qualityFlags,
+      byCategory: [...byCategory.values()].sort((left, right) => right.total - left.total || left.category.localeCompare(right.category))
+    },
+    items,
+    /** 本次因 `limit` 未返回的条数（>0 时插件应当提示「目录未看全」）。 */
+    truncated: Math.max(0, changed.length - page.length),
+    warnings
+  });
+}));
+
 app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, res) => {
   const body = resourceRecommendSchema.parse(req.body || {});
   const actor = req.user!;
   const started = Date.now();
   const warnings: string[] = [];
 
-  const resources = collectHubResources(getStore(), actor, { sourceTypes: body.sourceTypes });
+  const collection = collectHubResourcesDetailed(getStore(), actor, { sourceTypes: body.sourceTypes });
+  // 可达性闸：推荐位只给「点了能拿到东西」的资料（G5）。
+  // reveal 路径不过滤 —— 没链接的资料在推荐里消失后，用户连 409 的原因都看不到。
+  const reachable = collection.resources.filter(resourceReachable);
+  const unreachableSkipped = collection.resources.length - reachable.length;
+  // 截断可见化（G6）：第 401 份起不进候选集，必须让用户知道，不能静默。
+  for (const [sourceType, dropped] of Object.entries(collection.truncated)) {
+    if (!dropped) continue;
+    warnings.push(`${RESOURCE_SOURCE_LABELS[sourceType as ResourceSourceType]}有 ${dropped} 份资料因更新过早未进入本次候选`);
+  }
+  const resources = reachable;
   // 客户的话是主信号，业务员自己的话作补充（业务员常在复述客户需求）
   const customerText = body.conversation.filter((item) => item.role === "customer").map((item) => item.text);
   const agentText = body.conversation.filter((item) => item.role === "agent").map((item) => item.text);
@@ -19895,13 +21584,20 @@ app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, r
 
   const sentCounts = await resourceHubSentCounts(actor.teamId);
   const signals = resourceHubCustomerSignals(actor, body.customerId);
+  const feedback = await resourceHubFeedbackSummary(actor.teamId);
   let customerResourceKeys = new Set<string>();
+  let dismissedKeys = new Set<string>();
   const repository = getResourceHubRepository();
   if (repository && body.conversationKey) {
     try {
       customerResourceKeys = await repository.customerResourceKeys(actor.teamId, body.conversationKey);
     } catch {
       warnings.push("会话历史信号未取到");
+    }
+    try {
+      dismissedKeys = await repository.dismissedKeys(actor.teamId, body.conversationKey);
+    } catch {
+      // 单独 try：查看史拿到了、否决史没拿到，不该让整段历史信号作废
     }
   }
 
@@ -19910,6 +21606,9 @@ app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, r
     limit: MAX_RESOURCE_VECTOR_CANDIDATES,
     sentCounts,
     customerResourceKeys,
+    dismissedKeys,
+    feedback,
+    lexicalV2: resourceLexicalV2Enabled(),
     customerProductTerms: signals.customerProductTerms
   };
 
@@ -19919,7 +21618,13 @@ app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, r
   let recommendations = prefiltered.slice(0, body.limit);
   let vectorEnabled = false;
 
-  if (body.useVector !== false && body.queryVector?.length && repository) {
+  /**
+   * 向量通道（G9）：`saveEmbeddings` 目前全项目无调用方，`resource_embeddings` 是空表，
+   * 所以这条分支走不到、权重表里的 vector 0.12 暂不生效。这里把门槛改成**显式 opt-in**
+   * （`useVector === true`），不再让"默认跟随配置"掩盖它其实是死代码这件事。
+   * 要真正启用向量通道，先补上 embedding 回填任务，再改这里。
+   */
+  if (body.useVector === true && body.queryVector?.length && repository) {
     const bySource = new Map<ResourceSourceType, string[]>();
     for (const row of prefiltered) {
       const list = bySource.get(row.sourceType) || [];
@@ -19971,6 +21676,7 @@ app.post("/api/agent/resources/recommend", requireAuth, asyncRoute(async (req, r
       mode: vectorEnabled ? "hybrid-lexical-vector" : "weighted-lexical",
       scanned: (body.sourceTypes?.length || RESOURCE_SOURCE_TYPES.length),
       candidates: resources.length,
+      unreachableSkipped,
       vectorEnabled,
       tookMs: Date.now() - started
     },
@@ -26085,6 +27791,48 @@ async function stopReminderRuleScheduler() {
   while (reminderRuleSchedulerBusy) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
+/* ---------------------------------------------------------------------------
+ * 资源埋点清理调度器（G14）
+ * `pruneEvents` 早就实现了，但此前全项目没有调用方 —— 90 天保留期是空头支票，
+ * resource_retrieval_events 只增不减，eventStats 的全表 GROUP BY 会越来越慢。
+ * 这里按天触发一次，照 reminderRuleScheduler 的模式写（busy 互斥 / 可关 / 可随进程清理）。
+ * --------------------------------------------------------------------------- */
+
+const RESOURCE_EVENT_PRUNE_MIN_INTERVAL_MS = 3_600_000; // 下限 1 小时，防止配错把库打崩
+let resourceEventPruneTimer: NodeJS.Timeout | null = null;
+
+async function tickPruneResourceEvents(reason: string) {
+  try {
+    const removed = await getResourceHubRepository().pruneEvents(RESOURCE_RETENTION_DAYS);
+    if (removed > 0) {
+      console.log(`GoodJob CRM resource retrieval events pruned ${removed} row(s) [${reason}] (retention ${RESOURCE_RETENTION_DAYS}d)`);
+    }
+  } catch (error) {
+    // 清理失败只记日志：它是保洁工序，不能反过来把主流程带下水
+    console.error(`GoodJob CRM resource event prune failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** 关闭方式：RESOURCE_EVENT_PRUNE=false；间隔：RESOURCE_EVENT_PRUNE_MS（默认 24h，下限 1h）。 */
+function startResourceEventPruneScheduler() {
+  if (process.env.RESOURCE_EVENT_PRUNE === "false") {
+    console.log("GoodJob CRM resource event prune scheduler disabled (RESOURCE_EVENT_PRUNE=false)");
+    return;
+  }
+  const intervalMs = Math.max(
+    RESOURCE_EVENT_PRUNE_MIN_INTERVAL_MS,
+    Number(process.env.RESOURCE_EVENT_PRUNE_MS || 86_400_000) || 86_400_000
+  );
+  resourceEventPruneTimer = setInterval(() => void tickPruneResourceEvents("scheduled"), intervalMs);
+  console.log(`GoodJob CRM resource event prune scheduler enabled (every ${intervalMs}ms, retention ${RESOURCE_RETENTION_DAYS}d)`);
+  void tickPruneResourceEvents("startup");
+}
+
+async function stopResourceEventPruneScheduler() {
+  if (resourceEventPruneTimer) clearInterval(resourceEventPruneTimer);
+  resourceEventPruneTimer = null;
+}
+
 function todoTypeLabel(type: string) {
   const map: Record<string, string> = {
     customer: "客户跟进",
@@ -27080,6 +28828,7 @@ async function startServer() {
   });
   scheduleMidnightTodoArchive();
   startReminderRuleScheduler();
+  startResourceEventPruneScheduler();
   startAiEngineRecoveryScheduler();
   // 批量/方案的「按背调 + 按阶段」正文补写工序（缺背调补跑 → 引擎重写）
   startOutreachLetterEnrichmentScheduler();
@@ -27093,6 +28842,7 @@ async function startServer() {
       activeInboundMailWatcher?.stop();
       activeInboundMailWatcher = null;
       await stopReminderRuleScheduler();
+      await stopResourceEventPruneScheduler();
       stopAiEngineRecoveryScheduler();
       stopOutreachLetterEnrichmentScheduler();
       activeSalesTrainingRunner = null;

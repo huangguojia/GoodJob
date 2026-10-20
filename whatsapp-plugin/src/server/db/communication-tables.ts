@@ -9,8 +9,20 @@ export const communicationTables: CommunicationTable[] = [
   {
     name: "automation_settings",
     primaryKey: ["id"],
-    columns: ["id", "analysis_interval_hours", "intelligence_mode", "intelligence_provider_id", "daily_todo_hour", "daily_todo_minute", "timezone", "enabled", "last_analysis_at", "next_analysis_at", "last_daily_todo_at", "next_daily_todo_at", "last_run_status", "last_run_summary", "updated_at", "owner_user_id"],
-    temporalColumns: ["last_analysis_at", "next_analysis_at", "last_daily_todo_at", "next_daily_todo_at", "updated_at"]
+    columns: ["id", "analysis_interval_hours", "intelligence_mode", "intelligence_provider_id", "daily_todo_hour", "daily_todo_minute", "timezone", "enabled", "last_analysis_at", "next_analysis_at", "last_daily_todo_at", "next_daily_todo_at", "followup_sync_enabled", "followup_sync_hour", "followup_sync_minute", "last_followup_sync_at", "next_followup_sync_at", "last_run_status", "last_run_summary", "updated_at", "owner_user_id"],
+    temporalColumns: ["last_analysis_at", "next_analysis_at", "last_daily_todo_at", "next_daily_todo_at", "last_followup_sync_at", "next_followup_sync_at", "updated_at"]
+  },
+  {
+    name: "followup_sync_runs",
+    primaryKey: ["id"],
+    columns: ["id", "owner_user_id", "run_date", "trigger", "status", "timezone", "conversations_scanned", "message_count", "customers_matched", "activities_written", "leads_created", "leads_existing", "skipped", "ambiguous", "engine", "model", "notification_sent", "error", "summary", "started_at", "finished_at", "updated_at"],
+    temporalColumns: ["started_at", "finished_at", "updated_at"]
+  },
+  {
+    name: "followup_sync_items",
+    primaryKey: ["id"],
+    columns: ["id", "run_id", "owner_user_id", "conversation_key", "contact_name", "contact_phone", "kind", "status", "customer_id", "lead_id", "activity_id", "message_count", "summary", "error", "created_at"],
+    temporalColumns: ["created_at"]
   },
   {
     name: "automation_deliveries",
@@ -147,8 +159,15 @@ export const communicationTables: CommunicationTable[] = [
   {
     name: "training_library_entries",
     primaryKey: ["id"],
-    columns: ["id", "owner_user_id", "account_id", "kind", "question", "answer", "tags_json", "languages_json", "priority", "enabled", "source", "fingerprint", "hit_count", "created_at", "updated_at"],
+    columns: ["id", "owner_user_id", "account_id", "kind", "question", "answer", "tags_json", "languages_json", "priority", "enabled", "status", "source", "fingerprint", "hit_count", "created_at", "updated_at", "kb_id", "source_title", "source_anchor", "source_note"],
     temporalColumns: ["created_at", "updated_at"]
+  },
+  {
+    // CRM 推送过来的「默认知识库」启用清单。插件只执行，不判定可见性（见 mysql-migrate v20 注释）。
+    name: "training_kb_subscriptions",
+    primaryKey: ["owner_user_id", "kb_id"],
+    columns: ["owner_user_id", "kb_id", "synced_at"],
+    temporalColumns: ["synced_at"]
   },
   {
     name: "auto_chat_settings",

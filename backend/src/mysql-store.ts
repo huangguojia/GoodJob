@@ -54,11 +54,17 @@ import {
 } from "./prospect-qualification-mysql.js";
 import { ensureIntegrationSchema } from "./integrations/integration-mysql-schema.js";
 import { ensureExchangeSchema, MysqlExchangeRepository, setExchangeRepository } from "./exchange/exchange-repository.js";
+import { ensureKbTrainingSchema, MysqlKbTrainingRepository, setKbTrainingRepository } from "./kb-training/kb-training-repository.js";
 import { ensureOutreachJourneySchema, MysqlBackgroundResearchRepository, setBackgroundResearchRepository } from "./outreach-journey.js";
 import { ensureAppSettingsSchema, setAppSettingsPool } from "./app-settings.js";
 import { ensureAiEngineSchema, MysqlAiEngineJobRepository, setAiEngineJobRepository } from "./ai-engine-jobs.js";
 import { createMysqlSenderMailboxRepository, ensureSenderMailboxSchema, setSenderMailboxRepository } from "./sender-mailbox.js";
 import { createMysqlResourceHubRepository, ensureResourceHubSchema, setResourceHubRepository } from "./resource-hub.js";
+import {
+  createMysqlKnowledgeGovernanceRepository,
+  ensureKnowledgeGovernanceSchema,
+  setKnowledgeGovernanceRepository
+} from "./knowledge-governance.js";
 import { ensureIamFoundationSchema } from "./iam/iam-foundation.js";
 import { loadIamCapabilitySnapshot } from "./iam/iam-capabilities.js";
 import { createIamManagementService } from "./iam/iam-management-service.js";
@@ -621,9 +627,11 @@ export async function createMysqlStore(
   await ensureProspectQualificationSchema(pool);
   await ensureIntegrationSchema(pool);
   await ensureExchangeSchema(pool);
+  await ensureKbTrainingSchema(pool);
   await ensureOutreachJourneySchema(pool);
   await ensureSenderMailboxSchema(pool);
   await ensureResourceHubSchema(pool);
+  await ensureKnowledgeGovernanceSchema(pool);
   await ensureAppSettingsSchema(pool);
   await ensureAiEngineSchema(pool);
   await ensureBuiltInSuperAdmin(pool);
@@ -631,9 +639,11 @@ export async function createMysqlStore(
   setAiEngineJobRepository(new MysqlAiEngineJobRepository(pool));
   setIntegrationRepository(new MysqlIntegrationControlRepository(pool));
   setExchangeRepository(new MysqlExchangeRepository(pool));
+  setKbTrainingRepository(new MysqlKbTrainingRepository(pool));
   setBackgroundResearchRepository(new MysqlBackgroundResearchRepository(pool));
   setSenderMailboxRepository(createMysqlSenderMailboxRepository(pool));
   setResourceHubRepository(createMysqlResourceHubRepository(pool));
+  setKnowledgeGovernanceRepository(createMysqlKnowledgeGovernanceRepository(pool));
   setLocalRunnerService(new LocalRunnerService(new MysqlLocalRunnerRepository(pool)));
 
   let store!: CrmStore;
@@ -1283,9 +1293,11 @@ export async function createMysqlStore(
     closed = true;
     setIntegrationRepository(null);
     setExchangeRepository(null);
+    setKbTrainingRepository(null);
     setBackgroundResearchRepository(null);
     setSenderMailboxRepository(null);
     setResourceHubRepository(null);
+    setKnowledgeGovernanceRepository(null);
     setAiEngineJobRepository(null);
     setAppSettingsPool(null);
     await releaseProductionInstanceLock?.();
@@ -2113,7 +2125,7 @@ export async function createMysqlStore(
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.19-resource-hub";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.22-kb-training-progress";
 
 /** 内置超级管理员（公司最高权限账号）：可登录、管理账号、一键批量生成带有效期的体验账号 */
 const BUILT_IN_SUPERADMIN = {
@@ -2238,15 +2250,19 @@ export async function migrateMysqlSchema(input: {
     await ensureProspectQualificationSchema(pool);
     await ensureIntegrationSchema(pool);
     await ensureExchangeSchema(pool);
+    await ensureKbTrainingSchema(pool);
     await ensureOutreachJourneySchema(pool);
     await ensureSenderMailboxSchema(pool);
     await ensureResourceHubSchema(pool);
+    await ensureKnowledgeGovernanceSchema(pool);
     await ensureAppSettingsSchema(pool);
     await ensureAiEngineSchema(pool);
     const prospectRunSnapshotRepair =
       await repairProspectRunExecutionSnapshotIntegrity(pool);
     const attemptsBloatRepair =
       await repairProspectCandidateAttemptsBloat(pool);
+    const knowledgeAssetTeamRepair =
+      await repairKnowledgeAssetTeamOwnership(pool);
     const after = await mysqlSchemaStats(pool);
     const protectedAfter = await protectedMigrationRowCounts(pool);
     for (const [table, count] of Object.entries(protectedBefore)) {
@@ -2281,6 +2297,9 @@ export async function migrateMysqlSchema(input: {
       repairedProspectRunQueueBindings: prospectRunSnapshotRepair.bindings,
       repairedProspectRunQueueJobs: prospectRunSnapshotRepair.jobs,
       trimmedProspectCandidateAttempts: attemptsBloatRepair,
+      repairedKnowledgeAssetTeams: knowledgeAssetTeamRepair.assets,
+      knowledgeAssetOrphans: knowledgeAssetTeamRepair.orphans,
+      knowledgeAssetOrphanIds: knowledgeAssetTeamRepair.orphanIds,
       seededBuiltInSuperadmin,
       protectedRowsVerified: Object.keys(protectedBefore).length
     };
@@ -2542,6 +2561,11 @@ async function ensureSchema(pool: mysql.Pool) {
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_customer_activities_customer(customer_id)
   )`);
+  // 编辑留痕（2026-10-14）。老库用 ensureColumn 补列，新库直接在下面补上。
+  // `updated_at` 用 DATETIME(3)：编辑可能在同一秒内发生多次（批量修正），
+  // 秒精度会让「最后一次编辑」不可判定。
+  await ensureColumn(pool, "customer_activities", "updated_at", "DATETIME(3) NULL");
+  await ensureColumn(pool, "customer_activities", "edited_by", "VARCHAR(64) DEFAULT ''");
   await pool.query(`CREATE TABLE IF NOT EXISTS customer_acquisition_source_events (
     id VARCHAR(64) PRIMARY KEY,
     team_id VARCHAR(64) NOT NULL,
@@ -6568,7 +6592,13 @@ async function loadCustomerActivities(pool: mysql.Pool): Promise<CustomerActivit
     content: row.content || "",
     operatorId: row.operator_id || "",
     nextReminder: row.next_reminder || "",
-    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString()
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || new Date().toISOString(),
+    // 老数据这两列是 NULL / '' —— 保持 undefined 表示「从未编辑过」，
+    // 不要退化成空字符串：空字符串会被界面当成「编辑人是空的」而显示出一个空署名。
+    updatedAt: row.updated_at
+      ? (row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at))
+      : undefined,
+    editedBy: row.edited_by || undefined
   }));
 }
 
@@ -7061,6 +7091,8 @@ async function loadKnowledgeAssets(pool: mysql.Pool): Promise<KnowledgeAsset[]> 
     description: row.description || "",
     tags: row.tags_json ? (typeof row.tags_json === "string" ? JSON.parse(row.tags_json) : row.tags_json) : [],
     accessCount: Number(row.access_count || 0),
+    verified: Number(row.verified || 0) === 1,
+    archivedReason: row.archived_reason || "",
     lastAccessedAt: row.last_accessed_at instanceof Date ? row.last_accessed_at.toISOString() : row.last_accessed_at || undefined,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at || undefined,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at || undefined
@@ -8054,6 +8086,63 @@ async function repairProspectRunExecutionSnapshotIntegrity(pool: mysql.Pool) {
   } finally {
     connection.release();
   }
+}
+
+/**
+ * 知识资产孤儿归属修复（迁移级，幂等）。
+ *
+ * 背景：knowledge_assets.team_id 的 schema 默认值是 'all'，而可见性判定
+ * （server.ts canSeeKnowledgeAsset / resource-hub.ts collectKnowledgeAssets）
+ * 都要求 teamId === actor.teamId 且平台身份被 isPlatformIdentity 排除 ——
+ * 兜底值反而让这些资料在文件中心与推荐里**双处不可见**。
+ *
+ * 修复口径：
+ *  - team_id 为 NULL / 空 / 'all' 且 owner 能查到团队的 → 改写成 owner 的团队；
+ *  - owner 已删除、查不到团队的 → 保持原值，记入孤儿清单（返回 id 列表），
+ *    不静默跳过（治理看数会展示，可人工改派）。
+ */
+async function repairKnowledgeAssetTeamOwnership(pool: mysql.Pool) {
+  const connection = await pool.getConnection();
+  const repaired = { assets: 0, orphans: 0 };
+  const orphanIds: string[] = [];
+  try {
+    await connection.beginTransaction();
+    const assetRows = await rows<Record<string, unknown>>(
+      connection,
+      `SELECT id, owner_id, team_id
+       FROM knowledge_assets
+       WHERE team_id IS NULL OR team_id = '' OR team_id = 'all'
+       ORDER BY id
+       FOR UPDATE`
+    );
+    for (const assetRow of assetRows) {
+      const assetId = String(assetRow.id);
+      const [ownerRows] = await connection.query(
+        "SELECT team_id FROM users WHERE id = ? LIMIT 1",
+        [String(assetRow.owner_id || "")]
+      );
+      const ownerTeam = String(
+        (ownerRows as Array<{ team_id: string | null }>)[0]?.team_id || ""
+      ).trim();
+      if (ownerTeam) {
+        await connection.query(
+          "UPDATE knowledge_assets SET team_id = ? WHERE id = ?",
+          [ownerTeam, assetId]
+        );
+        repaired.assets += 1;
+      } else {
+        repaired.orphans += 1;
+        orphanIds.push(assetId);
+      }
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { ...repaired, orphanIds };
 }
 
 /**
@@ -12089,7 +12178,10 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "daily_report_comments", store.dailyReportComments, (item) => [item.id, item.reportId, item.parentId || "", item.content, item.authorId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,report_id,parent_id,content,author_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "internal_messages", store.internalMessages, (item) => [item.id, item.threadId, item.senderId, item.recipientId, item.teamId, item.type, item.subject, item.content, item.relatedType, item.relatedId, item.idempotencyKey || null, item.readAt ? mysqlDate(item.readAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,thread_id,sender_id,recipient_id,team_id,message_type,subject,content,related_type,related_id,idempotency_key,read_at,created_at,updated_at)");
     await replaceRows(connection, "customers", store.customers, (item) => [item.id, item.company, item.country, item.contact, item.whatsapp || "", item.wechat || "", item.otherNotes || "", item.ownerId, item.teamId, item.stage, item.amount, item.health, item.source || "", item.grade || "C", item.lifecycleStatus || "open", item.wonAt ? mysqlDate(item.wonAt) : null, item.wonByDealId || "", item.nextReminder, item.wecomBound, item.billingName || item.companyFullName || item.company || "", item.companyFullName || item.billingName || item.company || "", item.billingAddress || "", item.documentContact || "", item.contactRemark || "", item.phone || "", item.email || "", item.website || "", item.defaultPortDischarge || "", item.defaultIncoterm || "", item.defaultPaymentTerm || "", item.poolStatus || "owned", item.previousOwnerId || "", item.releasedBy || "", item.releasedAt ? mysqlDate(item.releasedAt) : null, item.releaseReason || "", item.claimedAt ? mysqlDate(item.claimedAt) : null, item.ownershipVersion || 0], "(id,company,country,contact,whatsapp,wechat,other_notes,owner_id,team_id,stage,amount,health,customer_source,customer_grade,lifecycle_status,won_at,won_by_deal_id,next_reminder,wecom_bound,billing_name,company_full_name,billing_address,document_contact,contact_remark,phone,email,website,default_port_discharge,default_incoterm,default_payment_term,pool_status,previous_owner_id,released_by,released_at,release_reason,claimed_at,ownership_version)");
-    await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt)], "(id,customer_id,type,content,operator_id,next_reminder,created_at)");
+    // ⚠️ 这里**不能**直接写 `mysqlDate(item.updatedAt)`：`mysqlDate(undefined)` 返回的是
+    // `new Date()`（见 :15197 的实现），会让所有从未编辑过的记录都落成「刚刚编辑过」——
+    // 不报错、不崩溃，只是数据全错。必须显式判空传 null。
+    await replaceRows(connection, "customer_activities", store.customerActivities, (item) => [item.id, item.customerId, item.type || "note", item.content || "", item.operatorId || "", item.nextReminder || "", mysqlDate(item.createdAt), item.updatedAt ? mysqlDate(item.updatedAt) : null, item.editedBy || ""], "(id,customer_id,type,content,operator_id,next_reminder,created_at,updated_at,edited_by)");
     await replaceRows(connection, "customer_intelligence_suggestions", store.customerIntelligenceSuggestions, (item) => [item.id, item.teamId, item.ownerId, item.customerId, item.prospectCandidateId, item.tenantProspectId || "", item.organizationId || "", item.leadId || "", item.sourceEventId || "", item.sourceLabel || "", item.sourceUrl || "", JSON.stringify(item.suggestedFields || []), item.website || "", item.business || "", item.contactInfo || "", item.evidenceSummary || "", JSON.stringify(item.evidenceRefs || []), item.payloadHash, item.status, JSON.stringify(item.acceptedFields || []), item.reviewedBy || "", item.reviewedAt ? mysqlDate(item.reviewedAt) : null, item.reviewNote || "", mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,team_id,owner_id,customer_id,prospect_candidate_id,tenant_prospect_id,organization_id,lead_id,source_event_id,source_label,source_url,suggested_fields_json,website,business,contact_info,evidence_summary,evidence_refs_json,payload_hash,suggestion_status,accepted_fields_json,reviewed_by,reviewed_at,review_note,created_at,updated_at)");
     await replaceRows(connection, "leads", store.leads, (item) => [item.id, item.company, item.contact || "", item.country || "", item.email || "", item.phone || "", item.wechat || "", item.source || "", item.sourceType || "outbound", item.sourceChannel || "manual", item.sourceCampaign || "", item.externalId || "", item.sourceUrl || "", item.intent || "中", item.stage || "新线索", item.status || "new", item.ownerId, item.teamId, item.estimatedAmount || 0, item.nextFollowAt || "", item.lastActivityAt || "", item.remark || "", item.inquiryContent || "", item.convertedCustomerId || "", item.convertedDealId || "", item.deletedAt ? mysqlDate(item.deletedAt) : null, item.deletedReason || "", item.deletedBy || "", item.purgeAt ? mysqlDate(item.purgeAt) : null, item.statusBeforeDelete || "", mysqlDate(item.createdAt), item.lastEmailReplyAt || ""], "(id,company,contact,country,email,phone,wechat,source,source_type,source_channel,source_campaign,external_id,source_url,intent,stage,status,owner_id,team_id,estimated_amount,next_follow_at,last_activity_at,remark,inquiry_content,converted_customer_id,converted_deal_id,deleted_at,deleted_reason,deleted_by,purge_at,status_before_delete,created_at,last_email_reply_at)");
     await replaceRows(connection, "lead_activities", store.leadActivities, (item) => [item.id, item.leadId, item.type || "note", item.content || "", item.operatorId || "", item.nextFollowAt || "", mysqlDate(item.createdAt)], "(id,lead_id,type,content,operator_id,next_follow_at,created_at)");
@@ -12101,7 +12193,7 @@ async function persistAll(pool: mysql.Pool, store: CrmStore) {
     await replaceRows(connection, "plan_tasks", store.planTasks, (item) => [item.id, item.title, item.phase, item.category, item.priority, item.status, item.dueAt, item.target, item.description, item.customerId || "", item.leadId || "", item.dealId || "", item.completionResult || "", item.completedAt ? mysqlDate(item.completedAt) : null, item.cancellationReason || "", item.cancelledAt ? mysqlDate(item.cancelledAt) : null, item.rescheduledFrom || "", item.rescheduledAt ? mysqlDate(item.rescheduledAt) : null, item.rescheduleReason || "", item.ownerId, item.teamId, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,title,phase,category,priority,status,due_at,target,description,customer_id,lead_id,deal_id,completion_result,completed_at,cancellation_reason,cancelled_at,rescheduled_from,rescheduled_at,reschedule_reason,owner_id,team_id,created_at,updated_at)");
     await replaceRows(connection, "plan_templates", store.planTemplates, (item) => [item.id, item.section, item.title, item.summary, item.output, item.badge, item.badgeTone, item.phase, item.category, item.priority, item.target, item.description, item.sortOrder, item.ownerId, item.teamId, mysqlDate(item.updatedAt)], "(id,section_name,title,summary,output_text,badge,badge_tone,phase,category,priority,target,description,sort_order,owner_id,team_id,updated_at)");
     await replaceRows(connection, "reminders", store.reminders, (item) => [item.id, item.title, item.rule, item.dueAt, item.ownerId, item.teamId, "站内", item.enabled === false ? "disabled" : "enabled", item.ruleType || null, item.targetStage || null, item.days ?? 3, item.timeUnit || "day", JSON.stringify(item.targetCustomerIds || []), item.generateTodo === false ? 0 : 1, item.priority || "normal", item.enabled ?? true, item.generatedCount || 0, item.targetOwnerId || item.ownerId, item.lastRunBy || "", item.lastRunAt ? mysqlDate(item.lastRunAt) : null, item.lastMatchedCount || 0, item.lastCreatedCount || 0, item.lastSkippedCount || 0, item.lastFailedCount || 0, item.lastError || "", JSON.stringify(item.lastSkipReasons || [])], "(id,title,rule_text,due_at,owner_id,team_id,channel,status,rule_type,target_stage,days_count,time_unit,target_customer_ids_json,generate_todo,priority,enabled,generated_count,target_owner_id,last_run_by,last_run_at,last_matched_count,last_created_count,last_skipped_count,last_failed_count,last_error,last_skip_reasons)");
-    await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.teamId || "all", item.version, item.sourceType || "legacy", item.sourceUrl || "", item.shareCode || "", item.fileType || "other", item.description || "", canonicalJsonStringify(item.tags || []), item.accessCount || 0, item.lastAccessedAt ? mysqlDate(item.lastAccessedAt) : null, item.createdAt ? mysqlDate(item.createdAt) : mysqlDate(new Date().toISOString()), item.updatedAt ? mysqlDate(item.updatedAt) : mysqlDate(new Date().toISOString())], "(id,title,category,status,owner_id,team_id,version,source_type,source_url,share_code,file_type,description,tags_json,access_count,last_accessed_at,created_at,updated_at)");
+    await replaceRows(connection, "knowledge_assets", store.knowledgeAssets, (item) => [item.id, item.title, item.category, item.status, item.ownerId, item.teamId || "all", item.version, item.sourceType || "legacy", item.sourceUrl || "", item.shareCode || "", item.fileType || "other", item.description || "", canonicalJsonStringify(item.tags || []), item.accessCount || 0, item.verified === true ? 1 : 0, item.archivedReason || "", item.lastAccessedAt ? mysqlDate(item.lastAccessedAt) : null, item.createdAt ? mysqlDate(item.createdAt) : mysqlDate(new Date().toISOString()), item.updatedAt ? mysqlDate(item.updatedAt) : mysqlDate(new Date().toISOString())], "(id,title,category,status,owner_id,team_id,version,source_type,source_url,share_code,file_type,description,tags_json,access_count,verified,archived_reason,last_accessed_at,created_at,updated_at)");
     await replaceRows(connection, "skill_resources", store.skillResources, (item) => [item.id, item.name, item.category, item.version, item.summary, item.usageGuide, item.trainingGuide, item.optimizationAdvice, item.acquisitionInstructions, item.downloadUrl, item.extractionCode, canonicalJsonStringify(item.tags || []), item.author, item.license, item.status, item.ownerId, item.teamId, item.accessCount || 0, item.lastAccessedAt ? mysqlDate(item.lastAccessedAt) : null, mysqlDate(item.createdAt), mysqlDate(item.updatedAt)], "(id,name,category,version,summary,usage_guide,training_guide,optimization_advice,acquisition_instructions,download_url,extraction_code,tags_json,author,license_text,resource_status,owner_id,team_id,access_count,last_accessed_at,created_at,updated_at)");
     await replaceRows(connection, "exams", store.exams, (item) => [item.id, item.title, item.category, item.status, item.passRate, item.questionCount, item.durationMinutes || 20, item.passScore || 80, item.targetRole || "sales", item.instructions || "", item.startAt ? mysqlDate(item.startAt) : null, item.endAt ? mysqlDate(item.endAt) : null, item.maxAttempts || 1, Boolean(item.allowReview), item.publishedAt ? mysqlDate(item.publishedAt) : null, item.closedAt ? mysqlDate(item.closedAt) : null, item.ownerId || "", item.teamId || "all", mysqlDate(item.updatedAt)], "(id,title,category,status,pass_rate,question_count,duration_minutes,pass_score,target_role,instructions,start_at,end_at,max_attempts,allow_review,published_at,closed_at,owner_id,team_id,updated_at)");
     await replaceRows(connection, "exam_questions", store.examQuestions, (item) => [item.id, item.examId || "bank", item.category, item.stem, JSON.stringify(item.options), item.answerIndex, JSON.stringify(item.answerIndexes?.length ? item.answerIndexes : [item.answerIndex]), item.questionType || ((item.answerIndexes?.length || 0) > 1 ? "multiple" : "single"), JSON.stringify(item.tags || []), item.explanation, item.difficulty, item.ownerId || "", item.teamId || "all", mysqlDate(item.updatedAt)], "(id,exam_id,category,stem,options_json,answer_index,answer_indexes_json,question_type,tags_json,explanation,difficulty,owner_id,team_id,updated_at)");

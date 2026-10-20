@@ -27,6 +27,15 @@ export type ResourceEventType = (typeof RESOURCE_EVENT_TYPES)[number];
 
 /** 审计埋点保留期（天）。超期由 pruneResourceEvents 清理。 */
 export const RESOURCE_RETENTION_DAYS = 90;
+
+/**
+ * 埋点清理的截止时刻：早于它的算过期。抽成纯函数（两个仓库共用）是为了让
+ * 「保留期窗口」这件事可单测 —— 尤其是 `Math.max(1, …)` 的下限：
+ * 配 0 或负数时不能把全表清光。
+ */
+export function resourceEventPruneCutoff(retentionDays = RESOURCE_RETENTION_DAYS, now = Date.now()): Date {
+  return new Date(now - Math.max(1, retentionDays) * 86_400_000);
+}
 /** 单源单次最多扫多少行。超出的部分靠「最近更新优先」覆盖，这是有意识的取舍。 */
 export const MAX_SCAN_PER_SOURCE = 400;
 /** 向量只对词法预筛后的这些候选做精排，避免全表加载向量。 */
@@ -37,6 +46,26 @@ export const RESOURCE_SEARCH_BUDGET_MS = 2_000;
 export const RESOURCE_HUB_EMBEDDING_MODEL = "goodjob-resource-hub-v1";
 /** 排序权重（四路和为 1）。 */
 export const RESOURCE_SCORE_WEIGHTS = { lexical: 0.52, structured: 0.2, semantic: 0.16, vector: 0.12 } as const;
+
+/* --------- 两池与反馈：权重而非硬上限 --------- */
+/** 长尾池（未校订的 file 资料）权重。比硬上限（第 N 份之后直接消失）诚实得多。 */
+export const LONG_TAIL_SCORE_WEIGHT = 0.5;
+/** 该客户明确反馈「没帮助」后的权重。UI 承诺过「下次排后面」，这里兑现它。 */
+export const DISMISSED_SCORE_FACTOR = 0.4;
+/** 反馈回流：曝光够多却零采纳 → 降权；采纳够多 → 轻微加权（封顶 1）。 */
+export const FEEDBACK_DEMOTE_MIN_REVEALED = 20;
+export const FEEDBACK_DEMOTE_FACTOR = 0.5;
+export const FEEDBACK_BOOST_MIN_ACCEPTED = 5;
+export const FEEDBACK_BOOST_MIN_REVEALED = 5;
+export const FEEDBACK_BOOST_FACTOR = 1.15;
+/**
+ * 词法归一化的「有效查询词数」（P3-1）。
+ *
+ * 旧口径的分母是**全部**查询词 idf 之和：20 词的会话里命中 1 个高权词只有 ~0.05，
+ * 全体候选挤在淘汰阈值 0.01 附近。新口径只取 idf 最高的这 5 个当分母 ——
+ * 短查询（≤5 词）分母不变，行为与旧版**逐位一致**，所以能安全地做 A/B 开关。
+ */
+export const LEXICAL_V2_TOP_TERMS = 5;
 
 /** 领域语义展开词典：客户/业务员口语 → 资料里更常见的写法。只做「同义改写」这一类，不做联想。 */
 const DOMAIN_EXPANSIONS: Array<{ pattern: RegExp; terms: string[] }> = [
@@ -89,6 +118,12 @@ export interface HubResource {
   searchText: string;
   /** 知识文档的正文，reveal 时内联返回；其余源为空 */
   inlineContent: string;
+  /**
+   * 人工校订标记（只有 file 源有意义）。两池分层依据：
+   * verified=true → 核心池 ×1.0；false/缺省 → 长尾池 ×0.5。
+   * 非 file 源恒为 true（skill / knowledge / product 由各自维护界面把关）。
+   */
+  verified?: boolean;
 }
 
 export type ResourceReasonKind = "lexical" | "structured" | "semantic" | "vector";
@@ -111,6 +146,8 @@ export type PublicHubResource = Omit<HubResource, "searchText" | "inlineContent"
 
 export interface RecommendedResource extends PublicHubResource {
   score: number;
+  /** 两池归属：core=已校订/非 file 源；longtail=未校订的 file 资料（已打折）。 */
+  pool: "core" | "longtail";
   headline: string;
   match: ResourceMatch;
   reasons: ResourceReason[];
@@ -190,34 +227,57 @@ function textOf(...parts: Array<string | string[] | undefined>): string {
     .join("\n");
 }
 
+/**
+ * 知识资产的有效团队。
+ *
+ * `team_id` 的 schema 默认值是 `'all'`（mysql-store.ts ensureColumn 的历史兜底），
+ * 而可见性判定要求 `teamId === actor.teamId` 且平台身份被 `isPlatformIdentity` 排除
+ * —— 于是默认值反而让资料**双处不可见**（文件中心 + 推荐）。
+ * 这里把 `'all'` / 空值一律视为「未归属」，回落到 owner 的团队；
+ * owner 也查不到时才保留 `'all'`（真孤儿，由迁移里的
+ * `repairKnowledgeAssetTeamOwnership` 修复并记入孤儿清单）。
+ */
+export function knowledgeAssetTeamId(
+  store: CrmStore,
+  asset: { ownerId: string; teamId?: string }
+): string {
+  const own = String(asset.teamId || "").trim();
+  if (own && own !== "all") return own;
+  const owner = store.users.find((item) => item.id === asset.ownerId);
+  return owner?.teamId || "all";
+}
+
 /** 文件中心：只出 published；团队隔离 + 对象归属。 */
 function collectKnowledgeAssets(store: CrmStore, actor: SessionUser): HubResource[] {
   return store.knowledgeAssets
     .filter((asset) => asset.status === "published")
     .filter((asset) => {
-      const owner = store.users.find((item) => item.id === asset.ownerId);
-      const teamId = asset.teamId || owner?.teamId || "all";
+      const teamId = knowledgeAssetTeamId(store, asset);
       if (teamId !== actor.teamId || isPlatformIdentity(actor)) return false;
       return true;
     })
-    .map((asset) => ({
-      id: asset.id,
-      sourceType: "file" as const,
-      title: asset.title,
-      category: asset.category || "",
-      summary: asset.description || "",
-      tags: Array.isArray(asset.tags) ? asset.tags : [],
-      fileType: asset.fileType || "other",
-      version: asset.version || "",
-      author: store.users.find((item) => item.id === asset.ownerId)?.name || "",
-      updatedAt: asset.updatedAt || asset.createdAt || "",
-      accessCount: Number(asset.accessCount || 0),
-      hasExternalLink: Boolean(asset.sourceUrl) && asset.sourceType !== "legacy",
-      ownerId: asset.ownerId,
-      teamId: asset.teamId || store.users.find((item) => item.id === asset.ownerId)?.teamId || "all",
-      searchText: textOf(asset.title, asset.category, asset.description, asset.tags, asset.fileType),
-      inlineContent: ""
-    }));
+    .map((asset) => {
+      const owner = store.users.find((item) => item.id === asset.ownerId);
+      return {
+        id: asset.id,
+        sourceType: "file" as const,
+        title: asset.title,
+        category: asset.category || "",
+        summary: asset.description || "",
+        tags: Array.isArray(asset.tags) ? asset.tags : [],
+        fileType: asset.fileType || "other",
+        version: asset.version || "",
+        author: owner?.name || "",
+        updatedAt: asset.updatedAt || asset.createdAt || "",
+        accessCount: Number(asset.accessCount || 0),
+        hasExternalLink: Boolean(asset.sourceUrl) && asset.sourceType !== "legacy",
+        ownerId: asset.ownerId,
+        teamId: knowledgeAssetTeamId(store, asset),
+        searchText: textOf(asset.title, asset.category, asset.description, asset.tags, asset.fileType),
+        inlineContent: "",
+        verified: asset.verified === true
+      };
+    });
 }
 
 /** Skill 资源：只出 published；仅本团队。 */
@@ -321,24 +381,63 @@ function collectProducts(store: CrmStore, actor: SessionUser): HubResource[] {
     }));
 }
 
+/**
+ * 可达性闸：推荐位只给「点了能拿到东西」的资料。
+ * 规则与 reveal 的交付能力逐条对齐（reveal 给不出东西的资料不该占推荐位）：
+ *  - file：有外链且不是 legacy（否则 reveal 必返 no_link 409，用户点下去就是一句报错）
+ *  - skill：有 downloadUrl（同上）
+ *  - knowledge：有内联正文（知识条目靠正文交付，空正文等于没内容）
+ *  - product：恒过（产品卡本身就是可推荐内容；无描述时面板提示「暂无详情」，不算断链）
+ *
+ * ⚠️ reveal 路径**不过滤** —— 「没链接」要返回 409 让用户知道原因，
+ * 而不是从推荐里悄悄消失、连「为什么推了却打不开」都看不出来。
+ */
+export function resourceReachable(resource: HubResource): boolean {
+  if (resource.sourceType === "file" || resource.sourceType === "skill") return resource.hasExternalLink;
+  if (resource.sourceType === "knowledge") return Boolean(String(resource.inlineContent || "").trim());
+  return true;
+}
+
 /** 采集当前账号可见的全部资源（四源合并，按源各截断 MAX_SCAN_PER_SOURCE）。 */
 export function collectHubResources(store: CrmStore, actor: SessionUser, filter: CollectFilter = {}): HubResource[] {
+  return collectHubResourcesDetailed(store, actor, filter).resources;
+}
+
+export interface HubCollection {
+  resources: HubResource[];
+  /** 各源「可见但超出 MAX_SCAN_PER_SOURCE 未进候选」的条数（键只在 >0 时出现）。 */
+  truncated: Partial<Record<ResourceSourceType, number>>;
+}
+
+/**
+ * 带截断元信息的采集。截断计数按「排序后、类目过滤前」算 ——
+ * 那才是「因更新过早被挤出候选集」的真实条数（类目过滤是用户主动收窄，不算截断）。
+ */
+export function collectHubResourcesDetailed(store: CrmStore, actor: SessionUser, filter: CollectFilter = {}): HubCollection {
   const wanted = new Set<ResourceSourceType>(
     filter.sourceTypes?.length ? filter.sourceTypes : [...RESOURCE_SOURCE_TYPES]
   );
   const rows: HubResource[] = [];
-  if (wanted.has("file")) rows.push(...sortByUpdatedDesc(collectKnowledgeAssets(store, actor)).slice(0, MAX_SCAN_PER_SOURCE));
-  if (wanted.has("skill")) rows.push(...sortByUpdatedDesc(collectSkillResources(store, actor)).slice(0, MAX_SCAN_PER_SOURCE));
-  if (wanted.has("knowledge")) rows.push(...sortByUpdatedDesc(collectKnowledgeDocuments(store, actor)).slice(0, MAX_SCAN_PER_SOURCE));
-  if (wanted.has("product")) rows.push(...sortByUpdatedDesc(collectProducts(store, actor)).slice(0, MAX_SCAN_PER_SOURCE));
+  const truncated: Partial<Record<ResourceSourceType, number>> = {};
+  const take = (sourceType: ResourceSourceType, visible: HubResource[]) => {
+    const sorted = sortByUpdatedDesc(visible);
+    rows.push(...sorted.slice(0, MAX_SCAN_PER_SOURCE));
+    const dropped = Math.max(0, sorted.length - MAX_SCAN_PER_SOURCE);
+    if (dropped > 0) truncated[sourceType] = dropped;
+  };
+  if (wanted.has("file")) take("file", collectKnowledgeAssets(store, actor));
+  if (wanted.has("skill")) take("skill", collectSkillResources(store, actor));
+  if (wanted.has("knowledge")) take("knowledge", collectKnowledgeDocuments(store, actor));
+  if (wanted.has("product")) take("product", collectProducts(store, actor));
 
   const category = String(filter.category || "").trim().toLowerCase();
   const fileType = String(filter.fileType || "").trim().toLowerCase();
-  return rows.filter((row) => {
+  const resources = rows.filter((row) => {
     if (category && row.category.toLowerCase() !== category) return false;
     if (fileType && row.sourceType === "file" && row.fileType.toLowerCase() !== fileType) return false;
     return true;
   });
+  return { resources, truncated };
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +451,15 @@ export interface ScoreOptions {
   sentCounts?: Map<string, number>;
   /** 该客户此前收到过的资源，键 `${sourceType}:${id}` */
   customerResourceKeys?: Set<string>;
+  /** 该客户明确标过「没帮助」的资源 —— 降权。与上面那个「接触过」是两回事。 */
+  dismissedKeys?: Set<string>;
+  /**
+   * 近 30 天反馈摘要（键 `${sourceType}:${id}`）。用于「曝光多、零采纳」自动降权。
+   * 由调用方从 eventStats 缓存取；读不到就不传，检索照常。
+   */
+  feedback?: Map<string, { revealed: number; accepted: number; dismissed: number }>;
+  /** 质检开关：开启后词法分按「命中的查询词 idf 之和」归一，长会话不再被稀释（P3-1）。 */
+  lexicalV2?: boolean;
   /**
    * 该客户历史报价单里出现过的产品词。
    * 用真实往来数据做结构化加分（而不是猜"这个客户大概属于哪个行业"）：
@@ -432,6 +540,17 @@ export function scoreHubResources(resources: HubResource[], options: ScoreOption
   const idf = (term: string) => Math.log((resources.length + 1) / ((documentFrequency.get(term) || 0) + 1)) + 1;
   const originalIdfSum = [...original].reduce((sum, term) => sum + idf(term), 0);
   const expandedIdfSum = [...expanded].reduce((sum, term) => sum + idf(term), 0);
+  /**
+   * P3-1：词法归一化分母。旧版=全部查询词 idf 之和；新版=idf 最高的 LEXICAL_V2_TOP_TERMS 个。
+   * 短查询两者相等，所以开关不会把已调好的短句排序搅乱。
+   */
+  const lexicalDenominator = options.lexicalV2
+    ? [...original]
+      .map((term) => idf(term))
+      .sort((left, right) => right - left)
+      .slice(0, LEXICAL_V2_TOP_TERMS)
+      .reduce((sum, value) => sum + value, 0)
+    : originalIdfSum;
 
   const scored = resources.map((resource) => {
     const key = resourceKey(resource.sourceType, resource.id);
@@ -454,7 +573,7 @@ export function scoreHubResources(resources: HubResource[], options: ScoreOption
       semanticHits.push(term);
     }
 
-    const lexical = originalIdfSum > 0 ? Math.max(0, Math.min(1, lexicalRaw / originalIdfSum)) : 0;
+    const lexical = lexicalDenominator > 0 ? Math.max(0, Math.min(1, lexicalRaw / lexicalDenominator)) : 0;
     const semantic = expandedIdfSum > 0 ? Math.max(0, Math.min(1, semanticRaw / expandedIdfSum)) : 0;
 
     const reasons: ResourceReason[] = [];
@@ -463,7 +582,9 @@ export function scoreHubResources(resources: HubResource[], options: ScoreOption
     const inCustomerHistory = Boolean(options.customerResourceKeys?.has(key));
     if (inCustomerHistory) {
       structuredParts.push(0.5);
-      reasons.push({ kind: "structured", text: "该客户此前收到过同类资料" });
+      // 措辞对齐事实：customerResourceKeys 收的是 sent + revealed，是「接触过/看过」，
+      // 不是「收到过」。说成「收到过」会让业务员以为已经发过，实际只是自己点开看过（G8）。
+      reasons.push({ kind: "structured", text: "该客户此前查看过同类资料" });
     }
     if (options.customerProductTerms?.size) {
       // 只拿标题与标签去比（摘要/正文里偶然出现同一个词不算「该客户要的东西」）
@@ -500,21 +621,45 @@ export function scoreHubResources(resources: HubResource[], options: ScoreOption
     }
     if (vector > 0.35) reasons.push({ kind: "vector", text: `语义相近（${vector.toFixed(2)}）` });
 
-    const score =
+    let score =
       RESOURCE_SCORE_WEIGHTS.lexical * lexical +
       RESOURCE_SCORE_WEIGHTS.structured * structured +
       RESOURCE_SCORE_WEIGHTS.semantic * semantic +
       RESOURCE_SCORE_WEIGHTS.vector * vector;
 
+    /* ---------- 两池分层：长尾池的未校订 file 资料打折，而不是被隐藏 ---------- */
+    const pool: "core" | "longtail" =
+      resource.sourceType === "file" && resource.verified !== true ? "longtail" : "core";
+    if (pool === "longtail") score *= LONG_TAIL_SCORE_WEIGHT;
+
+    /* ---------- 明确被客户否掉的，排后面（兑现扩展上「下次会排后面」的承诺） ---------- */
+    const dismissed = Boolean(options.dismissedKeys?.has(key));
+    if (dismissed) {
+      score *= DISMISSED_SCORE_FACTOR;
+      reasons.push({ kind: "structured", text: "该客户反馈过这类资料「没帮助」" });
+    }
+
+    /* ---------- 反馈回流：曝光多零采纳的自然沉下去，采纳多的浮上来 ---------- */
+    const feedback = options.feedback?.get(key);
+    if (feedback) {
+      if (feedback.revealed >= FEEDBACK_DEMOTE_MIN_REVEALED && feedback.accepted === 0) {
+        score *= FEEDBACK_DEMOTE_FACTOR;
+        reasons.push({ kind: "structured", text: `看过 ${feedback.revealed} 次都没被采用，已降权` });
+      } else if (feedback.accepted >= FEEDBACK_BOOST_MIN_ACCEPTED && feedback.revealed >= FEEDBACK_BOOST_MIN_REVEALED) {
+        score = Math.min(1, score * FEEDBACK_BOOST_FACTOR);
+      }
+    }
+
     const hitTerms = [...new Set([...lexicalHits, ...semanticHits])].slice(0, 6);
     const headlineParts: string[] = [];
     if (hitTerms.length) headlineParts.push(`${hitTerms.slice(0, 3).map((term) => `「${term}」`).join("、")}都在这份资料里`);
-    if (inCustomerHistory) headlineParts.push("该客户此前收到过同类资料");
+    if (inCustomerHistory) headlineParts.push("该客户此前查看过同类资料");
     else if (structuredParts.length && !hitTerms.length) headlineParts.push("本团队常用资料");
 
     return {
       ...toPublicResource(resource),
       score: Number(score.toFixed(4)),
+      pool,
       headline: headlineParts.join("，"),
       match: {
         lexical: Number(lexical.toFixed(4)),
@@ -695,6 +840,13 @@ export function ensureResourceHubSchema(pool: Pool) {
 export interface ResourceHubRepository {
   sentCounts(teamId: string): Promise<Map<string, number>>;
   customerResourceKeys(teamId: string, conversationKey: string): Promise<Set<string>>;
+  /**
+   * 该客户在本团队会话里明确标过「没帮助」的资源。
+   *
+   * 单独一个集合而不是并进 customerResourceKeys —— 那一个表示「此前接触过」（可加权），
+   * 这一个表示「明确被否掉」（要降权）。混在一起就会把否决当成认可（G8）。
+   */
+  dismissedKeys(teamId: string, conversationKey: string): Promise<Set<string>>;
   recordEvents(items: ResourceEventInput[]): Promise<number>;
   listEvents(teamId: string, limit?: number): Promise<ResourceEventRow[]>;
   /** 按资源聚合五类事件计数（`since` 之后），一次 GROUP BY 出全部口径，不逐资源循环查询。 */
@@ -753,6 +905,21 @@ export class MysqlResourceHubRepository implements ResourceHubRepository {
     const [rows] = await this.pool.execute(
       `SELECT DISTINCT resource_type, resource_id FROM resource_retrieval_events
         WHERE team_id = ? AND conversation_key = ? AND event_type IN ('sent', 'revealed')`,
+      [teamId, conversationKey]
+    );
+    const out = new Set<string>();
+    for (const row of rows as Array<Record<string, unknown>>) {
+      out.add(`${String(row.resource_type)}:${String(row.resource_id)}`);
+    }
+    return out;
+  }
+
+  /** 该客户明确标过「没帮助」的资源（用于降权，别把否决当认可）。 */
+  async dismissedKeys(teamId: string, conversationKey: string): Promise<Set<string>> {
+    if (!conversationKey) return new Set();
+    const [rows] = await this.pool.execute(
+      `SELECT DISTINCT resource_type, resource_id FROM resource_retrieval_events
+        WHERE team_id = ? AND conversation_key = ? AND event_type = 'dismissed'`,
       [teamId, conversationKey]
     );
     const out = new Set<string>();
@@ -922,6 +1089,17 @@ export class MemoryResourceHubRepository implements ResourceHubRepository {
     return out;
   }
 
+  async dismissedKeys(teamId: string, conversationKey: string): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (!conversationKey) return out;
+    for (const row of this.events) {
+      if (row.teamId !== teamId || row.conversationKey !== conversationKey) continue;
+      if (row.eventType !== "dismissed") continue;
+      out.add(`${row.resourceType}:${row.resourceId}`);
+    }
+    return out;
+  }
+
   async recordEvents(items: ResourceEventInput[]): Promise<number> {
     for (const item of items) {
       this.events.push({
@@ -961,7 +1139,7 @@ export class MemoryResourceHubRepository implements ResourceHubRepository {
   }
 
   async pruneEvents(retentionDays = RESOURCE_RETENTION_DAYS): Promise<number> {
-    const cutoff = Date.now() - Math.max(1, retentionDays) * 86_400_000;
+    const cutoff = resourceEventPruneCutoff(retentionDays).getTime();
     const before = this.events.length;
     for (let index = this.events.length - 1; index >= 0; index -= 1) {
       if (new Date(this.events[index].createdAt).getTime() < cutoff) this.events.splice(index, 1);

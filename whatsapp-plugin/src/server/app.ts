@@ -27,10 +27,12 @@ import { requireCrmAuth } from "./crm-auth.js";
 import { AutomationRhythmService } from "./services/automation-rhythm.js";
 import { AutoChatService } from "./services/auto-chat-service.js";
 import { CliEngine } from "./services/cli-engine.js";
+import { FollowupSyncService } from "./services/followup-sync.js";
 import { CrmClient } from "./services/crm-client.js";
 import { ResourceHubClient } from "./services/crm-resources.js";
 import { ResourceRecommendService } from "./services/resource-recommend-service.js";
 import { TrainingService, trainingImportSchema } from "./services/training-service.js";
+import { CallTranscribeService } from "./services/call-transcribe-service.js";
 import { TrainingLibraryService, trainingLibraryInputSchema, trainingLibraryKindSchema } from "./services/training-library-service.js";
 import { historyMessageId, parseWhatsAppHistory, previewWhatsAppHistory } from "./services/whatsapp-history-import.js";
 
@@ -221,17 +223,26 @@ const autoChatSettingsSchema = z.object({
  * 给再大的口子就等于让扩展往 CLI 子进程里灌任意长度的文本。
  * 20 条 × 2000 字符与服务端的 `MAX_INLINE_CONTEXT_MESSAGES` / `MAX_INLINE_MESSAGE_CHARS` 对齐。
  */
+/**
+ * 一条现场消息。
+ *
+ * `compose` 与 `suggest` 两个入口**共用这一份形状**：各写一份的话，加字段时必然漏一边 ——
+ * `zh` 就先踩过一次（只加进了 suggest，compose 被 zod 静默 strip，跨语言检索看起来"
+ * 改了没效果"）。
+ */
+const composeMessageSchema = z.object({
+  direction: z.enum(["inbound", "outbound"]),
+  body: z.string().max(4_000),
+  occurredAt: z.string().trim().max(40).optional().default(""),
+  /**
+   * 扩展左侧那份中文译文，**只用于检索**（训练库是中文写的），不进提示词。
+   * 与 `body` 同一个上限：它也是从页面读来的文本，不给更宽的口子。
+   */
+  zh: z.string().max(4_000).optional().default("")
+});
+
 const composeSchema = z.object({
-  messages: z
-    .array(
-      z.object({
-        direction: z.enum(["inbound", "outbound"]),
-        body: z.string().max(4_000),
-        occurredAt: z.string().trim().max(40).optional().default("")
-      })
-    )
-    .min(1)
-    .max(40),
+  messages: z.array(composeMessageSchema).min(1).max(40),
   contact: z
     .object({
       // 号码允许空（扩展认不出号码时仍可以按名字认客户），但形状必须对。
@@ -258,16 +269,7 @@ const resourceSourceTypeSchema = z.enum(["file", "skill", "knowledge", "product"
 const resourceSearchSchema = z.object({
   /** 目录式检索关键词。给了 `messages` 时忽略。 */
   q: z.string().trim().max(200).optional(),
-  messages: z
-    .array(
-      z.object({
-        direction: z.enum(["inbound", "outbound"]),
-        body: z.string().max(4_000),
-        occurredAt: z.string().trim().max(40).optional().default("")
-      })
-    )
-    .max(40)
-    .optional(),
+  messages: z.array(composeMessageSchema).max(40).optional(),
   customerId: z.string().trim().max(64).optional(),
   conversationKey: z.string().trim().max(200).optional(),
   limit: z.number().int().min(1).max(20).optional(),
@@ -406,7 +408,6 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   const translation = new TranslationService(repository, encryption, realtime, config);
   const intelligence = new ConversationIntelligenceService(repository, realtime, translation);
   const automation = new AutomationRhythmService(repository, intelligence, config.crmBaseUrl ?? "http://127.0.0.1:4188", config.crmJwtSecret);
-  const training = new TrainingService(repository, translation);
   // 训练库：自动回复的专门语料库（跨会话可复用的问答/口径/政策/禁用词）。
   const trainingLibrary = new TrainingLibraryService(repository);
   // 自动聊依赖 ProviderManager，而 ProviderManager 需要入站回调 → 用可重入的延迟绑定打破循环。
@@ -425,8 +426,29 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     binary: config.cliBinary,
     timeoutSeconds: config.cliTimeoutSeconds,
     workspacePath: config.cliWorkspacePath,
-    skillsDirs: config.cliSkillsDirs
+    skillsDirs: config.cliSkillsDirs,
+    /**
+     * 常驻预热池：把一次 `--print` 约 4 秒的冷启动挪到没人等的时刻。
+     * 实测同一台机器：冷启动 4.2s，预热后用同一进程发请求 2.1s。
+     * CLI 不可用时预热自己会失败，不影响启动 —— 所以先探一次可用性再预热。
+     * 测试环境默认关闭（见 config.cliWarm）。
+     */
+    warm: config.cliWarm === true
   });
+  if (config.cliWarm) {
+    void cliEngine
+      .status()
+      .then((status) => (status.available ? cliEngine.warmup() : undefined))
+      .catch(() => undefined);
+  }
+  // 训练档案提炼链 = CLI 托管 → 配置的 AI 模型 → 规则提炼（与跟进同步同一口径），
+  // 所以 training 必须构造在 cliEngine 之后，并把两者一起递进去。
+  const training = new TrainingService(repository, translation, cliEngine);
+  /**
+   * 通话转写（本机 whisper.cpp）。与自动回复完全独立：
+   * 它只把 PCM 变成文字，不碰训练库、不碰 CRM、不发消息 —— 翻译那一步仍走扩展自己的通道。
+   */
+  const callTranscribe = new CallTranscribeService();
   // CRM 只读通道：把「这个客户的跟进/报价历史」与「知识检索命中」喂进回复提示词。
   // 用 owner 自己的身份去读（`GET /api/customers` 只返回他名下的客户，号码字段也只对 owner 可见），
   // 这就是「按手机号把 WhatsApp 会话关联到 CRM 客户」能成立的前提。
@@ -436,6 +458,9 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     timeoutMs: config.crmTimeoutMs
   });
   const autoChatService = new AutoChatService(repository, providers, realtime, translation, undefined, cliEngine, trainingLibrary, crmClient);
+  // 同一句客户消息的成品缓存：面板反复打开时直接给答案，不再跑一遍模型。
+  // 测试环境默认关闭（用例之间会换着 mock 外部依赖）。
+  autoChatService.composeCacheEnabled = config.autoChatCache === true;
   autoChat = autoChatService;
   /**
    * 资源中心通道。与 `crmClient` 共用同一份连接参数（同一个 CRM、同一个自签 token 口径），
@@ -447,6 +472,22 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     timeoutMs: config.crmTimeoutMs
   });
   const resourceRecommend = new ResourceRecommendService(resourceHubClient, cliEngine);
+  /**
+   * WhatsApp 对话 → CRM 客户跟进自动同步（docs/WHATSAPP-FOLLOWUP-SYNC-DESIGN.md）。
+   *
+   * 走 `crmJwtSecret` 自签 owner 身份，与 `crmClient` / `resourceHubClient` 是同一个口径：
+   * 数据以**触发人自己**的名义推给 CRM（CRM 侧从 token 里取 subject），不伪造 operator。
+   * 默认关闭（`followup_sync_enabled = 0`），要用户在界面上显式开启。
+   *
+   * 2026-10-15 起「结论在 CRM 做」：这里只扫描会话库、打包当天消息推给
+   * `POST /api/whatsapp/followup-sync`，匹配/生成/写跟进/站内信都在 CRM 完成，
+   * 所以不再需要 `cliEngine` 与 `translation`。
+   */
+  const followupSync = new FollowupSyncService(
+    repository,
+    config.crmBaseUrl ?? "http://127.0.0.1:4188",
+    config.crmJwtSecret
+  );
   // 自动回复不能只靠入站事件：进程重启、事件早于业务落库都会丢，所以再挂一层每分钟兜底扫描。
   // 默认在测试环境关闭，否则定时器会在用例中途插入草稿，让断言变得不确定。
   if (config.autoChatSweep ?? config.nodeEnv !== "test") {
@@ -454,6 +495,11 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
       await autoChatService.sweepOwner(ownerUserId);
     });
   }
+  // 定时放插件侧而不是扩展侧，是刻意的：MV3 的 service worker 会休眠、浏览器一关
+  // `chrome.alarms` 就完全不跑，而插件是常驻 Node 进程，定时才可靠。
+  automation.setFollowupSync(async (ownerUserId) => {
+    await followupSync.runIfDue(ownerUserId);
+  });
   const cleanupExpiredMedia = async (): Promise<void> => {
     const expired = await repository.listExpiredMessageMedia();
     for (const item of expired) {
@@ -567,6 +613,70 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   // Every plugin API request must carry the signed CRM session. The identity is
   // derived from the token, never from a user id supplied by the browser.
   app.use("/api/v1", requireCrmAuth(config.crmJwtSecret));
+
+  /* ------------------------------------------------------------ 通话转写（语音/视频通话） */
+  /**
+   * 转写能力体检。扩展在开始采集前先问一次，就能把「没装模型 / 模型没起」说明白，
+   * 而不是等到第一段音频回来才报一个看不懂的 500。
+   */
+  app.get("/api/v1/call-transcribe/status", (_request, response) => {
+    response.json(callTranscribe.status());
+  });
+
+  /**
+   * 预热：只把 `whisper-server` 拉起来，不转写任何东西。
+   *
+   * 模型加载要 1~3 秒，而通话第一句经常就是「喂，能听见吗」。扩展一检测到通话就打这里，
+   * 把这段等待挪到双方还在寒暄的时候，等于把「第一句丢词」这件事消灭掉。
+   * 幂等：已经起来了就直接返回，不会重复 spawn。
+   */
+  app.post(
+    "/api/v1/call-transcribe/warm",
+    asyncRoute(async (_request, response) => {
+      try {
+        await callTranscribe.warm();
+        response.json({ ok: true, status: callTranscribe.status() });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        response.status(500).json({ ok: false, message: reason, status: callTranscribe.status() });
+      }
+    })
+  );
+
+  /**
+   * 转写一段音频。入参是 16k 单声道 PCM16 的 base64 —— 不传音频文件容器，
+   * 是因为扩展那边本来就只有裸 PCM（WebAudio 的 Float32 → Int16），多一层 webm 编解码
+   * 只会把延迟做大，还会让断句粒度被编码器绑死。
+   *
+   * 这一跳完全在本机：扩展 → 127.0.0.1:3100 → 127.0.0.1:3110，音频不出机器。
+   */
+  app.post(
+    "/api/v1/call-transcribe",
+    asyncRoute(async (request, response) => {
+      const input = z
+        .object({
+          /** 15 秒 16k 单声道 ≈ 480KB，base64 后 ≈ 640KB；上限留到 2MB 兜住异常调用。 */
+          pcm: z.string().min(16).max(2_000_000),
+          sampleRate: z.number().int().min(8_000).max(48_000).default(16_000),
+          language: z.string().trim().max(16).optional()
+        })
+        .parse(request.body ?? {});
+      const pcm = Buffer.from(input.pcm, "base64");
+      if (!pcm.length) {
+        response.status(400).json({ message: "没有收到音频数据" });
+        return;
+      }
+      try {
+        const text = await callTranscribe.transcribe(pcm, { sampleRate: input.sampleRate, language: input.language });
+        response.json({ text, bytes: pcm.length, sampleRate: input.sampleRate });
+      } catch (error) {
+        // 500 而不是 503：调用方（扩展）要区分「这段音频转不出来」和「服务没起来」，
+        // 前者重试没有意义，后者值得提示去装模型。
+        response.status(500).json({ message: error instanceof Error ? error.message : "转写失败" });
+      }
+    })
+  );
+
 
   const ownedAccount = async (request: Request, accountId: string) => {
     const account = await repository.getAccount(accountId, request.crmIdentity!.userId);
@@ -1017,6 +1127,44 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     const limit = Number(request.query.limit ?? 30);
     response.json(await repository.listAutomationDeliveries(request.crmIdentity!.userId, Number.isFinite(limit) ? limit : 30));
   }));
+  // ------------------------------------------------------------ 跟进同步 ----
+  // WhatsApp 对话 → CRM 客户跟进。记录留在插件侧（同步由插件发起），所以读写都在这里。
+  app.get("/api/v1/automation/followup-sync/runs", asyncRoute(async (request, response) => {
+    const limit = Number(request.query.limit ?? 20);
+    // 待同步数量（今天有对话、但还没写过跟进的会话数）交给界面显示，用户才知道「值不值得点」。
+    response.json(await followupSync.listRuns(request.crmIdentity!.userId, Number.isFinite(limit) ? limit : 20));
+  }));
+  app.get("/api/v1/automation/followup-sync/runs/:id", asyncRoute(async (request, response) => {
+    response.json(await followupSync.listItems(routeParam(request.params.id), request.crmIdentity!.userId));
+  }));
+  app.put("/api/v1/automation/followup-sync/settings", asyncRoute(async (request, response) => {
+    const input = z.object({
+      enabled: z.boolean(),
+      hour: z.number().int().min(0).max(23),
+      minute: z.number().int().min(0).max(59)
+    }).parse(request.body);
+    // 时区沿用节奏中心的设置：让用户在两个地方各填一次时区，早晚会出现「显示 19:00 实际按别的时区跑」。
+    const current = await repository.getAutomationSettings(request.crmIdentity!.userId);
+    response.json(await followupSync.updateSettings(request.crmIdentity!.userId, { ...input, timezone: current.timezone }));
+  }));
+  app.post("/api/v1/automation/followup-sync/run", asyncRoute(async (request, response) => {
+    if (!followupSync.configured) throw new DomainError("CRM_NOT_CONFIGURED", 409, "CRM 服务签名密钥尚未配置，无法同步客户跟进");
+    try {
+      response.json(await followupSync.run(request.crmIdentity!.userId, { trigger: "manual" }));
+    } catch (error) {
+      // 手动同步失败要如实回 502 + 原因：界面必须能区分「今天没内容」和「CRM 挂了」。
+      throw new DomainError("FOLLOWUP_SYNC_FAILED", 502, error instanceof Error ? error.message : "同步失败");
+    }
+  }));
+  // CRM 代理读对话原文（跟进/旅程上的「查看对话」图标走这条）：按 activityId 定位那轮同步的当天消息。
+  app.get("/api/v1/automation/followup-sync/transcript/activity/:activityId", asyncRoute(async (request, response) => {
+    const transcript = await followupSync.transcriptByActivity(request.crmIdentity!.userId, routeParam(request.params.activityId));
+    if (!transcript) {
+      response.status(404).json({ error: "没有找到这条跟进对应的会话记录", code: "TRANSCRIPT_NOT_FOUND" });
+      return;
+    }
+    response.json(transcript);
+  }));
   // ---------------------------------------------------------------- 训练 -----
   app.get("/api/v1/training/profiles", asyncRoute(async (request, response) => {
     response.json(await training.list(request.crmIdentity!.userId));
@@ -1030,14 +1178,15 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   }));
   app.post("/api/v1/training/profiles", asyncRoute(async (request, response) => {
     const input = trainingRunSchema.parse(request.body);
-    const profile = await training.train(request.crmIdentity!.userId, input);
+    const { profile, reused } = await training.train(request.crmIdentity!.userId, input);
     await repository.audit("training.profile.created", "training_profile", profile.id, "success", {
       conversations: profile.conversationCount,
       messages: profile.messageCount,
       samples: profile.sampleCount,
-      engine: profile.engine
+      engine: profile.engine,
+      reused
     });
-    response.status(201).json(profile);
+    response.status(reused ? 200 : 201).json({ profile, reused });
   }));
   app.delete("/api/v1/training/profiles/:id", asyncRoute(async (request, response) => {
     const id = routeParam(request.params.id);
@@ -1071,10 +1220,16 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
       .split(",")
       .map((value) => value.trim())
       .filter((value) => trainingLibraryKindSchema.safeParse(value).success) as TrainingLibraryKind[];
+    // status 缺省 = 只出 active（与提示词同口径）；管理页要看候选池时传 status=all 或 candidate。
+    const statusRaw = String(request.query.status ?? "").trim().toLowerCase();
+    const status = statusRaw === "all" || statusRaw === "candidate" || statusRaw === "archived"
+      ? statusRaw
+      : undefined;
     response.json(
       await trainingLibrary.list(request.crmIdentity!.userId, {
         kinds: kinds.length ? kinds : undefined,
-        enabledOnly: request.query.enabled === "true"
+        enabledOnly: request.query.enabled === "true",
+        status
       })
     );
   }));
@@ -1105,7 +1260,30 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.post("/api/v1/training/library/import", asyncRoute(async (request, response) => {
     const input = z.object({ profileId: z.string().trim().min(1) }).parse(request.body);
     const result = await trainingLibrary.importFromProfile(request.crmIdentity!.userId, input.profileId);
-    await repository.audit("training.library.imported", "training_profile", input.profileId, "success", result);
+    await repository.audit("training.library.imported", "training_profile", input.profileId, "success", {
+      created: result.created,
+      skipped: result.skipped,
+      total: result.total
+    });
+    response.json(result);
+  }));
+  /**
+   * 候选确认 / 丢弃（批量，一次 ≤20）。
+   *
+   * 路径沿用现有 `/api/v1/training/library` 前缀（方案里写的 `/training-library/confirm`
+   * 与代码既有前缀不一致，以代码为准）。`confirm` → active（从这一刻进提示词）；
+   * `drop` → archived（保留行留痕、不再被下次导入当新条目加回来）。
+   */
+  app.post("/api/v1/training/library/confirm", asyncRoute(async (request, response) => {
+    const input = z.object({
+      ids: z.array(z.string().trim().min(1)).min(1).max(20),
+      action: z.enum(["confirm", "drop"])
+    }).parse(request.body);
+    const result = await trainingLibrary.reviewCandidates(request.crmIdentity!.userId, input.ids, input.action);
+    await repository.audit(`training.library.${input.action}`, "training_library_entry", input.ids[0], "success", {
+      requested: input.ids.length,
+      changed: result.changed
+    });
     response.json(result);
   }));
   // 命中预览：不用真的发消息，就能看到「客户这句话会用到库里哪几条」——调库时最需要的反馈。
@@ -1117,6 +1295,24 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.get("/api/v1/training/library/export.md", asyncRoute(async (request, response) => {
     const markdown = await trainingLibrary.exportMarkdown(request.crmIdentity!.userId);
     response.type("text/markdown; charset=utf-8").send(markdown);
+  }));
+  /**
+   * 「默认知识库」启用清单同步（CRM → 插件，全量覆盖）。
+   *
+   * 身份**只取自令牌**（`crmIdentity.userId`），不接受请求体里的目标用户 ——
+   * 否则任何人都能把别人的出稿清单改成任意状态。CRM 侧保存清单后立刻调这里；
+   * 之所以要推而不是让插件临场问 CRM：自动回复在插件内部跑，
+   * 那条链路上没有 CRM 请求上下文，问不了。
+   */
+  app.put("/api/v1/training/kb-subscriptions", asyncRoute(async (request, response) => {
+    const input = z.object({
+      kbIds: z.array(z.string().trim().max(191)).max(500)
+    }).parse(request.body);
+    const kbIds = await repository.replaceTrainingKbSubscriptions(request.crmIdentity!.userId, input.kbIds);
+    await repository.audit("training.kb_subscriptions.updated", "training_kb_subscription", request.crmIdentity!.userId, "success", {
+      enabled: kbIds.length
+    });
+    response.json({ kbIds });
   }));
   // ------------------------------------------------------------ 自动聊 -----
   app.get("/api/v1/auto-chat/settings", asyncRoute(async (request, response) => {
@@ -1161,6 +1357,20 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     if (input.accountId) await ownedAccount(request, input.accountId);
     response.json(await autoChat.runNow(request.crmIdentity!.userId, input));
   }));
+  /**
+   * 通话里的三条建议：按「前面的对话 + 客户最后那句话」给三个候选，每条带中文理由。
+   *
+   * 入参与 `/auto-chat/compose` **同一个 schema**（`composeSchema`）：通话与聊天共用
+   * `direction` 那一套，各写一份必然漏字段。返回值只有文本，**没有任何发送动作**。
+   */
+  app.post(
+    "/api/v1/call-suggest",
+    asyncRoute(async (request, response) => {
+      const input = composeSchema.parse(request.body ?? {});
+      if (input.accountId) await ownedAccount(request, input.accountId);
+      response.json(await autoChat.suggestForCall(request.crmIdentity!.userId, input));
+    })
+  );
   // ------------------------------------------------------- 资源中心（资料推荐）----
   /**
    * 资源检索（**快，不调模型**）。扩展右侧整列先拿它把内容铺出来；
@@ -1197,12 +1407,51 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     void resourceRecommend.feedback(request.crmIdentity!.userId, input.items, input.conversationKey ?? "");
     response.status(202).json({ accepted: input.items.length });
   }));
+  /**
+   * 只读透传类接口的失败口径：CRM 不可用 → **502 + 真实原因**。
+   *
+   * 为什么不交给全局错误处理器：那边对「没被它识别的错误」一律回
+   * `Internal server error`（状态码 500，**真实原因只进日志**），前端只拿到
+   * 一句「未知错误」。而这一层的失败原因（"CRM 返回 HTTP 503"、"签名密钥未配置"）
+   * 恰恰是界面唯一能说清「是 CRM 没连上，不是目录里没资料」的依据 ——
+   * 「空」和「取不到」必须能分开，否则治理面板会安静地显示 0。
+   * 502（上游不可用）也比 500（本插件自己坏了）更诚实。
+   */
+  const crmRelay = async (response: Response, run: () => Promise<unknown>): Promise<void> => {
+    try {
+      response.json(await run());
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : String(error),
+        code: "CRM_UNAVAILABLE"
+      });
+    }
+  };
   // 推荐效果报表（只读透传 CRM；见 docs/RESOURCE-FEEDBACK-REPORT-DESIGN.md）。
-  // 失败如实 502 带原因，不在插件侧伪造空报表。
+  // 失败 → 502 + 原因（见 crmRelay），不在插件侧伪造空报表。
   app.get("/api/v1/resources/stats", asyncRoute(async (request, response) => {
     const parsed = Number.parseInt(String(request.query.days ?? "30"), 10);
     const days = Math.min(90, Math.max(1, Number.isFinite(parsed) ? parsed : 30));
-    response.json(await resourceRecommend.stats(request.crmIdentity!.userId, days));
+    await crmRelay(response, () => resourceRecommend.stats(request.crmIdentity!.userId, days));
+  }));
+  /**
+   * 资料库目录快照：文件中心有什么、治理到什么程度、类目词表长什么样。
+   *
+   * 与 `/stats` 同一档：失败 → 502 + 原因，**绝不在插件侧伪装成「空目录」**。
+   *
+   * `since` 传上一轮响应的 `revision.latestUpdatedAt` 即得增量。
+   */
+  app.get("/api/v1/resources/catalog", asyncRoute(async (request, response) => {
+    const since = typeof request.query.since === "string" ? request.query.since.trim().slice(0, 40) : "";
+    const limit = Number.parseInt(String(request.query.limit ?? ""), 10);
+    await crmRelay(response, () =>
+      resourceRecommend.catalog(request.crmIdentity!.userId, {
+        ...(since ? { since } : {}),
+        // 上限与 CRM 侧的 MAX_RESOURCE_CATALOG_ITEMS 对齐：两边不一致时，
+        // 插件会以为"我只要了 50 条"，而 CRM 按 400 截断 —— 截断数就对不上账了。
+        ...(Number.isFinite(limit) ? { limit: Math.min(400, Math.max(1, limit)) } : {})
+      })
+    );
   }));
   /**
    * 回复 + 资料一次给全。扩展右侧整列只打这一个接口就能把两块内容都铺出来。
@@ -1744,6 +1993,11 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
         try {
           await providers.shutdown();
         } finally {
+          // whisper-server 是插件的子进程：插件不关它，它会一直占着 3110 与几百 MB 内存。
+          callTranscribe.dispose();
+          // 预热池的 CLI 进程同样是子进程：tsx watch 每次重启都会 fork 一批，
+          // 不显式收掉就会越攒越多（每个几百 MB）。
+          cliEngine.dispose();
           await database.close();
         }
       }

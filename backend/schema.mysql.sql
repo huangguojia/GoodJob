@@ -440,9 +440,24 @@ CREATE TABLE knowledge_assets (
   description TEXT,
   tags_json JSON,
   access_count INT DEFAULT 0,
+  verified TINYINT NOT NULL DEFAULT 0,
+  archived_reason VARCHAR(200) DEFAULT '',
   last_accessed_at TIMESTAMP NULL,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE knowledge_vocabulary (
+  id VARCHAR(64) PRIMARY KEY,
+  team_id VARCHAR(64) NOT NULL,
+  type VARCHAR(20) NOT NULL,
+  value VARCHAR(100) NOT NULL,
+  normalized VARCHAR(100) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  usage_count INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_knowledge_vocabulary_team (team_id, type, normalized)
 );
 
 CREATE TABLE exams (

@@ -82,7 +82,7 @@ describe("自动回复训练库", () => {
     httpServer = await bindPersistentTestServer(runtime.app);
     europe = ((await api().get("/api/v1/accounts").expect(200)).body as ChannelAccount[]).find((account) => account.name === "欧洲销售")!;
     // 规则引擎训练：把演示会话抽成一份可用档案（自动聊必须绑定 ready 档案才会工作）。
-    profile = (await api().post("/api/v1/training/profiles").send({ name: "训练库回测档案", useAi: false }).expect(201)).body as TrainingProfile;
+    profile = ((await api().post("/api/v1/training/profiles").send({ name: "训练库回测档案", useAi: false }).expect(201)).body as { profile: TrainingProfile }).profile;
     expect(profile.status).toBe("ready");
   }, 60_000);
 
@@ -147,6 +147,35 @@ describe("自动回复训练库", () => {
       await api().delete(`/api/v1/training/library/${created.id}`).expect(204);
       expect((await listEntries()).some((entry) => entry.id === created.id)).toBe(false);
     });
+
+    it("出处三件套随发布入库：列表保留、编辑不抹掉、引用带出去", async () => {
+      const source = { sourceTitle: "付款条款汇总.docx", sourceAnchor: "§3", sourceNote: "2026-10 客户 Anna 邮件确认" };
+      const created = (await createEntry({
+        kind: "qa",
+        question: "训练出处探针：定金比例是多少？",
+        answer: "常规是 30% 定金，发货前结清余款。",
+        ...source
+      }).expect(201)).body as TrainingLibraryEntry;
+      expect(created.sourceTitle).toBe(source.sourceTitle);
+      expect(created.sourceAnchor).toBe(source.sourceAnchor);
+      expect(created.sourceNote).toBe(source.sourceNote);
+
+      // 出处是观测数据：编辑答法（不带出处）不能把它抹掉。
+      const updated = (await api()
+        .patch(`/api/v1/training/library/${created.id}`)
+        .send({ kind: "qa", question: "训练出处探针：定金比例是多少？", answer: "常规是 30% 定金，余款见提单副本结清。" })
+        .expect(200)).body as TrainingLibraryEntry;
+      expect(updated.sourceTitle).toBe(source.sourceTitle);
+      expect(updated.sourceNote).toBe(source.sourceNote);
+
+      // 引用带出处：前端引用卡片靠它显示「《文件》§段落 · 描述」。
+      const result = await match("训练出处探针：定金比例");
+      const citation = result.citations.find((item) => item.refId === created.id);
+      expect(citation).toBeTruthy();
+      expect(citation!.sourceTitle).toBe(source.sourceTitle);
+      expect(citation!.sourceAnchor).toBe(source.sourceAnchor);
+      expect(citation!.sourceNote).toBe(source.sourceNote);
+    });
   });
 
   describe("检索：四类条目各归其位", () => {
@@ -203,9 +232,15 @@ describe("自动回复训练库", () => {
       expect(second.created).toBe(0);
       expect(second.skipped).toBe(first.created);
 
-      const imported = await listEntries("?kind=qa&enabled=true");
+      // 导入进的是**候选池**：默认列表（= 提示词同口径，只出 active）里看不到它们。
+      const active = await listEntries("?kind=qa&enabled=true");
+      expect(active.some((entry) => entry.source === "profile")).toBe(false);
+      const imported = await listEntries("?kind=qa&status=candidate");
       expect(imported.some((entry) => entry.source === "profile")).toBe(true);
-      const policies = await listEntries("?kind=policy");
+      // 候选一律 enabled=false：检索路径读 enabled，状态过滤读 status，两个都得拦住。
+      expect(imported.filter((entry) => entry.source === "profile").every((entry) => entry.enabled === false)).toBe(true);
+
+      const policies = await listEntries("?kind=policy&status=candidate");
       expect(policies.some((entry) => entry.answer.includes("不编造公司资质"))).toBe(true);
     });
 
@@ -328,10 +363,37 @@ describe("自动回复训练库", () => {
       expect(response.body.library.created).toBeGreaterThanOrEqual(2);
       expect(response.body.library.skipped).toBe(0);
 
-      const entries = await listEntries();
+      // 推送进来的样本同样只进候选池（默认列表读不到），要带 status=all 才看得到全量。
+      const entries = await listEntries("?status=all");
       expect(entries.find((entry) => entry.question === "What is your MOQ?")).toBeTruthy();
       const policies = entries.filter((entry) => entry.kind === "policy");
       expect(policies.some((entry) => entry.answer.includes("不承诺交期"))).toBe(true);
+    });
+
+    it("候选不进检索；确认后才生效，丢弃则归档留痕", async () => {
+      const candidates = await listEntries("?kind=qa&status=candidate");
+      const sample = candidates.find((entry) => entry.question === "What is your MOQ?")!;
+      expect(sample).toBeTruthy();
+      expect(sample.enabled).toBe(false);
+      // 候选不参与命中：resolve 走 enabled=1 且 status=active
+      expect((await match(sample.question)).hits.map((hit) => hit.entry.id)).not.toContain(sample.id);
+
+      const confirmed = (await api()
+        .post("/api/v1/training/library/confirm")
+        .send({ ids: [sample.id], action: "confirm" })
+        .expect(200)).body as { changed: number; status: string };
+      // 一次动作要同时翻 status 与 enabled，否则「确认」看起来没反应（条目既不进列表也不进提示词）
+      expect(confirmed).toMatchObject({ changed: 1, status: "active" });
+      const promoted = (await listEntries("?kind=qa&status=all")).find((entry) => entry.id === sample.id)!;
+      expect(promoted).toMatchObject({ status: "active", enabled: true });
+      expect((await match(sample.question)).hits.map((hit) => hit.entry.id)).toContain(sample.id);
+
+      // 复原成归档，避免这条英文问答影响后面「跨语言检索」的排序断言
+      await api().post("/api/v1/training/library/confirm").send({ ids: [sample.id], action: "drop" }).expect(200);
+      const dropped = (await listEntries("?kind=qa&status=all")).find((entry) => entry.id === sample.id)!;
+      expect(dropped).toMatchObject({ status: "archived", enabled: false });
+      // 丢弃是「留痕」不是删除：行还在，指纹还在，下次导入不会又把它加回来
+      expect((await match(sample.question)).hits.map((hit) => hit.entry.id)).not.toContain(sample.id);
     });
 
     it("同内容重复推送：内容指纹一致 → 200 且不重复入库", async () => {
@@ -349,7 +411,7 @@ describe("自动回复训练库", () => {
       expect(response.body.updated).toBe(true);
       expect(response.body.profile.sampleCount).toBe(3);
       expect(response.body.library.created).toBe(1);
-      const entries = await listEntries();
+      const entries = await listEntries("?status=all");
       expect(entries.filter((entry) => entry.answer.includes("OEM with your logo")).length).toBe(1);
     });
 
@@ -361,6 +423,142 @@ describe("自动回复训练库", () => {
       }));
       const response = await api().post("/api/v1/training/profiles/import").send(body).expect(400);
       expect(response.body.code).toBe("INVALID_REQUEST");
+    });
+  });
+
+  describe("来源证明（P0：citations 与四类命中计数）", () => {
+    /**
+     * ⚠️ 本组里「四类命中都真的计入 hit_count」必须走**真实生成链路**（入站 → 生成 → 发出），
+     * 而那条路要求自动聊是开着的。上一组 `训练库驱动的自动回复` 的 afterAll 已把设置关成
+     * `enabled:false / mode:"off"`（describe 之间互不可见），所以这里必须**自己再打开一次**：
+     * 否则入站消息进不了 `processCandidate`（第一行就 `mode === "off"` 早退），草稿永不出现，
+     * `inboundAndWait` 会直接超时（实测踩过：干净态也红，一度误判成代码的锅）。
+     * 其余用例只调 match()，不依赖开关，开着无副作用（autoChatSweep=false，没有后台轮询）。
+     */
+    beforeAll(async () => {
+      await api().put("/api/v1/auto-chat/settings").send({
+        enabled: true,
+        mode: "auto",
+        engine: "rules",
+        accountId: null,
+        profileId: profile.id,
+        confidenceThreshold: 0.5,
+        activeHoursStart: 0,
+        activeHoursEnd: 0,
+        minIntervalMinutes: 0,
+        dailyLimit: 0
+      }).expect(200);
+    });
+
+    afterAll(async () => {
+      await api().put("/api/v1/auto-chat/settings").send({ enabled: false, mode: "off", accountId: null }).expect(200);
+    });
+
+    /**
+     * 命中/采纳计数是 **fire-and-forget**（`void recordHits().catch()`，刻意不 await ——
+     * 计数绝不允许拖慢回复）。所以断言必须"等到才判"，不能读一次就下结论：
+     * 读太早看到 0 是时序问题，不是功能坏了。
+     */
+    const waitForEntries = async (
+      predicate: (entries: TrainingLibraryEntry[]) => boolean,
+      timeoutMs = 5_000
+    ): Promise<TrainingLibraryEntry[]> => {
+      const deadline = Date.now() + timeoutMs;
+      let latest = await listEntries("?status=all");
+      while (!predicate(latest) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        latest = await listEntries("?status=all");
+      }
+      return latest;
+    };
+
+    /**
+     * 这一组测的是「用户能不能自己核验回复」。
+     * 判据全部落在**可回指**上：一个出处若指不回库里的条目，它就只是一段好看的文字。
+     */
+    it("试问一句带回 citations，每条都含 refId/标题/切片/命中词，且都能回指到库里的条目", async () => {
+      const created = (await createEntry({
+        kind: "qa",
+        question: "你们支持定制外箱印刷吗？",
+        answer: "支持定制外箱印刷，起订量 500 个。"
+      }).expect(201)).body as TrainingLibraryEntry;
+
+      const result = await match("我们想在外箱上印我们的 logo，可以定制吗");
+      const citation = result.citations.find((item) => item.refId === created.id);
+      expect(citation).toBeTruthy();
+      expect(citation!.sourceType).toBe("training_library");
+      expect(citation!.kind).toBe("qa");
+      // 标题用**客户问法**：用户认得出这条的唯一线索是「客户这么问过」。
+      expect(citation!.title).toBe("你们支持定制外箱印刷吗？");
+      expect(citation!.snippet).toContain("起订量 500");
+      expect(citation!.score).toBeGreaterThan(0);
+      // 命中词是「为什么是它」的唯一可核验证据，空数组就等于没有可解释性。
+      expect(citation!.hitTerms.length).toBeGreaterThan(0);
+      // 人工录入 = 校订过；这一点必须如实带出去，否则用户分不清人的口径与机器的猜测。
+      expect(citation!.verified).toBe(true);
+      expect(citation!.adopted).toBe(false);
+
+      // 反向核验：每个出处都要能在库里查到（杜绝凭空造出来的出处）。
+      const entries = await listEntries("?status=all");
+      const ids = new Set(entries.map((entry) => entry.id));
+      expect(result.citations.every((item) => ids.has(item.refId))).toBe(true);
+    });
+
+    it("检测前置返回的 citations 与检测后返回的 citations 完全一致（试问与实跑同源）", async () => {
+      // 同一条问法走两次：只要 citations 还是从 resolve() 一处出来的，两次必然逐字段相同。
+      // 若哪天有人为了「试问界面好看」在旁边另拼一份，这条断言会立刻红。
+      const first = await match("请问最小起订量是多少");
+      const second = await match("请问最小起订量是多少");
+      expect(second.citations).toEqual(first.citations);
+    });
+
+    it("四类命中都真的计入 hit_count（旧版只有问答对计数，政策/口径永远是 0）", async () => {
+      // 「交期口径」「报价权限」在整个文件里被 resolve 读过很多次（每次生成草稿都会带上它们），
+      // 但 P0 之前它们一次都不计数 —— 这正是「清理死条目」会误杀天天在用的政策的原因。
+      //
+      // ⚠️ 这条判据必须用**新建的**条目：文件更早处有一条用例直接调过 `recordHits([policyId])`，
+      // 老条目上的 hit_count 会被那一次污染，写成"大于 0"就永远绿（实测踩过：故意弄坏政策计数，
+      // 用例照样通过）。新建条目的计数只能来自真实链路。
+      const fresh = (await createEntry({
+        kind: "snippet",
+        question: "包装口径（P0 计数探针）",
+        answer: "外箱一律用五层瓦楞，木箱按需另计。"
+      }).expect(201)).body as TrainingLibraryEntry;
+      expect(fresh.hitCount).toBe(0);
+
+      // 走**真实生成链路**（入站消息 → 生成 → 发出），不是直接调 recordHits。
+      const draft = await inboundAndWait("+8613900001099", "What is your minimum order quantity?");
+      expect(draft.status).toBe("sent");
+
+      const entries = await waitForEntries((list) =>
+        list.some((entry) => entry.id === fresh.id && entry.hitCount > 0)
+      );
+      const counted = entries.find((entry) => entry.id === fresh.id)!;
+      // 口径片段不该命中任何问法，但**每次生成都会进提示词** —— 它必须计数，
+      // 否则「这条口径有没有在用」在数据上永远看不出来。
+      expect(counted.hitCount).toBeGreaterThan(0);
+      expect(counted.lastHitAt).toBeTruthy();
+    });
+
+    it("命中与采纳分开记：草稿真的发出去才会涨 adopted_count", async () => {
+      const entries = await waitForEntries((list) => list.some((entry) => entry.adoptedCount > 0));
+      const adopted = entries.filter((entry) => entry.adoptedCount > 0);
+      // 前面「训练库驱动的自动回复」里那条 MOQ 问答是**真的发出去**的（draft.status=sent）。
+      expect(adopted.length).toBeGreaterThan(0);
+      expect(adopted.every((entry) => Boolean(entry.lastAdoptedAt))).toBe(true);
+      // 被采纳的必然也被命中过：两个计数不能出现「采纳了但没命中」的鬼数据。
+      expect(adopted.every((entry) => entry.hitCount > 0)).toBe(true);
+      // 反向：命中次数远多于采纳次数是常态（读了 5 条、只用了 1 条），
+      // 所以不能反过来要求 hitCount === adoptedCount —— 这里钉住这条语义。
+      expect(entries.some((entry) => entry.hitCount > entry.adoptedCount)).toBe(true);
+    });
+
+    it("候选池里的条目不出现在 citations 里（人工确认这道闸门对出处同样生效）", async () => {
+      const candidates = await listEntries("?kind=qa&status=candidate");
+      expect(candidates.length).toBeGreaterThan(0);
+      const result = await match("What is your MOQ?");
+      const candidateIds = new Set(candidates.map((entry) => entry.id));
+      expect(result.citations.some((item) => candidateIds.has(item.refId))).toBe(false);
     });
   });
 
@@ -394,6 +592,130 @@ describe("自动回复训练库", () => {
       // 客户中文问「这是不是仿品/假货」——仿品不在词典里，禁用场景**不该**被扩展词误触发
       const result = await match("Is this a replica product?");
       expect(result.forbidden).toHaveLength(0);
+    });
+  });
+
+  /**
+   * 知识库（训练成果的跨账号分享）：**启用清单决定出稿读哪些语料**。
+   *
+   * 这一组刻意走 `runtime.repository` + `runtime.trainingLibrary.resolve` 而不是 HTTP：
+   * 需要两个不同 owner 的语料同时存在，而 HTTP 侧的身份由令牌决定（测试态固定成 test-user）。
+   * 判据落在 resolve 的**实际命中**与 `kbScope` 的回报上，两者缺一不可 ——
+   * 只看命中数无法区分"被清单挡掉"与"根本没这条语料"。
+   */
+  describe("知识库启用清单与跨账号分享", () => {
+    const OWNER = "u_kb_owner";
+    const READER = "u_kb_reader";
+    // ⚠️ 两个问法的词面必须**完全不相交**：中文按相邻两字切特征，
+    // 两句都含"知识/专用/问法"时共享 5 个特征就会被正常命中，
+    // 于是"被清单挡掉"与"命中了别的条目"混在一起，判据立刻失真（实测踩过）。
+    const SHARED_QUESTION = "zulu shared knowledge entry";
+    const PRIVATE_QUESTION = "yankee private warranty item";
+
+    const seed = async (kbId: string, question: string) => {
+      const now = new Date().toISOString();
+      await runtime.repository.saveTrainingLibraryEntry({
+        id: `tle_${kbId || "legacy"}_${question.length}`,
+        ownerUserId: OWNER,
+        accountId: null,
+        accountName: null,
+        kbId,
+        kind: "qa",
+        question,
+        answer: `${question} 的标准答法`,
+        tags: [],
+        languages: ["zh"],
+        priority: 100,
+        enabled: true,
+        status: "active",
+        source: "manual",
+        verified: true,
+        hitCount: 0,
+        adoptedCount: 0,
+        lastHitAt: null,
+        lastAdoptedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        fingerprint: `fp_${kbId || "legacy"}_${question.length}`
+      });
+    };
+
+    beforeAll(async () => {
+      await seed("kb_shared_x", SHARED_QUESTION);
+      await seed("kb_private_y", PRIVATE_QUESTION);
+    });
+
+    it("未配置清单时按兼容口径：别人库的语料一条都不参与（分享必须先勾选）", async () => {
+      const result = await runtime.trainingLibrary.resolve(READER, SHARED_QUESTION);
+      expect(result.hits).toHaveLength(0);
+      expect(result.kbScope?.configured).toBe(false);
+      // ⚠️ 默认口径（从未同步过清单）**不许报警告**：它就是本改动之前的行为，
+      // 且是绝大多数账号的默认状态。写成 warnings 会让一条永不消失的"告警"
+      // 常驻每次试问，把真正该看的那条（「有 N 条因所属知识库未启用而未参与」）淹掉。
+      // 这个事实由 kbScope 结构化回报，界面按"检索范围"中性表述。
+      expect(result.warnings?.some((warning) => warning.includes("尚未同步"))).toBe(false);
+      expect(result.warnings?.some((warning) => warning.includes("未分组"))).toBe(false);
+    });
+
+    it("勾选别人公开的库之后，它的语料才进检索", async () => {
+      await runtime.repository.replaceTrainingKbSubscriptions(READER, ["kb_shared_x"]);
+      const result = await runtime.trainingLibrary.resolve(READER, SHARED_QUESTION);
+      expect(result.hits.map((hit) => hit.entry.question)).toContain(SHARED_QUESTION);
+      expect(result.kbScope?.enabledKbIds).toEqual(["kb_shared_x"]);
+      expect(result.kbScope?.considered).toBeGreaterThan(0);
+    });
+
+    it("把清单换成别的库：原库语料退出检索，并被如实计入 skippedByScope", async () => {
+      // 用 OWNER 自己当读者：只有「自己的语料」是插件**能完整枚举**的集合，
+      // 别放弃订阅的库连行都取不到（插件不知道库的可见性），所以"被挡掉几条"只对自己的语料有意义。
+      await runtime.repository.replaceTrainingKbSubscriptions(OWNER, ["kb_private_y"]);
+      const result = await runtime.trainingLibrary.resolve(OWNER, SHARED_QUESTION);
+      expect(result.hits).toHaveLength(0);
+      expect(result.kbScope?.skippedByScope).toBe(1);
+      expect(result.warnings?.some((warning) => warning.includes("未启用而未参与"))).toBe(true);
+    });
+
+    it("零启用（写成哨兵行）与从未配置是两种状态：前者一个库都不读", async () => {
+      await runtime.repository.replaceTrainingKbSubscriptions(READER, []);
+      const rows = await runtime.repository.listTrainingKbSubscriptionRows(READER);
+      expect(rows).toEqual([""]);
+      const result = await runtime.trainingLibrary.resolve(READER, PRIVATE_QUESTION);
+      expect(result.hits).toHaveLength(0);
+      expect(result.kbScope?.configured).toBe(true);
+      expect(result.kbScope?.enabledKbIds).toEqual([]);
+      expect(result.warnings?.some((warning) => warning.includes("一个知识库都没启用"))).toBe(true);
+    });
+
+    it("未分组的自有语料始终参与：它们不属于任何知识库，不会被清单关掉", async () => {
+      await seed("", SHARED_QUESTION);
+      await runtime.repository.replaceTrainingKbSubscriptions(READER, ["kb_nothing"]);
+      const result = await runtime.trainingLibrary.resolve(OWNER, SHARED_QUESTION);
+      expect(result.hits.map((hit) => hit.entry.question)).toContain(SHARED_QUESTION);
+      expect(result.hits.every((hit) => hit.entry.kbId === "")).toBe(true);
+      expect(result.warnings?.some((warning) => warning.includes("未分组语料始终参与"))).toBe(true);
+    });
+
+    /**
+     * ⚠️ 这条是**真机验收抓出来的**：`inScope` 的三目只判了 `subscribed.length`，
+     * 于是「已配置 + 零启用」（只写了哨兵行）并进了「从未配置」那一档（`p.owner_user_id=$1`）——
+     * 表现是「我已经把这个知识库关掉了，它里面的语料照样进出稿提示词」。
+     *
+     * 下面这个断言只用 READER 是抓不到的（READER 本来就没有自有语料，两种写法它都是 0 命中），
+     * 必须用**语料所有者**当读者：只有自己的语料是插件能完整枚举的集合。
+     */
+    it("零启用只留未分组的自有语料：带 kb_id 的自有语料必须退出，并被计入 skippedByScope", async () => {
+      await runtime.repository.replaceTrainingKbSubscriptions(OWNER, []);
+      // ① 带 kb_id 的自有语料（kb_private_y）退出检索
+      const kbScoped = await runtime.trainingLibrary.resolve(OWNER, PRIVATE_QUESTION);
+      expect(kbScoped.kbScope?.configured).toBe(true);
+      expect(kbScoped.kbScope?.enabledKbIds).toEqual([]);
+      expect(kbScoped.hits).toHaveLength(0);
+      expect(kbScoped.kbScope?.skippedByScope).toBeGreaterThanOrEqual(1);
+      expect(kbScoped.warnings?.some((warning) => warning.includes("未启用而未参与"))).toBe(true);
+      // ② 反证：未分组的那条（不属于任何知识库）仍在 —— "关掉"关的是库，不是连坐所有语料
+      const ungrouped = await runtime.trainingLibrary.resolve(OWNER, SHARED_QUESTION);
+      expect(ungrouped.hits.map((hit) => hit.entry.question)).toContain(SHARED_QUESTION);
+      expect(ungrouped.hits.every((hit) => hit.entry.kbId === "")).toBe(true);
     });
   });
 });

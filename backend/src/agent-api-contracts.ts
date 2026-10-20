@@ -202,6 +202,8 @@ define("POST /api/customers/{id}/release", objectSchema(["reason"], { reason: st
 define("POST /api/customers/{id}/claim", objectSchema([], { expectedVersion: integer({ minimum: 0 }) }), "领取公池客户；使用列表返回的真实客户 ID 和版本。");
 define("POST /api/customers/bulk-delete", idsSchema, "批量删除客户会连带清理关联数据，必须展示完整 ID 清单并单独确认。");
 define("POST /api/customers/{id}/activities", objectSchema(["type", "content"], { type: oneOf("call", "email", "whatsapp", "wechat", "meeting", "note"), content: string({ minLength: 1, maxLength: 2000 }), nextReminder: string({ maxLength: 100 }) }), "记录真实客户跟进；响应 activity.id 是写入证据。");
+define("PATCH /api/customers/{id}/activities/{activityId}", objectSchema([], { content: string({ minLength: 1, maxLength: 2000 }), type: oneOf("call", "email", "whatsapp", "wechat", "meeting", "note"), nextReminder: string({ maxLength: 100 }) }), "编辑一条客户跟进记录。自动同步写入的摘要需要能人工修正；留痕写入 updatedAt/editedBy，createdAt 与 operatorId 不可改写。至少要修改一个字段。");
+define("DELETE /api/customers/{id}/activities/{activityId}", emptySchema, "撤销一条客户跟进记录，需要明确确认。这是自动同步的安全网：写错客户或整条是噪音时可以干净撤掉。");
 define("POST /api/customers/{id}/meeting-notes", objectSchema(["transcript"], {
   transcript: string({ minLength: 1, maxLength: 50_000 })
 }), "把用户确认的会议转写发送给已配置的 AI 生成纪要，并写入客户跟进及待办；只能提交原始转写内容。");
@@ -227,6 +229,8 @@ define("PATCH /api/deals/{id}", objectSchema(["customerId", "title", "product", 
 define("PATCH /api/deals/{id}/stage", objectSchema(["stage", "result", "nextAction", "nextActionAt"], { stage: oneOf("询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"), result: string({ minLength: 1, maxLength: 2000 }), nextAction: string({ minLength: 1, maxLength: 200 }), nextActionAt: string({ minLength: 1 }), expectedCloseAt: string(), transitionReason: string(), wonReason: string() }), "推进商机阶段；跨阶段、回退和成交需要对应业务依据。");
 define("POST /api/deals/{id}/events", objectSchema(["type", "content", "nextAction", "nextActionAt"], { type: oneOf("follow_up", "quote", "sample", "negotiation", "payment"), content: string({ minLength: 1, maxLength: 2000 }), nextAction: string({ minLength: 1, maxLength: 200 }), nextActionAt: string({ minLength: 1 }) }), "记录商机进展，并同步下一动作。");
 define("POST /api/deals/{id}/archive", emptySchema, "只有已成交商机可以归档。");
+define("POST /api/deals/{id}/restore", emptySchema, "恢复已归档商机：仅取消归档标记，阶段与关联数据不变更。");
+define("POST /api/deals/{id}/duplicate", emptySchema, "复制商机：生成一张新的询盘阶段商机，沿用客户、金额与产品明细；时间线与单据不随复制。");
 define("POST /api/deals/{id}/lost", objectSchema(["category", "reason"], { category: string({ minLength: 1, maxLength: 80 }), reason: string({ minLength: 1, maxLength: 2000 }), revisitAt: string() }), "标记丢单并记录真实原因；该动作需要明确确认。");
 
 define("POST /api/todos", objectSchema(["title"], todoFields), "创建当前账号待办；未指定日期时 dueAt 留空。");
@@ -262,6 +266,28 @@ define("POST /api/knowledge/assets", objectSchema(["title", "sourceUrl"], knowle
 define("PATCH /api/knowledge/assets/{id}", objectSchema([], knowledgeAssetFields), "编辑本人或管理范围内的资料元数据和访问 URL。");
 define("POST /api/knowledge/assets/{id}/access", emptySchema, "获取当前账号可见资料的外部访问地址并记录一次访问。");
 define("DELETE /api/knowledge/assets/{id}", emptySchema, "删除本人或管理范围内的资料记录，需要明确确认。");
+const knowledgeVocabularyFields: Record<string, JsonSchema> = {
+  type: oneOf("category", "tag"),
+  value: string({ minLength: 1, maxLength: 100 })
+};
+define("POST /api/knowledge/vocabulary", objectSchema(["type", "value"], knowledgeVocabularyFields), "新增或复用一条受控词表条目（类目 / 标签）；同团队同类型同归一化值已存在时静默返回既有条，不报错。");
+define("PATCH /api/knowledge/vocabulary/{id}", objectSchema([], {
+  value: string({ minLength: 1, maxLength: 100 }),
+  enabled: boolean()
+}), "改写词条显示值或停用/启用；停用后不再出现在可选列表，已经用了该值的资料不受影响。");
+define("POST /api/knowledge/vocabulary/merge", objectSchema(["fromId", "toValue"], {
+  fromId: string({ minLength: 1, maxLength: 90 }),
+  toValue: string({ minLength: 1, maxLength: 100 })
+}), "把一条词条合并到另一个值：批量改写本团队存量资料的类目/标签并停用旧词条。改的是存量数据，需要明确确认。");
+define("PATCH /api/knowledge/assets/{id}/archive", objectSchema([], {
+  reason: string({ maxLength: 200 })
+}), "归档一份资料并记录原因；归档后不再进入检索与资源中心目录，但保留记录以便追溯。");
+define("POST /api/knowledge/assets/batch", objectSchema(["ids", "action"], {
+  ids: array(string({ minLength: 1, maxLength: 90 }), { minItems: 1, maxItems: 200 }),
+  action: oneOf("publish", "archive", "set-category", "add-tags"),
+  category: string({ minLength: 1, maxLength: 100 }),
+  tags: array(string({ minLength: 1, maxLength: 60 }), { maxItems: 30 })
+}), "批量发布 / 归档 / 改类目 / 加标签；部分失败不整批回滚，逐条返回成功与失败原因。");
 
 define("POST /api/daily-reports", objectSchema(["reportDate", "completedWork"], { reportDate: string({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }), completedWork: string({ minLength: 1, maxLength: 5000 }), customerProgress: string({ maxLength: 5000 }), results: string({ maxLength: 5000 }), risks: string({ maxLength: 5000 }), nextPlan: string({ maxLength: 5000 }), supportNeeded: string({ maxLength: 5000 }) }), "提交或更新本人的业务日报。");
 define("POST /api/daily-reports/{id}/comments", objectSchema(["content"], { content: string({ minLength: 1, maxLength: 2000 }), parentId: string({ maxLength: 64 }) }), "评论可见日报。");
@@ -473,6 +499,22 @@ define("POST /api/deal-recommendations/{id}/link-deal", objectSchema(["dealId"],
 define("POST /api/whatsapp/customers/{customerId}/binding", objectSchema(["phoneNumber"], { phoneNumber: string({ pattern: "^\\+[1-9]\\d{6,14}$" }), waProfileName: string() }), "保存客户的 WhatsApp 号码，不涉及个人 Communication 账号扫码绑定。");
 define("POST /api/whatsapp/customers/{customerId}/messages", objectSchema(["direction", "content"], { direction: oneOf("inbound", "outbound"), content: string({ minLength: 1, maxLength: 4000 }), mediaUrl: string() }), "outbound 可能真实发送，必须冻结客户、方向、正文和媒体地址后确认；inbound 只可记录已发生事实。");
 defineMany(["POST /api/whatsapp/customers/{customerId}/read", "POST /api/whatsapp/messages/{id}/translate", "DELETE /api/whatsapp/messages/{id}"], emptySchema, "管理本人可见 Communication 消息；删除需要明确确认。");
+define("POST /api/whatsapp/followup-sync", objectSchema(["runId", "runDate", "timezone"], {
+  runId: string({ minLength: 1, maxLength: 128 }),
+  runDate: string({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+  timezone: string({ minLength: 1, maxLength: 64 }),
+  conversations: array(objectSchema(["conversationId"], {
+    conversationId: string({ minLength: 1, maxLength: 180 }),
+    contactName: string({ maxLength: 180 }),
+    contactPhone: string({ maxLength: 40 }),
+    priorActivityId: string({ maxLength: 180 }),
+    messages: array(objectSchema(["direction", "occurredAt"], {
+      direction: oneOf("inbound", "outbound"),
+      occurredAt: string({ minLength: 1, maxLength: 40 }),
+      body: string({ maxLength: 8000 })
+    }), { maxItems: 500 })
+  }), { maxItems: 30 })
+}), "接收 Communication 插件同步的当日会话批次，由 CRM 匹配客户并生成跟进结论写入跟进/线索；runId/runDate/timezone 必须来自插件同步任务，会话正文只用于整理摘要、原文不落库，响应逐会话明细是记账证据。");
 
 const commissionProductFields: Record<string, JsonSchema> = { name: string({ minLength: 1 }), category: string(), model: string(), currency: string(), defaultPrice: number({ minimum: 0 }), costPrice: number({ minimum: 0 }), status: oneOf("active", "disabled"), remark: string() };
 const commissionRuleFields: Record<string, JsonSchema> = { ruleType: oneOf("rate", "fixed", "tier", "gross_profit", "none"), rate: number({ minimum: 0, maximum: 1 }), fixedAmount: number({ minimum: 0 }), tierJson: string(), grossProfitRate: number({ minimum: 0, maximum: 1 }), effectiveFrom: string(), effectiveTo: string(), enabled: boolean(), remark: string() };
@@ -787,6 +829,58 @@ define("POST /api/tools/website-scrape/sync-opportunities", objectSchema(["reque
 defineMany(["POST /api/prospect-strategy-suggestions/{id}/accept", "POST /api/prospect-strategy-suggestions/{id}/reject"], objectSchema([], { note: string({ maxLength: 500 }) }), "接受或拒绝本人获客策略建议。");
 define("POST /api/prospect-strategies/{id}/schedules", objectSchema(["frequency"], { frequency: oneOf("daily", "weekly", "monthly"), timezone: string({ minLength: 1, maxLength: 100 }), recurringCostApproved: boolean() }), "为已批准策略建立定时获客计划；重复外部成本必须明确授权。");
 define("PATCH /api/reports/executive/note", objectSchema([], { note: string({ maxLength: 1000 }) }), "维护本人经营报告备注。");
+// 知识库训练：整条 `/api/kb` 前缀在 agent-api-policy 里被拒收（治理控制面），
+// 契约仍然登记 —— 一旦哪天 deny 被误删，这里能立刻接住，而不是让 Agent 裸奔发布语料。
+define("POST /api/kb/training/runs", objectSchema([], {
+  sources: objectSchema([], {
+    files: objectSchema([], {
+      assetIds: array(string({ minLength: 1, maxLength: 64 }), { maxItems: 50 })
+    }),
+    text: objectSchema([], {
+      items: array(objectSchema([], {
+        title: string({ maxLength: 200 }),
+        body: string({ maxLength: 200000 }),
+        assetId: string({ maxLength: 64 })
+      }), { maxItems: 50 })
+    }),
+    conversations: objectSchema([], {
+      since: string({ maxLength: 40 }),
+      limit: integer({ minimum: 1, maximum: 200 })
+    })
+  }),
+  limit: integer({ minimum: 1, maximum: 200 }),
+  kbId: string({ maxLength: 64 }),
+  kbName: string({ maxLength: 200 })
+}), "发起一次知识库训练：把资料正文交给本机 CLI 提炼成候选知识条目。提炼会写入自动回复语料，必须由人工确认后才会发布，响应 run.id 是入队证据。");
+define("POST /api/kb/training/candidates/review", objectSchema(["ids", "action"], {
+  ids: array(string({ minLength: 1, maxLength: 64 }), { minItems: 1, maxItems: 20 }),
+  action: oneOf("confirm", "drop"),
+  edits: array(objectSchema(["id"], {
+    id: string({ minLength: 1, maxLength: 64 }),
+    question: string({ maxLength: 2000 }),
+    answer: string({ maxLength: 4000 }),
+    tags: array(string({ minLength: 1, maxLength: 60 }), { maxItems: 20 })
+  }), { maxItems: 20 })
+}), "批量确认或丢弃训练候选；确认只代表「同意入池」，不等于发布。");
+define("POST /api/kb/training/candidates/publish", objectSchema(["ids"], {
+  ids: array(string({ minLength: 1, maxLength: 64 }), { minItems: 1, maxItems: 20 })
+}), "把候选发布到 WhatsApp 插件的自动回复语料库，发布即刻影响对客回复，必须人工确认并逐条可撤回；无出处的候选会被服务端拒绝。跨账号共用不在这里：把知识库切公开、由对方启用即可（见 PUT /api/kb/training/knowledge-bases/defaults）。");
+define("POST /api/kb/training/candidates/{id}/revoke", emptySchema, "撤回已发布的候选：插件侧置为已归档（保留留痕），CRM 状态退回已确认。");
+define("POST /api/kb/training/probe", objectSchema(["body"], {
+  body: string({ minLength: 1, maxLength: 10000 }),
+  accountId: string({ maxLength: 64 })
+}), "用一句客户问法试跑检索，看会用到库里哪几条（与真实链路同源）。只读，不写入任何语料。");
+// 二进制上传，入参走 header（x-file-name）与原始 body，契约只声明「不需要 JSON 字段」。
+define("POST /api/kb/training/extract", emptySchema, "上传 PDF / DOCX / 文本资料并抽取正文，供训练前暂存与预览；只读文件内容，不写入任何语料。");
+define("POST /api/kb/training/runs/{id}/cancel", emptySchema, "请求取消正在运行的训练批次：当前在飞的模型调用结束后停止，已入池的候选保留、不回滚。");
+define("PUT /api/kb/training/knowledge-bases/defaults", objectSchema(["kbIds"], {
+  kbIds: array(string({ minLength: 1, maxLength: 64 }), { maxItems: 200 })
+}), "设置本人账号的「默认知识库」多选清单，并同步到 WhatsApp 插件；清单决定出稿时读哪些语料，改动即刻影响对客回复。只能启用自己创建的或别人公开的知识库。");
+define("PATCH /api/kb/training/knowledge-bases/{id}", objectSchema([], {
+  name: string({ minLength: 1, maxLength: 200 }),
+  visibility: oneOf("owner", "team")
+}), "修改自己的知识库：改名，或切换「私用（owner）/ 公开给团队（team）」。只有创建者可以修改；公开后同团队账号可勾选启用。");
+define("DELETE /api/kb/training/knowledge-bases/{id}", emptySchema, "删除自己创建的知识库：先把它在 WhatsApp 插件里的已发布语料归档下线，再删库；训练批次、候选与原文保留并解除归库，可重新发布到别的库。只有创建者能删，不可撤销，需要明确确认。");
 
 function normalizeTemplate(path: string) {
   return path.replace(/:([A-Za-z0-9_]+)/gu, "{$1}");
@@ -839,7 +933,9 @@ function authorizationFor(method: string, path: string, risk: AgentOperationRisk
   if (risk === "external") return "frozen_payload_confirmation";
   if (path.includes("/qualification/")
     || path.includes("/identity-bootstrap/")) return "explicit_confirmation";
-  if (method === "DELETE" || /(bulk|batch|\/permanent$|\/release$|\/lost$)/u.test(path)) return "explicit_confirmation";
+  // `/merge$` 是 2026-10-14 补的：词条合并会**批量改写存量资料**的类目/标签，
+  // 破坏性与 bulk / batch 同级。漏了它意味着「合并两个类目」可以被一句自然语言直接触发。
+  if (method === "DELETE" || /(bulk|batch|\/merge$|\/permanent$|\/release$|\/lost$)/u.test(path)) return "explicit_confirmation";
   return "direct_user_intent";
 }
 

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { app } from "./server.js";
 import { getStore } from "./store.js";
+import { RESOURCE_RETENTION_DAYS, getResourceHubRepository, knowledgeAssetTeamId, resourceEventPruneCutoff } from "./resource-hub.js";
+import { resetKnowledgeGovernanceForTest, setKnowledgeGovernanceRepository } from "./knowledge-governance.js";
 
 // ---------------------------------------------------------------------------
 // 资源中心自测。走真实 HTTP + 内存档位，覆盖：
@@ -54,6 +56,10 @@ try {
   const manager = store.users.find((item) => item.email === "alex@goodjob.com")!;
   const sales = store.users.find((item) => item.email === "shirley@goodjob.com")!;
   const teamId = manager.teamId;
+
+  // 词表走内存档位（与生产同一份接口语义）；先清空，保证用例之间不互相污染。
+  setKnowledgeGovernanceRepository(null);
+  resetKnowledgeGovernanceForTest();
 
   // 跨团队账号（用来验证团队隔离）
   const otherTeamUser = {
@@ -455,8 +461,10 @@ try {
   });
   const historyRec = (conversationHistory.json.recommendations as Array<Record<string, any>>).find((item) => item.id === assetSpec.id);
   check(
-    "同一会话里已发过的资料会被标成「该客户此前收到过」",
-    Boolean(historyRec?.reasons?.some((reason: Record<string, string>) => reason.kind === "structured" && reason.text.includes("此前收到过"))),
+    // G8 修订：customerResourceKeys 收的是 sent + revealed，是「接触过/看过」而非「收到过」。
+    // 说成「收到过」会让业务员以为已经发过，实际只是自己点开看过。
+    "同一会话里已发/看过的资料会被标成「该客户此前查看过同类资料」",
+    Boolean(historyRec?.reasons?.some((reason: Record<string, string>) => reason.kind === "structured" && reason.text.includes("此前查看过"))),
     historyRec?.reasons
   );
 
@@ -510,6 +518,593 @@ try {
 
   const unauthCatalog = await request("/api/agent/resources");
   check("未登录调用目录得到 401", unauthCatalog.response.status === 401, unauthCatalog.response.status);
+
+  /* ---------------- 10. 孤儿归属：team_id='all' 回落到 owner 团队（G3） ---------------- */
+
+  const assetOrphanTeam = seedAsset({
+    title: "历史导入 未归属团队",
+    category: "产品资料",
+    teamId: "all"
+  });
+  const assetTrueOrphan = seedAsset({
+    title: "owner 已删除的真孤儿",
+    category: "产品资料",
+    teamId: "all",
+    ownerId: "u_deleted_ghost"
+  });
+
+  const afterOrphanSeed = await request("/api/agent/resources?limit=50", managerToken);
+  const orphanIds = (afterOrphanSeed.json.resources as Array<{ id: string }>).map((item) => item.id);
+  check(
+    "team_id='all' 的存量资料回落到 owner 团队后重新可见",
+    orphanIds.includes(assetOrphanTeam.id),
+    { wanted: assetOrphanTeam.id, got: orphanIds.length }
+  );
+  const orphanAsia = await request("/api/agent/resources?limit=50", asiaToken);
+  check(
+    "回落只认 owner 的团队，别的团队仍然看不到",
+    !(orphanAsia.json.resources as Array<{ id: string }>).some((item) => item.id === assetOrphanTeam.id)
+  );
+  check(
+    "owner 查不到的真孤儿保持不可见（进孤儿清单，不静默修复）",
+    !orphanIds.includes(assetTrueOrphan.id)
+  );
+
+  /* ---------------- 11. 可达性闸：推荐位只给点了能拿到东西的资料（G5） ---------------- */
+
+  const legacyRecommend = await request("/api/agent/resources/recommend", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ conversation: [{ role: "customer", text: "历史资料 未补链接" }], limit: 20 })
+  });
+  const legacyRecs = legacyRecommend.json.recommendations as Array<{ id: string }>;
+  check(
+    "无链接的 legacy 资料不进推荐候选（可达性过滤）",
+    !legacyRecs.some((item) => item.id === assetLegacy.id),
+    legacyRecs.map((item) => item.id)
+  );
+  check(
+    "检索元信息报告被跳过的不可达资料数",
+    Number(legacyRecommend.json.retrieval?.unreachableSkipped) >= 1,
+    legacyRecommend.json.retrieval
+  );
+  const catalogAll = await request("/api/agent/resources?limit=50", managerToken);
+  check(
+    "目录（不带 reachable）仍包含 legacy 资料 —— 它是治理对象，不是该消失的数据",
+    (catalogAll.json.resources as Array<{ id: string }>).some((item) => item.id === assetLegacy.id)
+  );
+  const catalogReachable = await request("/api/agent/resources?limit=50&reachable=1", managerToken);
+  check(
+    "目录传 reachable=1 时过滤掉 legacy 资料（插件面板用这个口径）",
+    !(catalogReachable.json.resources as Array<{ id: string }>).some((item) => item.id === assetLegacy.id)
+  );
+  const legacyRevealAgain = await request(`/api/agent/resources/file/${assetLegacy.id}/reveal`, managerToken, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  check(
+    "reveal 路径不过滤：legacy 资料仍返回 409 no_link 而不是 404",
+    legacyRevealAgain.response.status === 409,
+    legacyRevealAgain.response.status
+  );
+
+  /* ---------------- 12. 截断可见化：第 401 份起不进候选必须有人知道（G6） ---------------- */
+
+  for (let index = 0; index < 401; index += 1) {
+    seedAsset({ title: `截断探针 ${index}`, category: "产品资料", updatedAt: new Date(Date.now() + index).toISOString() });
+  }
+  const truncatedRecommend = await request("/api/agent/resources/recommend", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ conversation: [{ role: "customer", text: "截断探针" }], limit: 5 })
+  });
+  const truncationWarning = (truncatedRecommend.json.warnings as string[]).find((item) => item.includes("未进入本次候选"));
+  const truncationCount = Number(/有 (\d+) 份/.exec(truncationWarning || "")?.[1] || 0);
+  // 期望条数按「文件源可见总数 - MAX_SCAN_PER_SOURCE」现算，不写死数字：
+  // data.ts 里还有预置的已发布资料，写死会随种子数据漂移。
+  // （目录接口自己也截断到 400，取不到真实总数，只能用采集口径现算。）
+  const visibleFileCount = store.knowledgeAssets.filter((asset) =>
+    asset.status === "published" && knowledgeAssetTeamId(store, asset) === teamId
+  ).length;
+  check(
+    "超出 MAX_SCAN_PER_SOURCE 的资料在 warnings 里报出源与条数",
+    Boolean(truncationWarning?.includes("文件中心")) && truncationCount >= 1,
+    truncatedRecommend.json.warnings
+  );
+  check(
+    "截断条数与「文件源可见总数 - MAX_SCAN_PER_SOURCE」对得上",
+    truncationCount === Math.max(0, visibleFileCount - 400),
+    { truncationCount, visibleFileCount }
+  );
+
+  /* ---------------- 13. CRM 内打开资料记 revealed 埋点（G11） ---------------- */
+
+  const accessProbe = seedAsset({ title: "埋点探针 打开资料", category: "产品资料" });
+  const accessOpened = await request(`/api/knowledge/assets/${accessProbe.id}/access`, managerToken, { method: "POST", body: "{}" });
+  check("access 接口正常返回", accessOpened.response.status === 200, accessOpened.response.status);
+  const accessStats = await request("/api/agent/resources/stats?days=30", managerToken);
+  const accessProbeStat = (accessStats.json.items as Array<Record<string, any>>).find(
+    (item) => item.resourceId === accessProbe.id
+  );
+  check(
+    "CRM 内打开资料后报表出现 revealed 计数",
+    Boolean(accessProbeStat && accessProbeStat.counts.revealed >= 1),
+    accessProbeStat
+  );
+
+  /* ---------------- 14. 埋点清理窗口（G14） ---------------- */
+
+  const repository = getResourceHubRepository();
+  await repository.recordEvents([{
+    ownerId: manager.id,
+    teamId,
+    resourceType: "file",
+    resourceId: "k_prune_probe",
+    eventType: "exposed"
+  }]);
+  check(
+    `${RESOURCE_RETENTION_DAYS} 天保留期内的新事件不被清理`,
+    (await repository.pruneEvents(RESOURCE_RETENTION_DAYS)) === 0
+  );
+  check(
+    "探针事件确实写进了埋点表",
+    (await repository.listEvents(teamId)).some((row) => row.resourceId === "k_prune_probe")
+  );
+  // 造一条 100 天前的老事件（直接捅内存仓库的内部数组 —— 公开 API 只会盖"现在"的时间戳）
+  const dayMs = 86_400_000;
+  const internal = repository as unknown as { events: Array<Record<string, unknown>> };
+  internal.events.push({
+    id: "rre_prune_old",
+    ownerId: manager.id,
+    teamId,
+    conversationKey: "",
+    resourceType: "file",
+    resourceId: "k_prune_old",
+    eventType: "exposed",
+    score: 0,
+    channel: "",
+    createdAt: new Date(Date.now() - 100 * dayMs).toISOString()
+  });
+  const prunedOld = await repository.pruneEvents(RESOURCE_RETENTION_DAYS);
+  check(
+    "100 天前的老事件被 90 天保留期清掉，新事件保留",
+    prunedOld >= 1
+      && !(await repository.listEvents(teamId)).some((row) => row.resourceId === "k_prune_old")
+      && (await repository.listEvents(teamId)).some((row) => row.resourceId === "k_prune_probe"),
+    { prunedOld }
+  );
+  const cutoffNow = Date.now();
+  check(
+    "截止时刻 = now - 保留期（纯函数口径）",
+    resourceEventPruneCutoff(RESOURCE_RETENTION_DAYS, cutoffNow).getTime() === cutoffNow - RESOURCE_RETENTION_DAYS * dayMs
+  );
+  check(
+    "保留期配 0 / 负数被夹到 1 天下限（防止误配把全表清光）",
+    resourceEventPruneCutoff(0, cutoffNow).getTime() === cutoffNow - dayMs
+      && resourceEventPruneCutoff(-7, cutoffNow).getTime() === cutoffNow - dayMs
+  );
+
+  /* ---------------- 15. 入库闸：受控词表 / 查重 / 质量标记（P1-1） ---------------- */
+
+  const vocabularyList = await request("/api/knowledge/vocabulary", managerToken);
+  check("词表接口可用且返回条目数组", vocabularyList.response.status === 200 && Array.isArray(vocabularyList.json.entries), vocabularyList.json);
+  check("词表测试从空表开始（内存档位已清理）", (vocabularyList.json.entries as unknown[]).length === 0, vocabularyList.json.entries);
+
+  const createdTags = [`新标签${randomUUID().slice(0, 6)}`];
+  const createdAsset = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({
+      title: `词表内资料 ${randomUUID().slice(0, 8)}`,
+      category: "产品知识",
+      version: "v1",
+      sourceUrl: "https://pan.baidu.com/s/1vocabok",
+      fileType: "pdf",
+      description: "覆盖词表命中 + 标签自动建条 + 质量标记",
+      tags: createdTags
+    })
+  });
+  check("空词表下把关人首次入库放行（新团队第一条不被拦死）", createdAsset.response.status === 200, createdAsset.json);
+  check(
+    "新类目隐式建条并提示",
+    (createdAsset.json.warnings as string[])?.some((item) => item.includes("新类目")),
+    createdAsset.json.warnings
+  );
+  check(
+    "质量标记随响应返回（四项齐全时为空数组）",
+    Array.isArray(createdAsset.json.qualityFlags) && createdAsset.json.qualityFlags.length === 0,
+    createdAsset.json.qualityFlags
+  );
+  check(
+    "新标签自动进词表并记入 warnings",
+    (createdAsset.json.warnings as string[])?.some((item) => item.includes("新标签已加入词表")),
+    createdAsset.json.warnings
+  );
+  const tagEntriesAfter = await request("/api/knowledge/vocabulary?type=tag", managerToken);
+  check(
+    "自动建条确实落到词表（且 usage_count 被 bump）",
+    (tagEntriesAfter.json.entries as Array<Record<string, any>>).some(
+      (entry) => entry.value === createdTags[0] && Number(entry.usageCount) >= 1
+    ),
+    tagEntriesAfter.json.entries
+  );
+
+  // 词表已有内容后，业务员用词表外类目 → 必须被拦，并给近似建议
+  const unknownCategoryAsset = await request("/api/knowledge/assets", salesToken, {
+    method: "POST",
+    body: JSON.stringify({
+      title: `词表外类目探针 ${randomUUID().slice(0, 8)}`,
+      category: "绝无仅有的类目zzz",
+      version: "v1",
+      sourceUrl: "https://pan.baidu.com/s/1vocabprobe",
+      fileType: "pdf",
+      description: "探针",
+      tags: ["探针"]
+    })
+  });
+  check(
+    "业务员用词表外类目 → 400 且返回 code 与 suggestions",
+    unknownCategoryAsset.response.status === 400
+      && unknownCategoryAsset.json.code === "CATEGORY_NOT_IN_VOCABULARY"
+      && Array.isArray(unknownCategoryAsset.json.suggestions),
+    unknownCategoryAsset.json
+  );
+  const staffCategoryProbe = await request("/api/knowledge/vocabulary", salesToken, {
+    method: "POST",
+    body: JSON.stringify({ type: "category", value: "业务员越权新建" })
+  });
+  check("业务员无权新增词条（写词表需要 training.manage）", staffCategoryProbe.response.status === 403, staffCategoryProbe.response.status);
+
+  const lowQualityAsset = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({
+      title: "缩写",
+      category: "产品知识",
+      version: "v1",
+      sourceUrl: "https://pan.baidu.com/s/1lowquality",
+      fileType: "other",
+      description: "",
+      tags: []
+    })
+  });
+  check(
+    "质量待补项如实返回（标题过短 / 缺说明 / 缺标签）",
+    lowQualityAsset.response.status === 200
+      && (lowQualityAsset.json.qualityFlags as string[]).includes("标题过短")
+      && (lowQualityAsset.json.qualityFlags as string[]).includes("缺少说明")
+      && (lowQualityAsset.json.qualityFlags as string[]).includes("缺少标签"),
+    lowQualityAsset.json.qualityFlags
+  );
+
+  /* 查重：同链接硬拦（409），同标题软警示（200 + warning） */
+  const dupSource = `https://pan.baidu.com/s/1dupprobe${randomUUID().slice(0, 6)}`;
+  const dupFirst = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: `查重基准 ${randomUUID().slice(0, 6)}`, category: "产品知识", version: "v1", sourceUrl: dupSource, fileType: "pdf" })
+  });
+  check("查重基准资料创建成功", dupFirst.response.status === 200, dupFirst.json);
+  const dupSameUrl = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: `查重同链接 ${randomUUID().slice(0, 6)}`, category: "产品知识", version: "v1", sourceUrl: dupSource, fileType: "pdf" })
+  });
+  check(
+    "同一链接重复入库 → 409 且带 duplicateOf",
+    dupSameUrl.response.status === 409 && dupSameUrl.json.duplicateOf === dupFirst.json.asset?.id,
+    dupSameUrl.json
+  );
+  const dupSameTitle = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: dupFirst.json.asset.title, category: "产品知识", version: "v2", sourceUrl: `${dupSource}?v=2`, fileType: "pdf" })
+  });
+  check(
+    "同名资料 → 放行但给警示",
+    dupSameTitle.response.status === 200
+      && (dupSameTitle.json.warnings as string[])?.some((item) => item.includes("已有同名资料")),
+    dupSameTitle.json.warnings
+  );
+
+  /* ---------------- 16. 版本线性化 / 归档 / 批量 / 治理看数（P1-2） ---------------- */
+
+  const linerTitle = `版本线性化探针 ${randomUUID().slice(0, 6)}`;
+  const linerV1 = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: linerTitle, category: "产品知识", version: "v1", sourceUrl: `https://pan.baidu.com/s/1liner${randomUUID().slice(0, 6)}`, fileType: "pdf", description: "v1" })
+  });
+  await request(`/api/knowledge/assets/${linerV1.json.asset.id}/publish`, managerToken, { method: "PATCH", body: JSON.stringify({}) });
+  const linerV2 = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: linerTitle, category: "产品知识", version: "v2", sourceUrl: `https://pan.baidu.com/s/1liner${randomUUID().slice(0, 6)}`, fileType: "pdf", description: "v2" })
+  });
+  const linerPublish = await request(`/api/knowledge/assets/${linerV2.json.asset.id}/publish`, managerToken, {
+    method: "PATCH",
+    body: JSON.stringify({})
+  });
+  check(
+    "发布新版把同标题旧版自动归档",
+    linerPublish.response.status === 200
+      && (linerPublish.json.archivedSuperseded as Array<Record<string, any>>).some((item) => item.id === linerV1.json.asset.id),
+    linerPublish.json.archivedSuperseded
+  );
+  const linerV1Reloaded = getStore().knowledgeAssets.find((item) => item.id === linerV1.json.asset.id);
+  check("旧版状态确实变成 archived", linerV1Reloaded?.status === "archived", linerV1Reloaded?.status);
+  check(
+    "归档后不再进推荐候选",
+    !(await request("/api/agent/resources?sourceType=file&limit=50", managerToken)).json.resources
+      .some((item: Record<string, any>) => item.id === linerV1.json.asset.id)
+  );
+
+  const archiveProbe = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: `归档探针 ${randomUUID().slice(0, 6)}`, category: "产品知识", version: "v1", sourceUrl: `https://pan.baidu.com/s/1arch${randomUUID().slice(0, 6)}`, fileType: "pdf" })
+  });
+  const archiveResult = await request(`/api/knowledge/assets/${archiveProbe.json.asset.id}/archive`, managerToken, {
+    method: "PATCH",
+    body: JSON.stringify({ reason: "内容过时" })
+  });
+  check(
+    "归档接口写状态与原因",
+    archiveResult.response.status === 200
+      && archiveResult.json.asset.status === "archived"
+      && archiveResult.json.asset.archivedReason === "内容过时",
+    archiveResult.json.asset
+  );
+
+  const batchA = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: `批量探针A ${randomUUID().slice(0, 6)}`, category: "产品知识", version: "v1", sourceUrl: `https://pan.baidu.com/s/1batcha${randomUUID().slice(0, 6)}`, fileType: "pdf" })
+  });
+  const batchB = await request("/api/knowledge/assets", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ title: `批量探针B ${randomUUID().slice(0, 6)}`, category: "产品知识", version: "v1", sourceUrl: `https://pan.baidu.com/s/1batchb${randomUUID().slice(0, 6)}`, fileType: "pdf" })
+  });
+  const batchResult = await request("/api/knowledge/assets/batch", managerToken, {
+    method: "POST",
+    body: JSON.stringify({ ids: [batchA.json.asset.id, batchB.json.asset.id, "k_not_exist"], action: "publish" })
+  });
+  check(
+    "批量发布：成功两条、失败一条（部分失败不整批回滚）",
+    batchResult.response.status === 200
+      && (batchResult.json.ok as string[]).length === 2
+      && (batchResult.json.failed as Array<Record<string, any>>).length === 1
+      && (batchResult.json.failed as Array<Record<string, any>>)[0].id === "k_not_exist",
+    batchResult.json
+  );
+  const batchBySales = await request("/api/knowledge/assets/batch", salesToken, {
+    method: "POST",
+    body: JSON.stringify({ ids: [batchA.json.asset.id], action: "archive" })
+  });
+  check("批量动作需要 training.manage（业务员被拒）", batchBySales.response.status === 403, batchBySales.response.status);
+
+  const governance = await request("/api/knowledge/assets/governance", managerToken);
+  check(
+    "治理看数返回 counts / qualityFlags / retrieval",
+    governance.response.status === 200
+      && typeof governance.json.counts?.published === "number"
+      && typeof governance.json.counts?.missingLink === "number"
+      && typeof governance.json.qualityFlags === "object",
+    governance.json
+  );
+  check(
+    "治理看数里 accepted 采纳口径齐备（不再只有五类总数缺字段）",
+    governance.json.retrieval === null || typeof governance.json.retrieval.adoptionRate === "number",
+    governance.json.retrieval
+  );
+
+  /* ---------------- 17. 两池分层 / 否决降权 / 反馈回流（P1-2 · P1-3 · P3-2） ---------------- */
+
+  {
+    const { scoreHubResources } = await import("./resource-hub.js");
+    const base = {
+      id: "pool_probe",
+      sourceType: "file" as const,
+      title: "两池探针 规格书",
+      category: "产品知识",
+      summary: "两池探针",
+      tags: ["探针"],
+      fileType: "pdf",
+      version: "v1",
+      author: "tester",
+      updatedAt: now,
+      accessCount: 0,
+      hasExternalLink: true,
+      ownerId: manager.id,
+      teamId,
+      searchText: "",
+      inlineContent: ""
+    };
+    const query = "两池探针 规格书";
+    const unverified = scoreHubResources([{ ...base, id: "pool_low", verified: false }], { query, limit: 5 })[0];
+    const verified = scoreHubResources([{ ...base, id: "pool_high", verified: true }], { query, limit: 5 })[0];
+    check(
+      "两池：同样内容下未校订资料的分数恰好是已校订的一半",
+      Math.abs(unverified.score * 2 - verified.score) < 0.002,
+      { unverified: unverified.score, verified: verified.score }
+    );
+    check(
+      "两池归属字段如实标出（longtail / core）",
+      scoreHubResources([{ ...base, id: "pool_a", verified: false }], { query, limit: 5 })[0].pool === "longtail"
+        && scoreHubResources([{ ...base, id: "pool_b", verified: true }], { query, limit: 5 })[0].pool === "core"
+    );
+
+    const normal = scoreHubResources([{ ...base, id: "dis_a" }], { query, limit: 5 })[0];
+    const dismissed = scoreHubResources([{ ...base, id: "dis_a" }], {
+      query,
+      limit: 5,
+      dismissedKeys: new Set(["file:dis_a"])
+    })[0];
+    check(
+      "被客户标「没帮助」的资料分数被打折（兑现 UI 承诺）",
+      dismissed.score < normal.score
+        && dismissed.reasons.some((reason) => reason.text.includes("没帮助")),
+      { normal: normal.score, dismissed: dismissed.score }
+    );
+
+    const feedbackDemote = scoreHubResources([{ ...base, id: "fb_a", verified: true }], {
+      query,
+      limit: 5,
+      feedback: new Map([["file:fb_a", { revealed: 25, accepted: 0, dismissed: 0 }]])
+    })[0];
+    const feedbackNone = scoreHubResources([{ ...base, id: "fb_a", verified: true }], { query, limit: 5 })[0];
+    check(
+      "曝光 ≥20 且零采纳 → 反馈降权",
+      feedbackDemote.score < feedbackNone.score,
+      { demoted: feedbackDemote.score, plain: feedbackNone.score }
+    );
+    const feedbackBoost = scoreHubResources([{ ...base, id: "fb_b", verified: true }], {
+      query,
+      limit: 5,
+      feedback: new Map([["file:fb_b", { revealed: 8, accepted: 6, dismissed: 0 }]])
+    })[0];
+    const feedbackBoostPlain = scoreHubResources([{ ...base, id: "fb_b", verified: true }], { query, limit: 5 })[0];
+    check(
+      "采纳 ≥5 且曝光 ≥5 → 反馈加权",
+      feedbackBoost.score > feedbackBoostPlain.score,
+      { boosted: feedbackBoost.score, plain: feedbackBoostPlain.score }
+    );
+
+    /* P3-1：20 词长查询下，旧口径把分差压平，新口径能拉开 */
+    const longQuery = "两池探针 规格书 报价 图纸 目录 报关 认证 包装 样品 说明书 合同 图片 视频 培训 交期 起订量 集装箱 运费 保险 退税";
+    const cand = (id: string) => ({ ...base, id, verified: true });
+    const oldTop = scoreHubResources([cand("lex_a")], { query: longQuery, limit: 5 })[0];
+    const newTop = scoreHubResources([cand("lex_a")], { query: longQuery, limit: 5, lexicalV2: true })[0];
+    check(
+      "P3-1：长查询下 v2 口径把命中强词的分值抬起来（旧口径被稀释）",
+      newTop.score > oldTop.score,
+      { v1: oldTop.score, v2: newTop.score }
+    );
+    const shortA = scoreHubResources([cand("lex_s")], { query: "规格书", limit: 5 })[0];
+    const shortB = scoreHubResources([cand("lex_s")], { query: "规格书", limit: 5, lexicalV2: true })[0];
+    check(
+      "P3-1：短查询（≤5 词）新旧口径逐位一致，开关不影响已调好的短句排序",
+      Math.abs(shortA.score - shortB.score) < 1e-9,
+      { v1: shortA.score, v2: shortB.score }
+    );
+  }
+
+  /* ---------------- 18. 目录快照：面向插件的资料库视图（含治理口径） ---------------- */
+
+  {
+    const token = await login("alex@goodjob.com");
+
+    // 这是**对外**接口，不能因为"只读"就放开
+    const anonymous = await request("/api/agent/resources/catalog");
+    check("目录快照未登录被拒（401）", anonymous.response.status === 401, anonymous.response.status);
+
+    const before = await request("/api/agent/resources/catalog", token);
+    check("目录快照路由已接线（不是 404）", before.response.status === 200, before.response.status);
+
+    // 探针三条：已校订 published / 未校订且缺链接 published / 草稿
+    const probeVerified = seedAsset({
+      id: `k_cat_v_${randomUUID().slice(0, 8)}`,
+      title: "目录探针 已校订规格书",
+      category: "产品资料",
+      description: "带说明带标签的完整资料",
+      tags: ["探针", "规格书"],
+      verified: true,
+      updatedAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const probeTail = seedAsset({
+      id: `k_cat_t_${randomUUID().slice(0, 8)}`,
+      title: "目录探针 未校订缺链接",
+      category: "产品资料",
+      sourceType: "legacy" as const,
+      sourceUrl: "",
+      updatedAt: new Date(Date.now() + 59_000).toISOString()
+    });
+    const probeDraft = seedAsset({
+      id: `k_cat_d_${randomUUID().slice(0, 8)}`,
+      title: "目录探针 草稿不该进条目",
+      category: "产品资料",
+      status: "draft" as const,
+      // ⚠️ 必须给**最新**的时间戳：目录有 limit 截断，updatedAt 排在后面的草稿
+      // 本来就不会出现在 items 里 —— 那样这条断言即使在"草稿泄漏"的实现下也是绿的
+      // （实测踩过：只改实现不红，等于没测）。
+      updatedAt: new Date(Date.now() + 120_000).toISOString()
+    });
+
+    const after = await request("/api/agent/resources/catalog", token);
+    const items = after.json.items as Array<Record<string, any>>;
+    const hasId = (id: string) => items.some((item) => item.id === id);
+
+    check(
+      "catalog：items 只含 published —— 草稿不进条目（否则插件摆出必然 reveal 404 的按钮）",
+      hasId(probeVerified.id) && hasId(probeTail.id) && !hasId(probeDraft.id),
+      { verified: hasId(probeVerified.id), tail: hasId(probeTail.id), draft: hasId(probeDraft.id) }
+    );
+    check(
+      "catalog：governance 计数按全量可见算（草稿数得出来，才催得动）",
+      Number(after.json.governance.total) === Number(before.json.governance.total) + 3
+        && Number(after.json.governance.published) === Number(before.json.governance.published) + 2
+        && Number(after.json.governance.draft) === Number(before.json.governance.draft) + 1,
+      { before: before.json.governance, after: after.json.governance }
+    );
+
+    const verifiedItem = items.find((item) => item.id === probeVerified.id)!;
+    const tailItem = items.find((item) => item.id === probeTail.id)!;
+    check(
+      "catalog：verified / pool 透出，且两池归属与检索口径一致",
+      verifiedItem.verified === true && verifiedItem.pool === "core"
+        && tailItem.verified === false && tailItem.pool === "longtail",
+      { verified: { v: verifiedItem.verified, pool: verifiedItem.pool }, tail: { v: tailItem.verified, pool: tailItem.pool } }
+    );
+    check(
+      "catalog：缺链接的资料 hasExternalLink=false 且带「缺少链接」质量标记",
+      tailItem.hasExternalLink === false && (tailItem.qualityFlags as string[]).includes("缺少链接"),
+      tailItem.qualityFlags
+    );
+    check(
+      "catalog：绝不返回 sourceUrl / shareCode（真实地址的唯一出口仍然只有 reveal）",
+      items.every((item) => !("sourceUrl" in item) && !("shareCode" in item)),
+      Object.keys(verifiedItem)
+    );
+    check(
+      "catalog：两池汇总与逐条归属对得上（同一份数据不能算出两个结论）",
+      Number(after.json.governance.corePool) + Number(after.json.governance.longTailPool) === Number(after.json.governance.published)
+        && Number(after.json.governance.unverified) === Number(after.json.governance.longTailPool),
+      after.json.governance
+    );
+
+    // since 增量：拿最新时间戳当游标 → 没有变更；把游标往前退 → 变更集回来
+    const cursor = String(after.json.revision.latestUpdatedAt || "");
+    check("catalog：revision.latestUpdatedAt 非空（就是下次该传的 since）", Boolean(cursor), cursor);
+    const incremental = await request(`/api/agent/resources/catalog?since=${encodeURIComponent(cursor)}`, token);
+    check(
+      "catalog：since 增量过滤生效（游标之后才算变更）",
+      (incremental.json.items as unknown[]).length === 0,
+      { count: (incremental.json.items as unknown[]).length, cursor }
+    );
+    const rewound = await request(
+      `/api/agent/resources/catalog?since=${encodeURIComponent(new Date(Date.now() - 3_600_000).toISOString())}`,
+      token
+    );
+    check(
+      "catalog：回退游标能拿到变更集",
+      (rewound.json.items as Array<Record<string, any>>).some((item) => item.id === probeVerified.id)
+    );
+
+    check(
+      "catalog：词表随目录一并下发（插件画类目筛选 / 标签 chips 用）",
+      Array.isArray(after.json.vocabulary?.categories) && Array.isArray(after.json.vocabulary?.tags),
+      after.json.vocabulary
+    );
+    check(
+      "catalog：治理按类目分组可用（插件画类目树不用自己数）",
+      Array.isArray(after.json.governance.byCategory)
+        && (after.json.governance.byCategory as Array<Record<string, any>>).some((row) => row.category === "产品资料"),
+      after.json.governance.byCategory
+    );
+
+    const otherCatalog = await request("/api/agent/resources/catalog", await login(otherTeamUser.email));
+    check(
+      "catalog：不泄漏别的团队的资料",
+      !(otherCatalog.json.items as Array<Record<string, any>>).some((item) => item.id === probeVerified.id),
+      otherCatalog.response.status
+    );
+
+    check(
+      "catalog：truncated / warnings 字段齐备（截断必须可见，不能静默）",
+      typeof after.json.truncated === "number"
+        && Number(after.json.truncated) >= 0
+        && Array.isArray(after.json.warnings)
+    );
+  }
 
   /* ---------------- 输出 ---------------- */
 
