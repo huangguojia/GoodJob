@@ -17,7 +17,8 @@ import {
   draftResearchSignals,
   draftUsesResearch,
   englishOnly,
-  ensureDevelopmentEmailSignature
+  ensureDevelopmentEmailSignature,
+  finalizePersonalization
 } from "./development-email-skill.js";
 import { prospectBatchStepTemplates } from "./prospect-outreach-batch.js";
 import type { OutreachJourneyStageKey } from "./outreach-journey.js";
@@ -420,8 +421,8 @@ function main() {
       { subject: "Hello", body: "We supply industrial equipment and would like to work with your company. Could we talk?" },
       a
     );
-    check(ignored.issues.some((item) => item.includes("千人千面")), "有背调却没引用时，自检必须报「千人千面没生效」");
-    check(!checkDevelopmentEmailDraft(draftA, a).issues.some((item) => item.includes("千人千面")), "引用了背调的信不应误报");
+    check(ignored.issues.some((item) => item.includes("按这家公司写")), "有背调却没引用时，自检必须报「这封并没有真的按这家公司写」");
+    check(!checkDevelopmentEmailDraft(draftA, a).issues.some((item) => item.includes("按这家公司写")), "引用了背调的信不应误报");
 
     // 提示词必须把个性化写成硬约束，并要求回传用了哪些事实
     const prompt = buildDevelopmentEmailPrompt(a);
@@ -484,6 +485,220 @@ function main() {
     check(
       developmentEmailRecipientRole("Technical Director", "tech@x.com").key === "decision_maker",
       "Director 属于决策层"
+    );
+  }
+
+  // ── 11. 「为什么这么写」：逐条理由要对得上正文，且不许套话 ──
+  {
+    const researchFor = (facts: Array<{ label: string; value: string }>) => ({
+      verdict: "可优先推进",
+      summary: "公开资料",
+      engine: "测试引擎",
+      facts,
+      opportunities: [] as string[],
+      talkTracks: [] as string[],
+      risks: [] as Array<{ level: string; title: string; detail: string }>
+    });
+    const buyer = assembleDevelopmentEmailBrief({
+      stageKey: "not_contacted",
+      sender: baseInput("not_contacted").sender,
+      recipient: {
+        company: "Nordwaage GmbH",
+        contactName: "Purchasing Manager",
+        email: "buy@nordwaage.de",
+        country: "Germany",
+        market: "Germany",
+        context: ""
+      },
+      research: researchFor([{ label: "业务", value: "explosion-proof weighing for chemical plants" }])
+    });
+    const draft = buildDevelopmentEmailFallback(buyer);
+    const reasons = draft.personalization.reasons;
+
+    check(Array.isArray(reasons) && reasons.length >= 4, "每封信都必须给出逐条的「为什么这么写」");
+    check(
+      reasons.every((item) => item.part && item.why.trim().length >= 12),
+      "每条理由都要有段落名和一句真正的解释，不能留空或一句话带过"
+    );
+    // 关键：理由不能凭空编——凡是有摘录的，必须能在主题/正文里找到原句
+    // （「篇幅」那一条的 text 是词数统计，不是摘录，所以不参与这条判定）
+    const haystack = `${draft.subject}\n${draft.body}`.toLowerCase().replace(/\s+/gu, " ");
+    const quoted = reasons.filter((item) => ["主题", "开场", "为什么是我们", "收尾问题"].includes(item.part));
+    check(quoted.length >= 3, "主题 / 开场 / 收尾问题必须有理由");
+    check(
+      quoted.every((item) => item.text.trim() && haystack.includes(item.text.toLowerCase().replace(/\s+/gu, " "))),
+      "理由里引用的原句必须真的出现在这封主题或正文里（不许编造）"
+    );
+    check(
+      reasons.some((item) => item.part === "主题" && item.why.includes("标题") && !item.weak),
+      "主题这一条要说明为什么用这个标题"
+    );
+    check(
+      reasons.some((item) => item.part === "开场" && !item.weak),
+      "开场这一条要说明为什么先点对方而不是先自我介绍"
+    );
+    // 收尾问题必须按角色给理由：采购与技术的"为什么"不能是同一句
+    check(
+      reasons.some((item) => item.part === "收尾问题" && item.why.includes("采购")),
+      "采购角色的收尾问题要说明「因为他要横向比价」"
+    );
+
+    const tech = assembleDevelopmentEmailBrief({
+      stageKey: "not_contacted",
+      sender: baseInput("not_contacted").sender,
+      recipient: {
+        company: "Packwerk AG",
+        contactName: "Technical Manager",
+        email: "tech@packwerk.ch",
+        country: "Germany",
+        market: "Germany",
+        context: ""
+      },
+      research: researchFor([{ label: "业务", value: "packaging and filling line integration" }])
+    });
+    const techDraft = buildDevelopmentEmailFallback(tech);
+    check(
+      techDraft.personalization.reasons.some((item) => item.part === "收尾问题" && item.why.includes("技术")),
+      "技术角色的收尾问题理由是另一套（先给可验证的数据）"
+    );
+
+    // 没有背调：理由里必须有一条明确承认「这封没做到个性化」，而不是给每条都配漂亮话
+    const bare = buildDevelopmentEmailFallback(assembleDevelopmentEmailBrief({
+      ...baseInput("not_contacted"),
+      recipient: { ...baseInput("not_contacted").recipient, context: "" },
+      research: null
+    }));
+    check(
+      bare.personalization.reasons.some((item) => item.part === "个性化" && item.weak),
+      "没有背调时，理由里必须如实写出「这封和同阶段其他客户的信一样」"
+    );
+
+    // 正文被换成通用句（AI / CLI 会重写）→ 理由必须跟着变，不能继续吹"先点对方"
+    const genericBody = "Dear Purchasing Manager,\n\nWe supply industrial equipment and would like to work with your company.\n\nWould you be open to a short call?";
+    const recalibrated = finalizePersonalization(buyer.personalization, { subject: "Hello", body: genericBody }, buyer);
+    check(
+      recalibrated.reasons.some((item) => item.part === "开场" && item.weak),
+      "正文换成通用句后，开场那条理由必须改口成「换掉公司名还能发」，不能沿用原来的说法"
+    );
+    check(
+      recalibrated.reasons.some((item) => item.part === "主题" && item.weak),
+      "主题没带角度时，主题那条理由必须如实标成短板"
+    );
+    check(!recalibrated.personalized, "通用正文必须判定为未个性化，理由才不会自相矛盾");
+
+    // 真实数据踩到的坑①：公司资料没填「主营产品」时，relevance 会写成
+    // "X is exactly the area we work in"，但理由却落到"没有能用的行业角度，只写了市场（your market）"
+    // —— 既自相矛盾，又把英文占位符 your market 直接显示给中文用户。
+    const noProducts = assembleDevelopmentEmailBrief({
+      stageKey: "not_contacted",
+      sender: { ...baseInput("not_contacted").sender, products: "" },
+      recipient: {
+        company: "Nordwaage GmbH",
+        contactName: "Purchasing Manager",
+        email: "buy@nordwaage.de",
+        country: "Germany",
+        market: "Germany",
+        context: ""
+      },
+      research: researchFor([{ label: "业务", value: "explosion-proof weighing for chemical plants" }])
+    });
+    const noProductsReasons = buildDevelopmentEmailFallback(noProducts).personalization.reasons;
+    const whyUs = noProductsReasons.find((item) => item.part === "为什么是我们");
+    check(Boolean(whyUs), "没填主营产品时也必须解释「为什么是我们」这段");
+    check(
+      !/没有能用的行业角度/u.test(String(whyUs?.why || "")),
+      "有角度只是没填产品时，不许说成「没有能用的行业角度」"
+    );
+    check(
+      !/your market/u.test(JSON.stringify(noProductsReasons)),
+      "理由里不许出现 your market 这种没替换掉的英文占位符"
+    );
+
+    // 真实数据踩到的坑②：手上两条事实，正文只写了一条时，差异说明不许把两条都算成"已引用"。
+    const withCert = assembleDevelopmentEmailBrief({
+      stageKey: "not_contacted",
+      sender: baseInput("not_contacted").sender,
+      recipient: {
+        company: "Nordwaage GmbH",
+        contactName: "Purchasing Manager",
+        email: "buy@nordwaage.de",
+        country: "Germany",
+        market: "Germany",
+        context: ""
+      },
+      research: researchFor([
+        { label: "业务", value: "explosion-proof weighing for chemical plants" },
+        { label: "认证", value: "ISO 9001 certified since 2009" }
+      ])
+    });
+    const withCertDraft = buildDevelopmentEmailFallback(withCert);
+    check(withCert.personalization.factsUsed.length === 2, "构造前提：手上确实有两条事实");
+    check(!/ISO|9001|certified/iu.test(withCertDraft.body), "构造前提：正文并没有写认证那条事实");
+    check(
+      !withCertDraft.personalization.difference.includes("认证"),
+      "正文没写的认证事实不许算进「引用了几条背调事实」"
+    );
+    check(
+      withCertDraft.personalization.difference.includes("应用角度"),
+      "差异说明要指出真正用上的那个角度"
+    );
+
+    // 逐阶段扫一遍：**理由引用的原句必须来自这封信本身**。
+    // 曾经出现过 converted 阶段引用「Would it be useful if I sent the specified...」这种
+    // 计划里的 CTA —— 那封信里根本没有这句，等于给面板配了一句不存在的原文。
+    const stages: OutreachJourneyStageKey[] = ["not_contacted", "first_touch_sent", "following_up", "replied_interested", "converted"];
+    for (const stage of stages) {
+      const stageBrief = assembleDevelopmentEmailBrief({
+        ...baseInput(stage),
+        recipient: {
+          company: "Tanaka Scale Vietnam Co., Ltd",
+          contactName: "Purchasing Manager",
+          email: "buy@tanaka-scale-vietnam.com",
+          country: "Vietnam",
+          market: "Vietnam",
+          context: ""
+        },
+        research: researchFor([{ label: "业务", value: "weighing scales distributor for local industry" }])
+      });
+      const stageDraft = buildDevelopmentEmailFallback(stageBrief);
+      const hay = `${stageDraft.subject}\n${stageDraft.body}`.toLowerCase().replace(/\s+/gu, " ");
+      const quotedInStage = stageDraft.personalization.reasons.filter(
+        (item) => ["主题", "开场", "为什么是我们", "收尾问题"].includes(item.part) && item.text.trim()
+      );
+      check(
+        quotedInStage.every((item) => hay.includes(item.text.toLowerCase().replace(/\s+/gu, " "))),
+        `${stage} 阶段：理由里引用的原句必须真的出现在这封信里`
+      );
+      check(stageDraft.personalization.reasons.length >= 4, `${stage} 阶段也必须给出逐条理由`);
+    }
+
+    // 流程确认信（converted）不用背调是设计，不是缺陷 —— 不许标成"没做好"
+    const convertedBrief = assembleDevelopmentEmailBrief({
+      ...baseInput("converted"),
+      research: researchFor([{ label: "业务", value: "weighing scales distributor for local industry" }])
+    });
+    const convertedDraft = buildDevelopmentEmailFallback(convertedBrief);
+    check(
+      convertedDraft.personalization.reasons.every((item) => !item.weak),
+      "流程确认信不该被标成「没写好」：这个阶段按设计就不用背调"
+    );
+    check(
+      convertedDraft.personalization.reasons.some((item) => item.part === "个性化" && item.why.includes("按设计")),
+      "流程确认信要说明「按设计不用背调」，而不是让人以为做漏了"
+    );
+
+    // 流程确认信没有背调时，不该把它列进「待补齐」——那是催人去跑一件本阶段不需要的事
+    const convertedBare = assembleDevelopmentEmailBrief({
+      ...baseInput("converted"),
+      research: null
+    });
+    check(
+      !convertedBare.missing.some((item) => item.includes("背调")),
+      "流程确认信不要求背调，缺背调不算「待补齐」"
+    );
+    check(
+      buildDevelopmentEmailFallback(convertedBare).personalization.difference.includes("按设计不引用背调"),
+      "流程确认信没有背调时，差异说明要说「按设计」，不能说成「只差公司名」"
     );
   }
 

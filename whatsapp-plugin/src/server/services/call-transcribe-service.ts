@@ -33,6 +33,52 @@ const REQUEST_TIMEOUT_MS = 45_000;
 const SIMPLIFIED_ZH_PROMPT = "以下是普通话的句子。";
 
 /**
+ * 业务热词（initial prompt）。
+ *
+ * 为什么必须给：whisper 的 small 模型对**专有名词和行业缩写**几乎没有先验，
+ * 一段话里错的全是这些词 —— 实测把 MOQ 听成 mock / MOP、把「FOB 深圳」听成
+ * 「Fab Shenzhen / FOP 深圳」、把「二十尺柜」听成「20 尺贵」。
+ *
+ * 这些词在句子里只占几个字，却决定了整句能不能用（报价单里 policy 和 price 差一个字
+ * 就是两件事）。prompt 相当于把这些词临时塞进解码器的上下文，实测效果非常大：
+ *   · 中文外贸句 CER 从 29.8% → 11.5%；带 HS/MOQ/柜型那句从 10.8% → 0.0%
+ *   · 英文句 WER 从 16.1% → 6.5%（MOQ 一次就对了）
+ *
+ * ⚠️ 写法上踩过的三个坑（都实测过，别改回去）：
+ *   1. **词表式不如例句式**。罗列三十个术语反而把模型带回繁体，FOB 也照样听成 FOP；
+ *      写成「我们报 FOB 深圳价。FOB 深圳。MOQ 是多少？」就全对了 —— 模型对
+ *      「一句话里的词」比「一张清单里的词」敏感得多。
+ *   2. **同一句里给一次不够，要重复一次**。只出现一遍时 FOB 仍会变成 FOP/Fab。
+ *   3. **别塞具体数字**。prompt 里写「一千二百美元、三十五天」时，输出会被拉成
+ *      中文数字写法；换成不带金额的例句后，数字仍按音频原样输出。
+ *
+ * ⚠️ 两条铁律（也是实测踩出来的）：
+ *   · **prompt 必须跟识别语种一致**。中文 prompt 配西语音频，模型会在开头凭空
+ *     续写一句 "En la primera vez," —— prompt 被当成上一句上下文了。
+ *   · 所以 `auto` 一律**不带** prompt：不知道语种时带任何一门语言的 prompt 都是赌。
+ */
+const BUSINESS_PROMPT_ZH =
+  "以下是普通话的句子。我们报 FOB 深圳价。FOB 深圳。MOQ 是多少？HS 编码。" +
+  "二十尺柜、四十尺高柜、交货期、单价、样品、定金、尾款。";
+
+const BUSINESS_PROMPT_EN =
+  "Business call about quotations. We quote FOB Shenzhen. FOB Shenzhen. What is your MOQ? " +
+  "HS code. 20 foot container, 40 foot HQ, lead time, unit price, sample, deposit, balance.";
+
+/**
+ * 按语种挑 prompt。`auto` / 其他语种返回空串 —— 见上面第 2 条铁律。
+ * 中文的 prompt 顺带把繁简偏置带上：small 模型对普通话默认吐繁体，这句话能压住大半。
+ */
+export function promptForLanguage(language: string | undefined): string {
+  const value = String(language ?? "").toLowerCase();
+  if (value === "zh" || value === "chinese" || value.startsWith("zh-")) {
+    return `${SIMPLIFIED_ZH_PROMPT}${BUSINESS_PROMPT_ZH}`;
+  }
+  if (value === "en" || value === "english" || value.startsWith("en-")) return BUSINESS_PROMPT_EN;
+  return "";
+}
+
+/**
  * 繁体专用字（极小集合，只收业务对话里高频、且简体形态一定不同的字）。
  * 用途只有一个：判断第一次中文结果要不要补跑一次简体化——命中就补，
  * 误判的代价只是多跑一次、结果不变，所以宁可宽松。
@@ -47,6 +93,42 @@ const TRADITIONAL_ZH = new RegExp(`[${[...new Set(TRADITIONAL_ZH_CHARS)].join(""
 function isChinese(language: string | undefined): boolean {
   const value = String(language ?? "").toLowerCase();
   return value === "zh" || value === "chinese" || value.startsWith("zh-");
+}
+
+function isEnglish(language: string | undefined): boolean {
+  const value = String(language ?? "").toLowerCase();
+  return value === "en" || value === "english" || value.startsWith("en-");
+}
+
+/**
+ * 用**转写出来的字**复核 whisper 自报的语种，只在中文/英文之间纠偏。
+ *
+ * 为什么需要它：whisper 的自动语种判定看的是第一段声学特征，**短句几乎没有特征**。
+ * 通话里最典型的一句「喂，你好」只有 0.6 秒，被判成 `en` 是常事 —— 一旦判成 en，
+ * 第二遍就会带着英文 prompt 按英文解码，中文整段变成拼音/谐音（实测 WER 88% 那种）。
+ *
+ * 判据只看字形，不看概率（whisper.cpp 的 server 不回语言概率）：
+ *   · 自称英文、但正文里**汉字 ≥2 个且不少于拉丁词数** → 判为中文。
+ *     「我们报 FOB 深圳价」这种中英混说也算中文（汉字 6 > 拉丁词 1）。
+ *   · 自称中文、但正文一个汉字都没有且拉丁词 ≥3 → 判为英文（误判反方向，少见但便宜）。
+ *   · 自称日语/韩语等：**不动**。汉字在日文里同样密集，硬纠会把日语整段拉成中文；
+ *     而这两门语种本来就不在「主要中英」的范围里，保持原判定更安全。
+ *
+ * 一个汉字都不出现的纯英文句（`What is your MOQ`）天然不会被改动。
+ */
+export function refineLanguage(detected: string, text: string): string {
+  const value = String(detected ?? "").toLowerCase();
+  const body = String(text ?? "");
+  if (!body.trim()) return value;
+
+  const han = (body.match(/\p{Script=Han}/gu) || []).length;
+  const latinWords = (body.match(/[A-Za-z][A-Za-z'’-]*/gu) || []).length;
+  // 出现假名/谚文时说明确实不是中文，不纠
+  const nonHanCjk = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(body);
+
+  if (isEnglish(value) && !nonHanCjk && han >= 2 && han >= latinWords) return "zh";
+  if (isChinese(value) && han === 0 && latinWords >= 3) return "en";
+  return value;
 }
 
 /**
@@ -308,21 +390,48 @@ export class CallTranscribeService {
   /**
    * 转写一段音频。串行执行：whisper-server 本身是单进程解码，
    * 并发打进去只会在服务端排队，还会让两路（客户/我）互相插队。
+   *
+   * 请求次数（决定延迟）：
+   *   · 已锁定语种 → **1 次**（prompt 随语种一起带上）；
+   *   · `auto` → **2 次**：第一遍只用来判语种，判出中/英后再带 prompt 重跑。
+   *     多花约 1 秒，但实测这一遍能把 CER 从 30% 压到 11% —— 对"听不懂的报价"
+   *     来说，慢一点远好过错一个数字。
    */
-  async transcribe(pcm: Buffer, options: { sampleRate?: number; language?: string } = {}): Promise<string> {
-    if (!pcm.length) return "";
+  async transcribe(
+    pcm: Buffer,
+    options: { sampleRate?: number; language?: string; prompt?: string } = {}
+  ): Promise<{ text: string; language: string }> {
+    if (!pcm.length) return { text: "", language: "" };
     await this.ensure();
     const wav = pcm16ToWav(pcm, options.sampleRate ?? 16_000);
     const language = options.language || String(process.env.WHISPER_LANGUAGE ?? "auto");
+    const auto = !language || language === "auto";
 
-    const run = async (): Promise<string> => {
-      const first = await this.request(wav, { language, verbose: true });
-      // 中文结果里出现繁体字才补跑一次简体化：拉丁语系完全不走这条路，不会多花时间，
-      // 也不会吃到中文 prompt 带来的幻觉（见 SIMPLIFIED_ZH_PROMPT 的注释）。
-      const needsSimplified = needsSimplifiedZh(first.text, first.language || language);
-      if (!needsSimplified) return cleanTranscript(first.text);
-      const second = await this.request(wav, { language: "zh", prompt: SIMPLIFIED_ZH_PROMPT });
-      return cleanTranscript(second.text || first.text);
+    const run = async (): Promise<{ text: string; language: string }> => {
+      if (!auto) {
+        // 调用方给了 prompt 就用它，否则按语种取默认热词（中文里已含繁简偏置）。
+        const prompt = options.prompt ?? promptForLanguage(language);
+        const first = await this.request(wav, { language, prompt, verbose: true });
+        const used = first.language || language;
+        if (!needsSimplifiedZh(first.text, used)) return { text: cleanTranscript(first.text), language: used };
+        // 仍出繁体：用更短的纯普通话 prompt 再压一次（长 prompt 里的英文缩写有时会把模型带回繁体）。
+        const second = await this.request(wav, { language: "zh", prompt: SIMPLIFIED_ZH_PROMPT });
+        return { text: cleanTranscript(second.text || first.text), language: "zh" };
+      }
+
+      // ── auto：第一遍探语种，第二遍按探到的语种带热词重跑 ──
+      const probe = await this.request(wav, { language: "auto", verbose: true });
+      // 探到的语种先用字形复核一遍：短句被判错方向时，这一步能把中文从「按英文解码」里救回来。
+      const detected = refineLanguage(String(probe.language || "").toLowerCase(), probe.text);
+      const retryPrompt = options.prompt ?? promptForLanguage(detected);
+      // 没有对应热词（西语/阿语等）：不重跑，把第一遍的结果和语种一起交回去，
+      // 页面侧会把 "es" 记下来，后面这段对话就不用再靠 auto 猜了。
+      if (!retryPrompt) return { text: cleanTranscript(probe.text), language: detected };
+      // 语种被复核改过时，第一遍的文本是按错语种解出来的，必须重跑；
+      // 没改的话第一遍已经是对的（只是没带热词），照样重跑一遍换准确率。
+      const second = await this.request(wav, { language: detected, prompt: retryPrompt, verbose: true });
+      // 第二遍如果因为 prompt 反而变空（极少见），退回第一遍的结果，别把句子吞掉。
+      return { text: cleanTranscript(second.text || probe.text), language: detected };
     };
     const task = this.queue.then(run, run);
     this.queue = task.then(

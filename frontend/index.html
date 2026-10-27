@@ -11671,6 +11671,22 @@
     .mail-brief-action { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .mail-brief-action .btn { padding: 4px 10px; font-size: 12px; }
     .mail-brief-action span { font-size: 11px; line-height: 1.6; color: #64748b; }
+    /* 「为什么这么写」：逐段说明，每条都挂着正文里的原句。weak = 这封没写好的如实说明，不是依据 */
+    .mail-why { margin: 2px 0 0; border: 1px solid #dde8f6; border-radius: 8px; background: #fff; overflow: hidden; }
+    .mail-why-head { display: flex; align-items: center; gap: 6px; padding: 7px 11px; background: #f1f6fd; border-bottom: 1px solid #e6eef9; font-size: 11.5px; font-weight: 600; color: #1f4b7f; cursor: pointer; list-style: none; user-select: none; }
+    .mail-why-head::-webkit-details-marker { display: none; }
+    .mail-why-count { font-weight: 500; color: #64748b; }
+    .mail-why-caret { width: 13px; height: 13px; margin-left: auto; flex: none; fill: none; stroke: #64748b; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s var(--ease-out, ease); }
+    .mail-why[open] .mail-why-caret { transform: rotate(180deg); }
+    .mail-why-list { display: grid; margin: 0; padding: 0; list-style: none; }
+    .mail-why-item { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 3px 10px; padding: 8px 11px; border-top: 1px solid #f1f5fa; }
+    .mail-why-item:first-child { border-top: none; }
+    .mail-why-part { font-size: 11px; font-weight: 600; line-height: 1.6; color: #2c5d9c; white-space: nowrap; }
+    .mail-why-why { font-size: 11.5px; line-height: 1.65; color: #475569; }
+    .mail-why-item.is-weak .mail-why-part { color: #b45309; }
+    .mail-why-item.is-weak .mail-why-why { color: #92400e; }
+    .mail-why-quote { grid-column: 2; display: block; padding: 4px 8px; border-left: 2px solid #dbe6f5; background: #f8fafc; color: #64748b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    @media (prefers-reduced-motion: reduce) { .mail-why-caret { transition: none; } }
     .mail-scenario-row { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 10px; }
     .mail-scenario-row > span,
     .mail-goal-field > span { color: #68758a; font-size: 10px; font-weight: 700; }
@@ -11726,15 +11742,19 @@
       gap: 11px;
       min-height: 54px;
       padding: 10px 14px;
-      border: 1px solid #efdcae;
+      /* 冷调石板蓝：用户明确不要暖黄底（琥珀色只留给那个小圆点） */
+      border: 1px solid #d7e2f2;
       border-radius: 8px;
-      background: #fffaf0;
+      background: linear-gradient(180deg, #f6f9fd, #edf2fa);
+      cursor: pointer;
+      transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out);
     }
+    .email-config-reminder:hover { border-color: #b9cce8; box-shadow: 0 8px 18px -16px rgba(23, 35, 61, .6); }
     .email-config-reminder.ready { border-color: #cce9db; background: #f5fcf8; }
-    .email-config-reminder > i { width: 9px; height: 9px; border-radius: 50%; background: #d99518; }
+    .email-config-reminder > i { width: 9px; height: 9px; border-radius: 50%; background: #d99518; flex: none; }
     .email-config-reminder.ready > i { background: #16a36a; }
-    .email-config-reminder span { display: block; color: #8a7550; font-size: 9px; }
-    .email-config-reminder b { display: block; margin-top: 3px; color: #4c3f28; font-size: 11px; }
+    .email-config-reminder span { display: block; color: #6b7d94; font-size: 9px; }
+    .email-config-reminder b { display: block; margin-top: 3px; color: #25344c; font-size: 11px; }
     .email-config-reminder.ready span { color: #668577; }
     .email-config-reminder.ready b { color: #245941; }
 
@@ -25599,10 +25619,12 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <button data-view="whatsapp" title="即刻沟通">
             <svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.7 7.4L3 20l1.2-4.7A8.5 8.5 0 1 1 21 11.5z"/><path d="M8.5 8.2c.5 3.4 2.4 5.3 5.8 5.8"/><path d="M8.5 8.2l1.4-.7 1 2-1.1.8"/><path d="M14.3 14l.7-1.2 2 .9-.7 1.5"/></svg><span>即刻沟通</span><em id="waNavUnread" hidden>0</em>
           </button>
+          <button data-view="mail-center" title="邮件中心">
+            <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5 12 13l8.5-6.5"/><path d="M8 18v-4"/><path d="M12 18v-3"/><path d="M16 18v-4"/></svg><span>邮件中心</span><em id="mailCenterNavUnread" hidden>0</em>
+          </button>
           <button data-view="exchange" title="对接中心">
             <svg viewBox="0 0 24 24"><path d="M4 7h11M4 7l3-3M4 7l3 3"/><path d="M20 17H9M20 17l-3-3M20 17l-3 3"/></svg><span>对接中心</span>
-          </button>
-        </div>
+          </button>        </div>
 
         <details class="nav-section" aria-label="客户管理" open>
           <summary class="nav-section-title"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M2 21v-2a4 4 0 0 1 4-4h4"/></svg><span>客户管理</span><i class="nav-chevron"></i></summary>
@@ -25612,8 +25634,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <button class="nav-secondary-button" data-view="customer-pool" title="客户公池"><span>客户公池</span></button>
             <button class="nav-secondary-button" data-view="peers" title="同行管理"><span>同行管理</span></button>
             <button class="nav-secondary-button" data-view="reminders" title="跟进提醒"><span>跟进提醒</span></button>
-            <button class="nav-secondary-button" data-view="outreach-batches" title="发信批次"><span>发信批次</span></button>
-            <button class="nav-secondary-button" data-view="outreach-journey" title="发信明细"><span>发信明细</span></button>
+            <!-- 发信批次 / 发信明细已并入「邮件中心」的二级导航，不再散落在客户管理里 -->
           </div>
         </details>
 
@@ -27593,6 +27614,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         </div>
 
         <div class="view" id="outreach-batches">
+          <div class="mail-section-nav"></div>
           <div class="page-head">
             <div><h1>自动发信</h1></div>
             <div class="head-actions">
@@ -27910,6 +27932,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
         </div>
 
         <div class="view" id="outreach-journey">
+          <div class="mail-section-nav"></div>
           <header class="oj-head">
             <div>
               <h1>发信明细</h1>
@@ -29237,6 +29260,1240 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="view" id="email-return-flow">
           <div id="emailReturnFlowPage"></div>
         </div>
+
+        <div class="view" id="mail-center">
+          <!-- 二级导航：收件箱 / 自动发信 / 发信明细 / 客户速查 / 交互旅程 / 工具箱 / 邮箱设置
+               由 renderMailSectionNav() 渲染，四个视图共用同一份条目 -->
+          <div class="mail-section-nav"></div>
+          <div id="mailCenterPage" class="mc-page"></div>
+        </div>
+
+        <!-- 邮箱设置：原来散在「个人设置 → 账号资料 / 收信监听 / 发件邮箱池 / 已读追踪」里的
+             所有邮箱相关配置，统一搬到邮件中心。字段 id 全部沿用 profile*，渲染与保存逻辑无需分叉。 -->
+        <div class="view" id="mail-settings">
+          <div class="mail-section-nav"></div>
+          <div class="page-head">
+            <div>
+              <h1>邮箱设置</h1>
+              <p class="ms-sub">发件身份、SMTP 授权码、发件邮箱池、收信监听与已读追踪。这里配一次，收件箱、自动发信、开发信都走这套身份。</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn" id="profileDomainAuthButton">域名检测</button>
+              <button class="btn" id="profileTestSmtpButton">发送测试邮件</button>
+              <button class="btn danger" id="profileClearEmailButton">清空邮箱绑定</button>
+              <button class="btn primary" id="mailSettingsSaveButton">保存邮箱设置</button>
+            </div>
+          </div>
+
+          <div class="ms-stack">
+            <div class="ms-status">
+              <div><span>绑定状态</span><b id="profileEmailStatus">未绑定</b></div>
+              <div><span>签名状态</span><b id="profileSignatureStatus">待完善</b></div>
+              <div><span>SMTP状态</span><b id="profileSmtpStatus">未配置</b></div>
+            </div>
+
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.6 6.4 12 13l8.4-6.6"/></svg></span><div><h2>发件邮箱（SMTP）</h2><small>CRM 就是用这个账号把开发信真实投递出去的</small></div></div></div>
+              <div class="profile-form-grid" style="margin-top:12px">
+                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 sales@your-company.com"></div>
+                <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Sales Team"></div>
+                <div class="form-field"><label>SMTP服务器</label><input id="profileSmtpHost" placeholder="例如 smtp.exmail.qq.com"></div>
+                <div class="form-field"><label>SMTP端口</label><input id="profileSmtpPort" type="number" min="1" max="65535" placeholder="465 或 587"></div>
+                <div class="form-field"><label>SMTP账号</label><input id="profileSmtpUser" placeholder="通常与发件邮箱一致"></div>
+                <div class="form-field"><label>SMTP授权码/密码</label><input id="profileSmtpPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small id="profileSmtpPasswordHint">保存后不会明文回显。</small></div>
+                <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select><small id="profileSmtpConfigHint">465 通常选 SSL/TLS，587 通常选 STARTTLS/普通。</small></div>
+                <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给发件邮箱"></div>
+                <div class="form-field full"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea></div>
+              </div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div><h2>收信监听（开发信回流）</h2><small>开启后自动轮询收件箱，识别客户回信与退信，回流到触达记录</small></div></div></div>
+              <div class="profile-form-grid" style="margin-top:12px">
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="profileImapEnabled"> 启用 IMAP 收信监听</label></div>
+                <div class="form-field"><label>IMAP服务器</label><input id="profileImapHost" placeholder="例如 imap.exmail.qq.com"></div>
+                <div class="form-field"><label>IMAP端口</label><input id="profileImapPort" type="number" min="1" max="65535" placeholder="993"></div>
+                <div class="form-field"><label>IMAP账号</label><input id="profileImapUser" placeholder="通常与发件邮箱一致"></div>
+                <div class="form-field"><label>IMAP授权码/密码</label><input id="profileImapPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small>保存后不会明文回显。</small></div>
+                <div class="form-field"><label>加密方式</label><select id="profileImapSecure"><option value="true">SSL/TLS（993）</option><option value="false">STARTTLS/普通（143）</option></select></div>
+                <div class="form-field"><label>最近同步</label><b id="profileImapSyncStatus" class="field-value">尚未同步</b></div>
+                <div class="form-field full"><div class="row-actions"><button class="btn" id="profileTestImapButton" type="button">测试 IMAP</button><button class="btn" id="profileClearImapButton" type="button">清除 IMAP 密码</button></div></div>
+              </div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>发件邮箱池（轮换发信）</h2><small>登记多个 SMTP 发件邮箱后，自动发信方案可按「每 N 封」轮流使用，降低单个邮箱的发信压力</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 登记发件邮箱</button></div>
+              </div>
+              <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.5"/></svg></span><div><h2>已读追踪（客户是否看了邮件）</h2><small>填写本系统对收件人<strong>公网可达</strong>的访问地址后，发出的开发信会自动附带追踪信号：客户打开邮件（加载像素）或点击链接，都会回流到「开发信 → 回流」台账</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="trackingSaveButton" type="button">保存</button></div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full"><label>追踪回传地址（留空 = 关闭追踪）</label><input id="trackingBaseUrlInput" placeholder="例如 https://crm.your-company.com"><small>要求：收件人的邮件客户端必须能访问这个地址（公网域名或公网 IP）。本机 localhost / 内网地址对客户不可达，填了也不会有信号。</small></div>
+                <div class="form-field full"><label>当前状态</label><div id="trackingConfigStatus" class="field-value">加载中…</div></div>
+                <div class="form-field full"><small style="color:#8a94a6;line-height:1.8">判读口径：打开信号 = 客户端加载了 1×1 像素，属「参考信号」而非铁证——部分客户端默认拦远程图片、Apple 邮件隐私保护会代为预取，可能高估；点击信号需客户真实点击链接，更可靠。两者都只是信号，客户回信才是确证。</small></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <style>
+          /* ===== 邮件中心（#mail-center）：多账号收件 / 客户速查 / 旅程 / 工具箱 ===== */
+          #mail-center {
+            --mc-brand: #378ADD;
+            --mc-teal: #1f9d8f;
+            --mc-violet: #7c5cff;
+            --mc-amber: #cf8a1c;
+            --mc-rose: #d94a6a;
+            --mc-ink: #131c2e;
+            --mc-sub: #6b7d94;
+            --mc-line: #e4eaf3;
+            --mc-soft: #f6f9fd;
+            --mc-card: #ffffff;
+            --mc-grad: linear-gradient(135deg, #4a8ef7, #7c5cff);
+            --mc-shadow-sm: 0 1px 2px rgba(19, 28, 46, .05), 0 1px 3px rgba(19, 28, 46, .04);
+            --mc-shadow-md: 0 1px 2px rgba(19, 28, 46, .04), 0 12px 30px -24px rgba(19, 28, 46, .55);
+            --mc-ring: 0 0 0 3px rgba(74, 142, 247, .14);
+          }
+          /* ===== 邮件中心二级导航（收件箱 / 自动发信 / 发信明细 / 邮箱设置） =====
+             类名故意不带视图 id —— 它本来就要跨 #mail-center / #outreach-batches /
+             #outreach-journey / #mail-settings 四个视图复用，是这一节唯一的入口。
+             用 msn- 前缀避免与别处撞名。 */
+          .mail-section-nav {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            margin: 0 0 16px; padding-bottom: 9px;
+            border-bottom: 1px solid #e8eef7;
+          }
+          .msn-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex-wrap: wrap; }
+          .msn-tab {
+            display: inline-flex; align-items: center; gap: 6px; flex: none;
+            padding: 7px 12px; border: 0; border-radius: 9px; background: transparent;
+            color: #5c6b80; font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.25;
+            cursor: pointer; white-space: nowrap;
+            transition: background .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out);
+          }
+          /* mcIcon() 的 svg 只有 viewBox 没有固有尺寸，不给宽高会被撑成 300×150 */
+          .msn-tab svg, .msn-gear svg { width: 14px; height: 14px; flex: none; }
+          .msn-tab:hover { background: #f1f6fd; color: #25344c; }
+          .msn-tab.is-active { background: #fff; color: #2f7ad6; box-shadow: 0 1px 2px rgba(19, 28, 46, .08), 0 10px 20px -16px rgba(55, 138, 221, .95); }
+          .msn-tab:active { transform: scale(.97); }
+          .msn-tab em { padding: 1px 6px; border-radius: 999px; background: #378ADD; color: #fff; font-size: 10px; font-style: normal; font-weight: 700; }
+          .msn-spacer { flex: 1 1 auto; }
+          .msn-gear {
+            display: inline-flex; align-items: center; gap: 6px; flex: none;
+            padding: 6px 11px; border: 1px solid #e1e9f4; border-radius: 9px; background: #fff;
+            color: #48586e; font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer;
+            transition: border-color .18s var(--ease-out), color .18s var(--ease-out), background .18s var(--ease-out);
+          }
+          .msn-gear:hover { border-color: #bcd2ee; color: #2f7ad6; }
+          .msn-gear.is-active { border-color: #378ADD; background: #f5f9ff; color: #2f7ad6; }
+          @media (max-width: 900px) {
+            .msn-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+            .msn-tabs::-webkit-scrollbar { display: none; }
+          }
+
+          /* ===== 邮箱设置（#mail-settings）：从个人设置搬过来的邮箱相关面板 ===== */
+          #mail-settings .ms-sub { margin: 5px 0 0; max-width: 880px; color: #6b7d94; font-size: 12px; line-height: 1.75; }
+          #mail-settings .ms-stack { display: grid; gap: 14px; }
+          #mail-settings .ms-status {
+            display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+            padding: 14px 16px; border: 1px solid #e4eaf3; border-radius: 12px;
+            background: linear-gradient(180deg, #f7fafd, #fff);
+          }
+          #mail-settings .ms-status > div { display: grid; gap: 5px; min-width: 0; }
+          #mail-settings .ms-status span { color: #6b7d94; font-size: 10px; }
+          #mail-settings .ms-status b { color: #17233d; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+          #mail-settings .panel.section { margin: 0; }
+          @media (max-width: 820px) { #mail-settings .ms-status { grid-template-columns: 1fr; } }
+
+          /* 个人页：发件身份改成入口，点了去邮箱设置 */
+          #profile .profile-hero-metrics .is-link { cursor: pointer; }
+          #profile .profile-hero-metrics .is-link small { display: block; margin-top: 2px; color: #2f7ad6; font-size: 10px; }
+          #profile .profile-hero-metrics .is-link:hover b { color: #2f7ad6; }
+          /* 底部留白只给悬浮「看邮箱」——收件箱页签没有那个钮，
+             无条件留 96px 就是纯空白（用户实测吐槽过「下面留这么多空白」） */
+          #mail-center .mc-page { display: grid; gap: 16px; }
+          #mail-center .mc-page.has-fab { padding-bottom: 96px; }
+          /* AI 助手关闭时这个挂载点是空的，但空元素照样算一个 grid 行：
+             下面会凭空多出一条 16px 的 row-gap，正好把整页顶出一小截滚动条。
+             收件箱算可视高度时这块没被计入，实测就差这 16px。 */
+          #mail-center #mcAssistant:empty { display: none; }
+          /* 收件箱要让两栏吃掉剩余高度：否则列表停在 max-height 620、详情停在 min-height 360，
+             窗口越高下面空得越多（1440×900 实测空了 400+px）。
+             只在收件箱页签生效（.mc-fill）——客户速查 / 旅程 / 工具箱内容长短不定，
+             套上"固定高度 + 内部滚动"反而会把它们切掉。 */
+          /* 收件箱高度跟着窗口走：整行给一个确定高度，两栏各自内部滚动，
+             别让高窗口在下面留一大片空白、也别让长邮件把整页顶出滚动条。
+             JS 按"可视高度 - 这一栏顶部位置"写实一个 --mc-inbox-h；
+             clamp 只是 JS 未跑时的兜底。 */
+          #mail-center .mc-inbox { --mc-inbox-h: clamp(320px, calc(100vh - 400px), 900px); height: var(--mc-inbox-h); }
+          #mail-center .mc-inbox > .mc-panel { display: flex; flex-direction: column; min-height: 0; }
+          #mail-center .mc-inbox .mc-msg-list { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+          #mail-center .mc-inbox .mc-detail { min-height: 0; max-height: none; }
+
+          /* 头像：同一个人永远同一色（种子哈希，不随机） */
+          #mail-center .mc-avatar {
+            display: grid;
+            place-items: center;
+            width: 36px;
+            height: 36px;
+            flex: none;
+            border-radius: 11px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: .01em;
+            text-transform: uppercase;
+            background: linear-gradient(140deg, var(--a1, #4a8ef7), var(--a2, #83bcff));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38), 0 6px 14px -10px rgba(19, 28, 46, .7);
+          }
+
+          /* 头部 */
+          #mail-center .mc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+          #mail-center .mc-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+          #mail-center .mc-head-badge { display: grid; place-items: center; width: 46px; height: 46px; flex: none; border-radius: 14px; color: #fff; background: var(--mc-grad); box-shadow: 0 14px 26px -16px rgba(74, 142, 247, .95), inset 0 1px 0 rgba(255, 255, 255, .4); }
+          #mail-center .mc-head-badge svg { width: 23px; height: 23px; }
+          #mail-center .mc-head-text { min-width: 0; }
+          #mail-center .mc-head h1 { margin: 0; color: var(--mc-ink); font-size: 23px; font-weight: 700; letter-spacing: -.02em; }
+          #mail-center .mc-head p { margin: 5px 0 0; color: var(--mc-sub); font-size: 12.5px; }
+          #mail-center .mc-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+          /* mcIcon 的 svg 无固有尺寸（默认 300×150），用它的按钮必须显式给 svg 定宽高，否则图标吃光宽度、文字被挤成竖排（2026-10-21 事故） */
+          #mail-center .mc-head-actions .btn { flex: none; white-space: nowrap; }
+          #mail-center .mc-head-actions .btn svg { width: 13px; height: 13px; flex: none; }
+          #mail-center .mc-sync-state { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--mc-line); border-radius: 999px; background: #fff; color: var(--mc-sub); font-size: 11px; box-shadow: var(--mc-shadow-sm); }
+          #mail-center .mc-sync-state i { width: 6px; height: 6px; border-radius: 50%; background: #b6c2d4; }
+          #mail-center .mc-sync-state.is-ok i { background: #25a06a; box-shadow: 0 0 0 3px rgba(37, 160, 106, .14); }
+          #mail-center .mc-sync-state.is-warn i { background: var(--mc-amber); box-shadow: 0 0 0 3px rgba(207, 138, 28, .14); animation: mcPulse 1.4s ease-in-out infinite; }
+          #mail-center .mc-sync-state.is-error i { background: var(--mc-rose); box-shadow: 0 0 0 3px rgba(217, 74, 106, .14); }
+
+          /* 页签 */
+          #mail-center .mc-tabs { display: flex; gap: 3px; padding: 5px; border: 1px solid #e7eef8; border-radius: 14px; background: linear-gradient(180deg, #eff4fb, #f4f8fd); width: fit-content; box-shadow: inset 0 1px 2px rgba(19, 28, 46, .04); }
+          #mail-center .mc-tab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 15px; border: 0; border-radius: 10px; background: transparent; color: #5c6b80; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .18s var(--ease-out), color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
+          #mail-center .mc-tab:hover { color: var(--mc-ink); background: rgba(255, 255, 255, .72); }
+          #mail-center .mc-tab.is-active { background: linear-gradient(180deg, #fff, #f8fbff); color: #2f7ad6; box-shadow: 0 1px 2px rgba(19, 28, 46, .08), 0 8px 18px -14px rgba(55, 138, 221, .8), inset 0 1px 0 #fff; }
+          #mail-center .mc-tab em { font-style: normal; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: var(--mc-brand); color: #fff; box-shadow: 0 4px 10px -6px rgba(55, 138, 221, .95); }
+          #mail-center .mc-tab svg { width: 14px; height: 14px; flex: none; }
+          #mail-center .mc-tab:active { transform: scale(.97); }
+          #mail-center .mc-panel-head button { padding: 4px 9px; border: 1px solid var(--mc-line); border-radius: 6px; background: #fff; color: #5c6b80; font-size: 11px; cursor: pointer; transition: all .16s var(--ease-out); }
+          #mail-center .mc-panel-head button:hover { border-color: var(--mc-brand); color: var(--mc-brand); }
+          #mail-center .mc-panel-head button:active { transform: scale(.96); }
+
+          /* 账号条 */
+          #mail-center .mc-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(272px, 302px)); gap: 11px; }
+          #mail-center .mc-account { position: relative; display: grid; gap: 10px; padding: 13px 14px; overflow: hidden; border: 1px solid #e6edf7; border-radius: 15px; background: linear-gradient(180deg, #fff, #fcfdff); box-shadow: var(--mc-shadow-sm); animation: mcCardIn .42s var(--ease-out) backwards; animation-delay: calc(min(var(--mc-i, 0), 8) * 45ms); transition: transform .22s var(--ease-out), box-shadow .22s var(--ease-out), border-color .22s var(--ease-out); }
+          #mail-center .mc-account::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #4a8ef7, #7c5cff 55%, #12a594); opacity: .5; transition: opacity .22s var(--ease-out); }
+          #mail-center .mc-account:hover { transform: translateY(-2px); border-color: #cfdced; box-shadow: 0 2px 4px rgba(19, 28, 46, .04), 0 18px 34px -28px rgba(19, 28, 46, .6); }
+          #mail-center .mc-account:hover::before { opacity: 1; }
+          #mail-center .mc-account.is-off { background: #f8fafc; }
+          #mail-center .mc-account.is-off::before { background: #c3cede; opacity: .5; }
+          #mail-center .mc-account-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+          #mail-center .mc-account-face { position: relative; flex: none; display: block; line-height: 0; }
+          #mail-center .mc-account-face .mc-avatar { width: 38px; height: 38px; border-radius: 12px; font-size: 15px; }
+          #mail-center .mc-account-dot { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #b6c2d4; flex: none; box-shadow: 0 1px 2px rgba(19, 28, 46, .18); }
+          #mail-center .mc-account-dot.is-ok { background: #25a06a; }
+          #mail-center .mc-account-dot.is-error { background: var(--mc-rose); }
+          #mail-center .mc-account-dot.is-running { background: var(--mc-brand); animation: mcPulse 1.5s ease-in-out infinite; }
+          #mail-center .mc-account-name { min-width: 0; flex: 1; }
+          #mail-center .mc-account-name b { display: block; overflow: hidden; color: var(--mc-ink); font-size: 13px; font-weight: 700; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-account-name span { display: block; overflow: hidden; margin-top: 2px; color: var(--mc-sub); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-account-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+          #mail-center .mc-account-figs > span { display: grid; gap: 2px; padding: 8px 9px; border-radius: 10px; background: #f6fafe; border: 1px solid #eff5fc; }
+          #mail-center .mc-account-figs b { color: var(--mc-ink); font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.03em; line-height: 1.12; }
+          #mail-center .mc-account-figs i { font-style: normal; color: var(--mc-sub); font-size: 10px; line-height: 1.2; }
+          #mail-center .mc-account-figs > span.is-hot { background: linear-gradient(180deg, rgba(74, 142, 247, .09), rgba(74, 142, 247, .03)); border-color: rgba(74, 142, 247, .18); }
+          #mail-center .mc-account-figs > span.is-hot b { color: var(--mc-brand); }
+          #mail-center .mc-account-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 9px; border-top: 1px dashed var(--mc-line); }
+          #mail-center .mc-account-foot > span:first-child { color: #94a3b6; font-size: 10.5px; }
+          #mail-center .mc-account-foot .mc-mini { display: inline-flex; gap: 4px; }
+          #mail-center .mc-mini button { padding: 4px 9px; border: 1px solid var(--mc-line); border-radius: 7px; background: #fff; color: #5c6b80; font-size: 11px; cursor: pointer; transition: all .16s var(--ease-out); }
+          #mail-center .mc-mini button:hover { border-color: var(--mc-brand); color: var(--mc-brand); background: rgba(74, 142, 247, .05); }
+          #mail-center .mc-mini button:disabled { opacity: .5; cursor: not-allowed; }
+          #mail-center .mc-mini button:active { transform: scale(.96); }
+          /* 账号卡右上角的「编辑」：幽灵按钮，别用浏览器原生样式（默认那颗灰块又宽又重） */
+          #mail-center .mc-acc-edit {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex: none;
+            height: 26px;
+            padding: 0 9px 0 7px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: #8b9cb1;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: color .18s var(--ease-out), background .18s var(--ease-out), border-color .18s var(--ease-out), transform .16s var(--ease-out);
+          }
+          #mail-center .mc-acc-edit svg { width: 12.5px; height: 12.5px; flex: none; }
+          #mail-center .mc-acc-edit:hover { border-color: rgba(74, 142, 247, .26); background: rgba(74, 142, 247, .07); color: var(--mc-brand); }
+          #mail-center .mc-acc-edit:active { transform: scale(.96); }
+          #mail-center .mc-acc-edit:focus-visible { outline: 2px solid rgba(74, 142, 247, .42); outline-offset: 1px; }
+          /* 悬浮「看邮箱」：在客户速查 / 旅程 / 工具箱时固定在右下角，一键回收件箱 */
+          #mail-center .mc-mail-fab {
+            position: fixed;
+            right: 28px;
+            bottom: 28px;
+            z-index: 40;
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            height: 46px;
+            padding: 0 18px 0 11px;
+            border: 1px solid rgba(255, 255, 255, .24);
+            border-radius: 999px;
+            background: linear-gradient(135deg, #4a8ef7, #7c5cff);
+            color: #fff;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 650;
+            letter-spacing: .01em;
+            cursor: pointer;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 18px 34px -18px rgba(74, 142, 247, .9), 0 4px 12px -8px rgba(19, 28, 46, .45);
+            animation: mcFabIn .34s var(--ease-out) backwards;
+            transition: transform .22s var(--ease-out), box-shadow .22s var(--ease-out);
+          }
+          #mail-center .mc-mail-fab:hover { transform: translateY(-2px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4), 0 24px 40px -18px rgba(74, 142, 247, .98), 0 6px 16px -8px rgba(19, 28, 46, .5); }
+          #mail-center .mc-mail-fab:active { transform: translateY(0) scale(.97); }
+          #mail-center .mc-mail-fab:focus-visible { outline: 2px solid rgba(74, 142, 247, .55); outline-offset: 3px; }
+          #mail-center .mc-mail-fab-mark { position: relative; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: rgba(255, 255, 255, .18); }
+          #mail-center .mc-mail-fab-mark svg { width: 15px; height: 15px; }
+          #mail-center .mc-mail-fab-mark i {
+            position: absolute;
+            top: -6px;
+            right: -7px;
+            min-width: 15px;
+            height: 15px;
+            padding: 0 4px;
+            border: 1.5px solid #fff;
+            border-radius: 999px;
+            background: var(--mc-rose);
+            color: #fff;
+            font-size: 9px;
+            font-style: normal;
+            font-weight: 700;
+            line-height: 12px;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+          }
+          @media (max-width: 720px) {
+            /* 窄屏只留图标：带文字的胶囊会压住整条搜索框 */
+            #mail-center .mc-mail-fab { width: 48px; height: 48px; padding: 0; justify-content: center; right: 16px; bottom: 16px; }
+            #mail-center .mc-mail-fab-text { display: none; }
+          }
+          #mail-center .mc-account-error { padding: 6px 9px; border-radius: 8px; background: rgba(217, 74, 106, .07); color: #b23a57; font-size: 10.5px; line-height: 1.45; }
+          #mail-center .mc-account-add { display: grid; place-items: center; gap: 6px; width: 178px; min-height: 148px; border: 1.5px dashed #d3dfef; border-radius: 15px; background: linear-gradient(180deg, #fbfdff, #f7fafd); color: var(--mc-sub); font-size: 12px; text-align: center; cursor: pointer; transition: all .2s var(--ease-out); }
+          #mail-center .mc-account-add:hover { border-color: var(--mc-brand); color: var(--mc-brand); background: rgba(55, 138, 221, .05); transform: translateY(-1px); }
+          #mail-center .mc-account-add.is-first { width: min(340px, 100%); justify-self: start; }
+          #mail-center .mc-account-add.is-first span { max-width: 200px; }
+          #mail-center .mc-account-add b { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; background: #fff; color: #7d8ea5; font-size: 20px; font-weight: 300; line-height: 1; box-shadow: var(--mc-shadow-sm); transition: all .2s var(--ease-out); }
+          #mail-center .mc-account-add:hover b { color: var(--mc-brand); box-shadow: 0 8px 18px -12px rgba(55, 138, 221, .9); }
+
+          #mail-center .mc-empty { display: grid; place-items: center; gap: 8px; padding: 36px 18px; border: 1px dashed #d8e3f1; border-radius: 14px; background: linear-gradient(180deg, #fbfdff, #f8fbff); color: var(--mc-sub); font-size: 12.5px; text-align: center; }
+          #mail-center .mc-empty b { color: var(--mc-ink); font-size: 13.5px; font-weight: 650; }
+          #mail-center .mc-empty button { margin-top: 4px; }
+
+          /* 收件箱 */
+          #mail-center .mc-inbox { display: grid; grid-template-columns: minmax(320px, .92fr) minmax(0, 1.08fr); gap: 13px; align-items: stretch; }
+          #mail-center .mc-panel { border: 1px solid #e7eef8; border-radius: 15px; background: var(--mc-card); overflow: hidden; box-shadow: var(--mc-shadow-md); }
+          #mail-center .mc-panel-head { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid #eef2f8; background: linear-gradient(180deg, #fdfeff, #f9fbfe); }
+          #mail-center .mc-panel-head b { color: var(--mc-ink); font-size: 12.5px; font-weight: 700; letter-spacing: -.01em; }
+          #mail-center .mc-panel-head .mc-grow { flex: 1; }
+          #mail-center .mc-panel-count { padding: 2px 8px; border-radius: 999px; background: #eef4fc; color: #6c8299; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+          /* 文件夹切换：收件箱 / 已发送 / 垃圾箱 / 垃圾邮件 */
+          #mail-center .mc-folders { display: flex; gap: 4px; padding: 8px 10px 0; flex-wrap: wrap; }
+          #mail-center .mc-folder { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #64748b; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .18s var(--ease-out), color .18s var(--ease-out), border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
+          #mail-center .mc-folder svg { width: 13px; height: 13px; flex: none; opacity: .78; }
+          #mail-center .mc-folder em { font-style: normal; padding: 0 5px; border-radius: 999px; background: #eef2f8; color: #64748b; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 16px; }
+          #mail-center .mc-folder:hover { background: rgba(55, 138, 221, .06); color: var(--mc-ink); }
+          #mail-center .mc-folder.is-active { border-color: rgba(55, 138, 221, .16); background: rgba(55, 138, 221, .09); color: var(--mc-brand); box-shadow: inset 0 0 0 1px rgba(55, 138, 221, .04); }
+          #mail-center .mc-folder.is-active svg { opacity: 1; }
+          #mail-center .mc-folder.is-active em { background: var(--mc-brand); color: #fff; }
+          #mail-center .mc-folder:active { transform: scale(.97); }
+          /* 未读小红点：贴在图标右上角，不占位 */
+          #mail-center .mc-folder-dot { position: absolute; top: 3px; left: 16px; width: 6px; height: 6px; border-radius: 50%; background: var(--mc-rose); box-shadow: 0 0 0 1.5px #fff; }
+          #mail-center .mc-filters { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #eef2f8; flex-wrap: wrap; background: #fbfdff; }
+          #mail-center .mc-filters select,
+          #mail-center .mc-filters input { height: 31px; padding: 0 10px; border: 1px solid var(--mc-line); border-radius: 8px; background: #fff; color: var(--mc-ink); font: inherit; font-size: 11.5px; outline: 0; transition: border-color .16s var(--ease-out), box-shadow .16s var(--ease-out); }
+          #mail-center .mc-filters input { flex: 1; min-width: 120px; }
+          #mail-center .mc-filters select:focus,
+          #mail-center .mc-filters input:focus { border-color: var(--mc-brand); box-shadow: var(--mc-ring); }
+          #mail-center .mc-msg-list { max-height: 620px; overflow: auto; }
+          #mail-center .mc-msg { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 11px 13px; border: 0; border-bottom: 1px solid #f1f5fa; background: #fff; text-align: left; cursor: pointer; transition: background .16s var(--ease-out); animation: mcEvIn .32s var(--ease-out) backwards; animation-delay: calc(min(var(--mc-i, 0), 10) * 26ms); }
+          #mail-center .mc-msg:hover { background: #f6faff; }
+          #mail-center .mc-msg.is-active { background: linear-gradient(90deg, rgba(74, 142, 247, .1), rgba(74, 142, 247, .03)); box-shadow: inset 3px 0 0 var(--mc-brand); }
+          #mail-center .mc-msg.is-unread { background: #f7fbff; }
+          #mail-center .mc-msg.is-unread:hover { background: #f1f8ff; }
+          #mail-center .mc-msg.is-unread::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(180deg, #4a8ef7, #7c5cff); }
+          #mail-center .mc-msg.is-unread .mc-msg-subject b { font-weight: 750; }
+          #mail-center .mc-msg.is-unread .mc-msg-subject b::after { content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--mc-brand); vertical-align: middle; }
+          #mail-center .mc-msg-av { position: relative; display: block; width: 34px; height: 34px; flex: none; line-height: 0; }
+          #mail-center .mc-msg-av .mc-avatar { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; }
+          #mail-center .mc-msg-dir { position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center; width: 15px; height: 15px; border: 2px solid #fff; border-radius: 50%; font-size: 8px; font-style: normal; font-weight: 800; line-height: 1; }
+          #mail-center .mc-msg-dir.is-in { background: var(--mc-teal); color: #fff; }
+          #mail-center .mc-msg-dir.is-out { background: var(--mc-brand); color: #fff; }
+          #mail-center .mc-msg.is-compact { padding: 9px 12px; }
+          #mail-center .mc-msg.is-compact .mc-msg-av,
+          #mail-center .mc-msg.is-compact .mc-msg-av .mc-avatar { width: 30px; height: 30px; border-radius: 9px; font-size: 12px; }
+          #mail-center .mc-msg-main { min-width: 0; }
+          #mail-center .mc-msg-subject { display: flex; align-items: center; gap: 6px; min-width: 0; }
+          #mail-center .mc-msg-subject b { overflow: hidden; color: var(--mc-ink); font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-msg-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--mc-sub); font-size: 10.5px; }
+          #mail-center .mc-msg-meta .mc-chip { padding: 1px 6px; border-radius: 5px; background: rgba(31, 157, 143, .1); color: #177e73; font-size: 9.5px; font-weight: 600; }
+          #mail-center .mc-msg-snippet { display: block; overflow: hidden; margin-top: 4px; color: #7a8a9e; font-size: 11px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-msg-time { align-self: start; margin-top: 2px; color: #9aa9bb; font-size: 10.5px; white-space: nowrap; }
+
+          #mail-center .mc-detail { min-height: 360px; max-height: 620px; overflow: auto; }
+          #mail-center .mc-detail-head { padding: 16px 18px; border-bottom: 1px solid #eef2f8; background: linear-gradient(180deg, #fbfdff, #fff); }
+          #mail-center .mc-detail-head h2 { margin: 0; color: var(--mc-ink); font-size: 17px; font-weight: 700; line-height: 1.42; letter-spacing: -.015em; }
+          #mail-center .mc-detail-from { display: flex; align-items: center; gap: 10px; margin-top: 13px; min-width: 0; }
+          #mail-center .mc-detail-from .mc-avatar { width: 38px; height: 38px; border-radius: 12px; font-size: 15px; }
+          #mail-center .mc-detail-from-text { display: grid; gap: 1px; min-width: 0; flex: 1; }
+          #mail-center .mc-detail-from-text b { overflow: hidden; color: var(--mc-ink); font-size: 12.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-detail-from-text span { overflow: hidden; color: var(--mc-sub); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-detail-from time { margin-left: auto; color: #9aa9bb; font-size: 11px; white-space: nowrap; }
+          #mail-center .mc-detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; color: var(--mc-sub); font-size: 11px; }
+          #mail-center .mc-meta-pill { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; background: #f2f7fd; color: #537091; font-size: 10.5px; }
+          #mail-center .mc-detail-body { padding: 18px 20px; max-height: 520px; overflow: auto; color: #2f3f57; font-size: 13px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+          #mail-center .mc-detail-note { margin: 0 20px 16px; padding: 9px 12px; border-radius: 9px; background: #fff8ec; border: 1px solid #f4e2c3; color: #8a6321; font-size: 11.5px; line-height: 1.7; }
+          /* 正文里的链接可点：来自 linkify（先转义再替换，安全） */
+          #mail-center .mc-detail-body a { color: #2f6bc4; text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+          #mail-center .mc-detail-body a:hover { color: #1d4fa3; }
+          /* 收件人折叠的 +N 按钮 */
+          #mail-center .mc-meta-more { cursor: pointer; border: 0; background: #e8f1fc; color: #2f6bc4; font-weight: 600; transition: background .14s var(--ease-out); }
+          #mail-center .mc-meta-more:hover { background: #d9e9fb; }
+          /* 带附件提示卡 */
+          #mail-center .mc-attach-note { margin: 0 20px 12px; padding: 9px 12px; border-radius: 9px; background: #f4f8fd; border: 1px solid #dbe7f5; color: #4a628a; font-size: 11.5px; line-height: 1.7; display: flex; align-items: flex-start; gap: 7px; }
+          #mail-center .mc-attach-note svg { width: 13px; height: 13px; flex: none; margin-top: 2px; }
+          #mail-center .mc-detail-actions { display: flex; gap: 8px; margin-top: 13px; }
+          #mail-center .mc-detail-actions .btn { height: 30px; padding: 0 14px; font-size: 12px; border-radius: 9px; flex: none; }
+          #mail-center .mc-detail-actions .btn svg { width: 13px; height: 13px; flex: none; }
+          #mail-center .mc-detail-empty { display: grid; place-items: center; min-height: 360px; padding: 20px; color: var(--mc-sub); font-size: 12.5px; text-align: center; }
+
+          /* 客户速查 */
+          #mail-center .mc-lookup { display: grid; gap: 13px; }
+          #mail-center .mc-searchbar { display: flex; gap: 9px; align-items: center; height: 48px; padding: 0 14px; border: 1px solid #e7eef8; border-radius: 14px; background: #fff; box-shadow: var(--mc-shadow-md); transition: border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
+          #mail-center .mc-searchbar:focus-within { border-color: var(--mc-brand); box-shadow: var(--mc-ring), var(--mc-shadow-md); }
+          #mail-center .mc-searchbar svg { width: 16px; height: 16px; color: #93a3b7; flex: none; }
+          #mail-center .mc-searchbar input { flex: 1; min-width: 0; height: 30px; border: 0; background: transparent; color: var(--mc-ink); font: inherit; font-size: 13px; outline: 0; }
+          #mail-center .mc-searchbar input::placeholder { color: #a8b6c7; }
+          #mail-center .mc-searchbar .mc-hint { color: #9aa9bb; font-size: 11px; white-space: nowrap; }
+          #mail-center .mc-lookup-grid { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); gap: 13px; align-items: start; }
+          #mail-center .mc-person { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 11px 13px; border: 0; border-bottom: 1px solid #f1f5fa; background: #fff; text-align: left; cursor: pointer; transition: background .16s var(--ease-out); animation: mcEvIn .3s var(--ease-out) backwards; animation-delay: calc(min(var(--mc-i, 0), 10) * 26ms); }
+          #mail-center .mc-person:hover { background: #f6faff; }
+          #mail-center .mc-person.is-active { background: linear-gradient(90deg, rgba(74, 142, 247, .1), rgba(74, 142, 247, .03)); box-shadow: inset 3px 0 0 var(--mc-brand); }
+          #mail-center .mc-person-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+          #mail-center .mc-person .mc-avatar { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; }
+          #mail-center .mc-person-text { display: grid; gap: 2px; min-width: 0; }
+          #mail-center .mc-person b { overflow: hidden; color: var(--mc-ink); font-size: 12.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-person small { display: block; overflow: hidden; color: var(--mc-sub); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-person-side { text-align: right; }
+          #mail-center .mc-person-side em { display: block; font-style: normal; color: var(--mc-brand); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+          #mail-center .mc-person-side span { color: #9aa9bb; font-size: 10px; }
+          #mail-center .mc-mailbox-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; background: rgba(31, 157, 143, .1); color: #177e73; font-size: 11.5px; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(31, 157, 143, .14); }
+          #mail-center .mc-lookup-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+          #mail-center .mc-lookup-title .mc-avatar { width: 42px; height: 42px; border-radius: 13px; font-size: 17px; }
+          #mail-center .mc-lookup-title-text { min-width: 0; flex: 1; }
+          #mail-center .mc-lookup-title-text .mc-detail-meta { margin-top: 6px; }
+          #mail-center .mc-lookup-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 14px; border-bottom: 1px solid #eef2f8; background: linear-gradient(180deg, #fbfdff, #fff); }
+          #mail-center .mc-lookup-summary div { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid #eef4fc; border-radius: 11px; background: #f7fbff; }
+          #mail-center .mc-lookup-summary b { color: var(--mc-ink); font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.15; }
+          #mail-center .mc-lookup-summary span { color: var(--mc-sub); font-size: 10.5px; }
+          #mail-center .mc-lookup-actions { display: flex; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #eef2f8; }
+          #mail-center .mc-lookup-rows { max-height: 420px; overflow: auto; }
+
+          /* 旅程：一天一列的双向泳道图——轴上是我们的动作，轴下是客户的回应 */
+          #mail-center .mc-journey-head { display: grid; gap: 11px; padding-bottom: 13px; }
+          #mail-center .mc-journey-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+          #mail-center .mc-journey-title .mc-avatar { width: 44px; height: 44px; border-radius: 14px; font-size: 18px; }
+          #mail-center .mc-journey-title-text { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
+          #mail-center .mc-journey-title b { color: var(--mc-ink); font-size: 16px; font-weight: 700; letter-spacing: -.015em; }
+          #mail-center .mc-journey-span { color: #94a3b6; font-size: 11px; }
+
+          /* 指标条：一条横带，数值在前、标签在后，比五张孤零零的小卡安静得多 */
+          #mail-center .mc-journey-stats { display: flex; flex-wrap: wrap; border: 1px solid #eaf0f8; border-radius: 12px; background: linear-gradient(180deg, #fbfdff, #fff); overflow: hidden; }
+          #mail-center .mc-jstat { display: flex; align-items: baseline; gap: 6px; flex: 1 1 96px; padding: 9px 12px; border-left: 1px solid #eef3fa; }
+          #mail-center .mc-jstat:first-child { border-left: 0; }
+          #mail-center .mc-jstat b { color: var(--mc-ink); font-size: 16px; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+          #mail-center .mc-jstat span { color: var(--mc-sub); font-size: 10px; }
+          #mail-center .mc-jstat.is-brand b { color: var(--mc-brand); }
+          #mail-center .mc-jstat.is-teal b { color: var(--mc-teal); }
+          #mail-center .mc-jstat.is-rose b { color: var(--mc-rose); }
+
+          #mail-center .mc-flow { border-bottom: 1px solid #eef2f8; background: radial-gradient(130% 100% at 50% 42%, #fbfdff 0%, #fff 62%); }
+          #mail-center .mc-flow-tools { display: flex; align-items: center; gap: 10px; padding: 11px 18px 0; }
+          #mail-center .mc-journey-legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+          #mail-center .mc-journey-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--mc-sub); font-size: 10.5px; }
+          #mail-center .mc-journey-legend i { width: 9px; height: 9px; border-radius: 50%; background: #d5dee9; }
+          #mail-center .mc-journey-legend .is-out i { background: linear-gradient(135deg, #4a8ef7, #7c9cff); }
+          #mail-center .mc-journey-legend .is-in i { background: linear-gradient(135deg, #12a594, #4ec6b7); }
+          #mail-center .mc-journey-legend .is-rose i { background: linear-gradient(135deg, #d94a6a, #ef8298); }
+          #mail-center .mc-journey-replay { display: inline-flex; align-items: center; gap: 5px; height: 26px; margin-left: auto; padding: 0 10px; border: 1px solid var(--mc-line); border-radius: 999px; background: #fff; color: var(--mc-sub); font-size: 11px; cursor: pointer; transition: color .18s var(--ease-out), border-color .18s var(--ease-out), background .18s var(--ease-out); }
+          #mail-center .mc-journey-replay:hover { color: var(--mc-brand); border-color: rgba(74, 142, 247, .42); background: rgba(74, 142, 247, .06); }
+          #mail-center .mc-journey-replay svg { width: 12px; height: 12px; }
+
+          #mail-center .mc-flow-scroll { overflow-x: auto; overflow-y: hidden; padding: 4px 0 2px; }
+          #mail-center .mc-flow-canvas { position: relative; display: flex; align-items: center; justify-content: center; min-width: 100%; height: calc(var(--mc-stack, 1) * 96px + 76px); padding: 0 30px; }
+          /* 轴线：一条从蓝到紫再到青的渐变，光点定时从第一封扫到最近一封 */
+          #mail-center .mc-flow-axis { position: absolute; left: 30px; right: 30px; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 3px; overflow: hidden; background: linear-gradient(90deg, rgba(74, 142, 247, .18), rgba(74, 142, 247, .55) 14%, rgba(124, 92, 255, .46) 52%, rgba(31, 157, 143, .55) 86%, rgba(31, 157, 143, .18)); box-shadow: 0 0 0 1px rgba(255, 255, 255, .75), 0 0 18px rgba(74, 142, 247, .32), 0 0 40px rgba(124, 92, 255, .14); }
+          #mail-center .mc-flow-axis::after { content: ""; position: absolute; top: -2px; left: -90px; width: 90px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, transparent, rgba(74, 142, 247, .9), transparent); filter: blur(.6px); animation: mcFlowSweep 5.6s cubic-bezier(.45, 0, .55, 1) infinite; }
+
+          /* 轴两端各一个小端点：这条线有起点（第一封）也有终点（最近一封） */
+          #mail-center .mc-flow-canvas::before,
+          #mail-center .mc-flow-canvas::after { content: ""; position: absolute; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1.5px rgba(74, 142, 247, .5); pointer-events: none; }
+          #mail-center .mc-flow-canvas::before { left: 27px; }
+          #mail-center .mc-flow-canvas::after { right: 27px; box-shadow: 0 0 0 1.5px rgba(31, 157, 143, .5); }
+          #mail-center .mc-flow-col { position: relative; flex: 1 1 78px; min-width: 78px; max-width: 240px; height: 100%; }
+          /* 每列一条极淡的时间柱 + 一层 hover 底，像日程表里被指到的那一天 */
+          #mail-center .mc-flow-col::after { content: ""; position: absolute; inset: 8px 3px; border-radius: 12px; background: rgba(74, 142, 247, .045); opacity: 0; transition: opacity .2s var(--ease-out); pointer-events: none; }
+          #mail-center .mc-flow-col:hover::after { opacity: 1; }
+          #mail-center .mc-flow-col.is-current::after { opacity: 1; background: rgba(74, 142, 247, .045); }
+          #mail-center .mc-flow-col.is-current .mc-flow-date { color: var(--mc-brand); }
+          #mail-center .mc-flow-col.is-current .mc-flow-spine { background: linear-gradient(180deg, rgba(74, 142, 247, 0), rgba(74, 142, 247, .28) 12%, rgba(74, 142, 247, .28) 86%, rgba(74, 142, 247, 0)); }
+          #mail-center .mc-flow-spine { position: absolute; left: 50%; top: 10%; bottom: 24px; width: 1px; margin-left: -.5px; background: linear-gradient(180deg, rgba(74, 142, 247, 0), rgba(74, 142, 247, .1) 14%, rgba(74, 142, 247, .1) 84%, rgba(74, 142, 247, 0)); transition: background .2s var(--ease-out); }
+          #mail-center .mc-flow-col:hover .mc-flow-date { color: var(--mc-brand); }
+          #mail-center .mc-flow-col:hover .mc-flow-spine { background: linear-gradient(180deg, rgba(74, 142, 247, 0), rgba(74, 142, 247, .36) 14%, rgba(74, 142, 247, .36) 84%, rgba(74, 142, 247, 0)); }
+          #mail-center .mc-flow-up { position: absolute; left: 0; right: 0; bottom: 50%; display: flex; flex-direction: column-reverse; align-items: center; gap: 9px; padding-bottom: 12px; z-index: 1; }
+          #mail-center .mc-flow-down { position: absolute; left: 0; right: 0; top: 50%; display: flex; flex-direction: column; align-items: center; gap: 9px; padding-top: 12px; z-index: 1; }
+          #mail-center .mc-flow-date { z-index: 1; position: absolute; left: 0; right: 0; bottom: 8px; color: #93a2b5; font-size: 10px; font-weight: 600; text-align: center; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+
+          #mail-center .mc-node-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+          #mail-center .mc-flow-down .mc-node-cell { flex-direction: column-reverse; }
+          #mail-center .mc-node { --mc-ring: rgba(74, 142, 247, .45); position: relative; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: linear-gradient(135deg, #4a8ef7, #7c9cff); font-size: 11px; font-weight: 700; line-height: 1; cursor: pointer; box-shadow: 0 0 0 3px #fff, 0 7px 15px -9px rgba(74, 142, 247, .95); transition: transform .18s var(--ease-out), box-shadow .18s var(--ease-out); animation: mcNodeIn .44s var(--ease-expo) backwards; animation-delay: calc(min(var(--mc-order, 0), 28) * 26ms + 80ms); }
+          #mail-center .mc-node svg { width: 13.5px; height: 13.5px; }
+          #mail-center .mc-node.is-soft svg { width: 11px; height: 11px; }
+          #mail-center .mc-node:hover { transform: translateY(-2px) scale(1.07); }
+          #mail-center .mc-node:focus-visible { outline: 2px solid var(--mc-brand); outline-offset: 3px; }
+          #mail-center .mc-node.is-in { --mc-ring: rgba(18, 165, 148, .45); background: linear-gradient(135deg, #12a594, #4ec6b7); box-shadow: 0 0 0 3px #fff, 0 7px 15px -9px rgba(18, 165, 148, .95); }
+          #mail-center .mc-node.is-rose { --mc-ring: rgba(217, 74, 106, .45); background: linear-gradient(135deg, #d94a6a, #ef8298); box-shadow: 0 0 0 3px #fff, 0 7px 15px -9px rgba(217, 74, 106, .9); }
+          #mail-center .mc-node.is-soft { width: 24px; height: 24px; --mc-ring: rgba(139, 156, 177, .5); background: #eef3f9; color: #8b9cb1; font-size: 10px; box-shadow: 0 0 0 3px #fff, 0 4px 10px -8px rgba(19, 28, 46, .6); }
+          #mail-center .mc-node.is-active { box-shadow: 0 0 0 4px var(--mc-ring), 0 10px 20px -10px rgba(19, 28, 46, .45); }
+          #mail-center .mc-node.is-active::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid var(--mc-ring); animation: mcNodeRing 2.2s ease-out infinite; }
+          #mail-center .mc-node-time { color: #93a2b5; font-size: 9.5px; font-variant-numeric: tabular-nums; }
+          #mail-center .mc-node.is-active + .mc-node-time { color: var(--mc-ink); font-weight: 600; }
+          #mail-center .mc-node-more { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f4f7fb; color: #8b9cb1; font-size: 9.5px; font-weight: 600; box-shadow: 0 0 0 3px #fff; cursor: default; }
+          /* 重播：换一个 keyframes 名字，节点才会真的一次次亮过去（同名动画加了类也不会重跑） */
+          #mail-center .mc-flow-canvas.is-playing .mc-node { animation: mcNodeFlash .58s var(--ease-out) both; animation-delay: calc(min(var(--mc-order, 0), 28) * 45ms); }
+
+          /* 选中事件卡：跟着图上那个亮着的站点走 */
+          #mail-center .mc-focus { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; padding: 16px 18px 18px; animation: mcFocusIn .34s var(--ease-out) both; }
+          #mail-center .mc-focus-icon svg { width: 16px; height: 16px; }
+          #mail-center .mc-focus-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 13px; color: #fff; font-size: 15px; font-weight: 700; background: linear-gradient(135deg, #4a8ef7, #7c9cff); box-shadow: 0 10px 20px -14px rgba(74, 142, 247, .95); }
+          #mail-center .mc-focus.is-in .mc-focus-icon { background: linear-gradient(135deg, #12a594, #4ec6b7); box-shadow: 0 10px 20px -14px rgba(18, 165, 148, .95); }
+          #mail-center .mc-focus.is-rose .mc-focus-icon { background: linear-gradient(135deg, #d94a6a, #ef8298); box-shadow: 0 10px 20px -14px rgba(217, 74, 106, .9); }
+          #mail-center .mc-focus.is-soft .mc-focus-icon { background: #eef3f9; color: #8b9cb1; box-shadow: none; }
+          #mail-center .mc-focus-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+          #mail-center .mc-focus-top b { color: var(--mc-ink); font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; }
+          #mail-center .mc-focus-kind { padding: 1px 7px; border-radius: 6px; background: #f1f6fc; color: #5b7591; font-size: 9.5px; }
+          #mail-center .mc-focus-top time { margin-left: auto; color: #9aa9bb; font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+          #mail-center .mc-focus-subject { margin-top: 5px; color: #34435a; font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+          #mail-center .mc-focus-detail { margin-top: 4px; color: var(--mc-sub); font-size: 11.5px; line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+          #mail-center .mc-focus-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+          #mail-center .mc-focus-tag { padding: 1.5px 7px; border-radius: 5px; background: #f1f6fc; color: #5b7591; font-size: 9.5px; }
+          #mail-center .mc-focus-side { display: grid; align-content: center; gap: 8px; justify-items: end; }
+          #mail-center .mc-focus-gap { text-align: right; }
+          #mail-center .mc-focus-gap b { display: block; color: var(--mc-ink); font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+          #mail-center .mc-focus-gap span { color: #9aa9bb; font-size: 9.5px; }
+          #mail-center .mc-focus-nav { display: flex; align-items: center; padding: 2px; border: 1px solid var(--mc-line); border-radius: 999px; background: #fff; }
+          #mail-center .mc-focus-nav button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--mc-sub); font-size: 14px; line-height: 1; cursor: pointer; transition: background .16s var(--ease-out), color .16s var(--ease-out); }
+          #mail-center .mc-focus-nav button:hover:not(:disabled) { background: rgba(74, 142, 247, .1); color: var(--mc-brand); }
+          #mail-center .mc-focus-nav button:disabled { opacity: .35; cursor: default; }
+          #mail-center .mc-focus-nav span { min-width: 44px; color: #9aa9bb; font-size: 9.5px; text-align: center; font-variant-numeric: tabular-nums; }
+          /* 详情卡里的正文：先给 4 行多，点「展开正文」看全文；被截断时再取一次原文 */
+          #mail-center .mc-focus-body { margin-top: 7px; padding: 9px 11px; border: 1px solid #e8eef8; border-radius: 9px; background: #fafcff; }
+          #mail-center .mc-focus-text { margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; color: #2b3a51; font: inherit; font-size: 12px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; }
+          #mail-center .mc-focus-body.is-open .mc-focus-text { display: block; -webkit-line-clamp: unset; max-height: 300px; overflow-y: auto; }
+          #mail-center .mc-focus-more { margin-top: 6px; padding: 0; border: 0; background: none; color: var(--mc-brand); font-size: 10.5px; cursor: pointer; }
+          #mail-center .mc-focus-more:hover { text-decoration: underline; }
+          /* 整张卡可点（点一下去邮件列表），但翻页/展开按钮各走各的 */
+          #mail-center .mc-focus.is-openable { cursor: pointer; transition: background .18s var(--ease-out), box-shadow .18s var(--ease-out); }
+          #mail-center .mc-focus.is-openable:hover { background: #fbfdff; box-shadow: inset 0 0 0 1px rgba(55, 138, 221, .26); }
+          #mail-center .mc-focus.is-openable:focus-visible { outline: 2px solid rgba(55, 138, 221, .5); outline-offset: -2px; }
+          #mail-center .mc-focus-open { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 1px solid rgba(55, 138, 221, .34); border-radius: 999px; background: #fff; color: var(--mc-brand); font-size: 10.5px; white-space: nowrap; cursor: pointer; transition: background .16s var(--ease-out), border-color .16s var(--ease-out); }
+          #mail-center .mc-focus-open:hover { background: rgba(55, 138, 221, .08); border-color: rgba(55, 138, 221, .55); }
+          /* mcIcon 出来的 svg 没有固有尺寸，不显式给宽高会把文字挤成竖排 */
+          #mail-center .mc-focus-open svg { width: 12px; height: 12px; flex: none; }
+          /* 从旅程定位过来的那一行：闪一圈蓝环（用伪元素，别去动 .is-active 的底色） */
+          #mail-center .mc-msg { position: relative; }
+          #mail-center .mc-msg.is-located::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; box-shadow: inset 0 0 0 2px rgba(55, 138, 221, .62); animation: mcLocateRing 2.2s var(--ease-out) both; }
+          @keyframes mcLocateRing { 0%, 55% { opacity: 1 } 100% { opacity: 0 } }
+
+          /* ── 旅程节点悬浮卡 ──────────────────────────────────────────────
+             它挂在 <body> 上（要浮出 .mc-flow-scroll 的 overflow），所以**不能**用 --mc-* 令牌，
+             那些变量定义在 #mail-center 子树里，离开那个子树一律解析成空。颜色全部写死。 */
+          .mc-node-tip {
+            position: fixed; z-index: 96; max-width: 360px; padding: 11px 13px 10px;
+            border: 1px solid #dbe6f5; border-radius: 12px; background: #fff;
+            box-shadow: 0 18px 38px -20px rgba(20, 41, 74, .42), 0 2px 8px rgba(20, 41, 74, .06);
+            animation: mcTipIn .16s ease-out both;
+          }
+          .mc-node-tip[hidden] { display: none; }
+          .mc-tip-head { display: flex; align-items: center; gap: 8px; }
+          .mc-tip-dot { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 8px; background: linear-gradient(135deg, #378ADD, #7c9cff); color: #fff; }
+          .mc-tip-dot svg { width: 12px; height: 12px; }
+          .mc-tip-dot.is-in { background: linear-gradient(135deg, #12a594, #4ec6b7); }
+          .mc-tip-dot.is-rose { background: linear-gradient(135deg, #d94a6a, #ef8298); }
+          .mc-tip-dot.is-soft { background: #eef3f9; color: #8b9cb1; }
+          .mc-tip-title { min-width: 0; }
+          .mc-tip-title b { display: block; color: #131c2e; font-size: 12.5px; font-weight: 700; }
+          .mc-tip-title span { display: block; margin-top: 1px; color: #8595a9; font-size: 10px; }
+          .mc-tip-subject { margin-top: 7px; color: #24344c; font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+          .mc-tip-body { margin: 6px 0 0; max-height: 176px; overflow: hidden; color: #4a5b72; font: inherit; font-size: 11.5px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
+          .mc-tip-body.is-empty { color: #94a3b6; }
+          .mc-tip-go { display: block; width: 100%; margin-top: 9px; padding: 7px 0 0; border: 0; border-top: 1px solid #eef3fa; background: none; color: #378ADD; font-size: 11px; font-weight: 600; text-align: left; cursor: pointer; }
+          .mc-tip-go:hover { color: #1f6fc4; }
+          .mc-tip-none { margin-top: 8px; padding-top: 7px; border-top: 1px solid #eef3fa; color: #9aa9bb; font-size: 10.5px; }
+          @keyframes mcTipIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+          /* 工具箱：一条工具栏 + 分类胶囊 + 工具卡（原来那块居中大 hero 已废弃） */
+          #mail-center .mc-toolbox { display: grid; gap: 14px; }
+          #mail-center .mc-tool-bar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 10px 16px;
+            padding: 12px 13px;
+            border: 1px solid var(--mc-line);
+            border-radius: 14px;
+            background: #fff;
+            box-shadow: var(--mc-shadow-sm);
+          }
+          #mail-center .mc-tool-search {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: min(430px, 100%);
+            height: 38px;
+            padding: 0 9px 0 12px;
+            border: 1px solid var(--mc-line);
+            border-radius: 10px;
+            background: var(--mc-soft);
+            transition: border-color .18s var(--ease-out), background .18s var(--ease-out), box-shadow .18s var(--ease-out);
+          }
+          #mail-center .mc-tool-search:focus-within { border-color: var(--mc-brand); background: #fff; box-shadow: var(--mc-ring); }
+          #mail-center .mc-tool-search > svg { width: 15px; height: 15px; flex: none; color: #9aa9bb; }
+          #mail-center .mc-tool-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--mc-ink); font: inherit; font-size: 12.5px; outline: 0; }
+          #mail-center .mc-tool-search input::placeholder { color: #a3b0c2; }
+          #mail-center .mc-tool-clear {
+            display: grid;
+            place-items: center;
+            width: 20px;
+            height: 20px;
+            flex: none;
+            padding: 0;
+            border: 0;
+            border-radius: 6px;
+            background: #e9eff8;
+            color: #6b7d94;
+            cursor: pointer;
+            transition: background .16s var(--ease-out), color .16s var(--ease-out);
+          }
+          /* 输入框是空的时候隐藏，别让一个用不上的叉占位置 */
+          #mail-center .mc-tool-search input:placeholder-shown ~ .mc-tool-clear { opacity: 0; pointer-events: none; }
+          #mail-center .mc-tool-clear:hover { background: #dbe5f3; color: var(--mc-ink); }
+          #mail-center .mc-tool-clear svg { width: 11px; height: 11px; }
+          #mail-center .mc-tool-total { justify-self: end; color: var(--mc-sub); font-size: 11.5px; white-space: nowrap; }
+          #mail-center .mc-tool-total b { color: var(--mc-ink); font-weight: 600; }
+          #mail-center .mc-tool-results { display: grid; gap: 16px; }
+
+          /* 最近使用 */
+          /* 一条横条：标签 + 药丸 + 清空，宽度跟着内容走，不铺满整行 */
+          #mail-center .mc-tool-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 10px; width: fit-content; max-width: 100%; justify-self: start; padding: 9px 12px; border: 1px solid var(--mc-line); border-radius: 13px; background: linear-gradient(180deg, #fbfdff, #fff); }
+          #mail-center .mc-tool-recent-label { display: inline-flex; align-items: center; gap: 6px; color: var(--mc-ink); font-size: 11.5px; font-weight: 700; }
+          #mail-center .mc-tool-recent-label svg { width: 13px; height: 13px; color: var(--mc-brand); }
+          #mail-center .mc-tool-link { padding: 0; border: 0; background: none; color: #9aa9bb; font-size: 11px; cursor: pointer; transition: color .16s var(--ease-out); }
+          #mail-center .mc-tool-link:hover { color: var(--mc-rose); }
+          #mail-center .mc-tool-recent-list { display: flex; flex-wrap: wrap; gap: 6px; }
+          #mail-center .mc-tool-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 30px;
+            padding: 0 11px 0 5px;
+            border: 1px solid var(--mc-line);
+            border-radius: 999px;
+            background: #fff;
+            color: var(--mc-ink);
+            font-size: 11.5px;
+            cursor: pointer;
+            transition: border-color .16s var(--ease-out), box-shadow .16s var(--ease-out), transform .16s var(--ease-out);
+          }
+          #mail-center .mc-tool-pill:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--mc-tool-color) 32%, #dde6f2); box-shadow: 0 10px 18px -14px rgba(19, 28, 46, .55); }
+          #mail-center .mc-tool-pill-icon {
+            display: grid;
+            place-items: center;
+            width: 22px;
+            height: 22px;
+            flex: none;
+            border-radius: 7px;
+            background: color-mix(in srgb, var(--mc-tool-color) 15%, #fff);
+            color: color-mix(in srgb, var(--mc-tool-color) 90%, #0b1626);
+          }
+          #mail-center .mc-tool-pill-icon svg { width: 13px; height: 13px; }
+
+          /* 分组头：标题 + 说明 + 延伸细线 + 计数，比一根短竖条更清楚地划分段落 */
+          #mail-center .mc-tool-section { display: grid; gap: 10px; }
+          #mail-center .mc-tool-section-head { display: flex; align-items: center; gap: 9px; }
+          #mail-center .mc-tool-section-head::before { content: ""; width: 3px; height: 12px; flex: none; border-radius: 2px; background: var(--mc-grad); }
+          #mail-center .mc-tool-section-head b { color: var(--mc-ink); font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+          #mail-center .mc-tool-section-head > span { color: #9aa9bb; font-size: 10.8px; }
+          #mail-center .mc-tool-section-head i { flex: 1; height: 1px; background: linear-gradient(90deg, #edf2f9, rgba(237, 242, 249, 0)); }
+
+          #mail-center .mc-tool-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+          #mail-center .mc-tool {
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            gap: 11px;
+            padding: 13px;
+            border: 1px solid #e9eff8;
+            border-radius: 12px;
+            background: #fff;
+            text-align: left;
+            cursor: pointer;
+            transition: transform .2s var(--ease-out), box-shadow .2s var(--ease-out), border-color .2s var(--ease-out), background .2s var(--ease-out);
+            animation: mcCardIn .4s var(--ease-out) backwards;
+            animation-delay: calc(min(var(--mc-i, 0), 16) * 26ms);
+          }
+          #mail-center .mc-tool:hover {
+            transform: translateY(-2px);
+            border-color: color-mix(in srgb, var(--mc-tool-color) 30%, #e2eaf5);
+            background: color-mix(in srgb, var(--mc-tool-color) 3%, #fff);
+            box-shadow: 0 14px 26px -22px color-mix(in srgb, var(--mc-tool-color) 80%, #0b1220), 0 2px 6px -4px rgba(19, 28, 46, .12);
+          }
+          #mail-center .mc-tool:active { transform: scale(.99); }
+          #mail-center .mc-tool:focus-visible { outline: 0; border-color: var(--mc-brand); box-shadow: var(--mc-ring); }
+          /* 图标默认软底 + 同色描边，hover 才变成实色：20 张卡不再是一片彩色积木 */
+          #mail-center .mc-tool-icon {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            flex: none;
+            border-radius: 10px;
+            color: color-mix(in srgb, var(--mc-tool-color, #378ADD) 90%, #0b1626);
+            background: color-mix(in srgb, var(--mc-tool-color, #378ADD) 15%, #fff);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mc-tool-color, #378ADD) 22%, transparent);
+            transition: background .2s var(--ease-out), color .2s var(--ease-out), box-shadow .2s var(--ease-out), transform .2s var(--ease-out);
+          }
+          #mail-center .mc-tool:hover .mc-tool-icon {
+            color: #fff;
+            background: var(--mc-tool-color, var(--mc-brand));
+            box-shadow: 0 10px 18px -12px var(--mc-tool-color, #378ADD), inset 0 1px 0 rgba(255, 255, 255, .35);
+            transform: translateY(-1px);
+          }
+          #mail-center .mc-tool-icon svg { width: 16px; height: 16px; }
+          #mail-center .mc-tool-body { min-width: 0; flex: 1; padding-right: 12px; }
+          #mail-center .mc-tool-body b { display: flex; align-items: center; gap: 6px; color: var(--mc-ink); font-size: 12.8px; font-weight: 700; letter-spacing: -.005em; }
+          #mail-center .mc-tool-body b em { font-style: normal; padding: 1px 5px; border-radius: 5px; background: #fff4e2; color: #a8690c; font-size: 9px; font-weight: 600; }
+          #mail-center .mc-tool-body > span { display: -webkit-box; margin-top: 3px; color: var(--mc-sub); font-size: 12px; line-height: 1.55; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+          #mail-center .mc-tool-body mark { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--mc-amber) 22%, #fff); color: #8a5a06; }
+          #mail-center .mc-tool-go {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: grid;
+            place-items: center;
+            width: 18px;
+            height: 18px;
+            color: color-mix(in srgb, var(--mc-tool-color) 68%, #6b7d94);
+            opacity: 0;
+            transform: translate(-3px, 3px);
+            transition: opacity .2s var(--ease-out), transform .2s var(--ease-out);
+          }
+          #mail-center .mc-tool:hover .mc-tool-go,
+          #mail-center .mc-tool:focus-visible .mc-tool-go { opacity: 1; transform: none; }
+          #mail-center .mc-tool-go svg { width: 13px; height: 13px; }
+
+          #mail-center .mc-tool-empty { display: grid; justify-items: center; gap: 7px; padding: 40px 20px; border: 1px dashed var(--mc-line); border-radius: 14px; background: #fcfdff; text-align: center; }
+          #mail-center .mc-tool-empty-icon { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 2px; border-radius: 12px; background: color-mix(in srgb, var(--mc-brand) 9%, #fff); color: var(--mc-brand); }
+          #mail-center .mc-tool-empty-icon svg { width: 19px; height: 19px; }
+          #mail-center .mc-tool-empty b { color: var(--mc-ink); font-size: 13px; font-weight: 700; }
+          #mail-center .mc-tool-empty > span { color: var(--mc-sub); font-size: 11.5px; }
+          #mail-center .mc-tool-empty-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+          #mail-center .mc-tool-empty-keys button { height: 26px; padding: 0 10px; border: 1px solid var(--mc-line); border-radius: 999px; background: #fff; color: var(--mc-sub); font-size: 11px; cursor: pointer; transition: color .16s var(--ease-out), border-color .16s var(--ease-out), background .16s var(--ease-out); }
+          #mail-center .mc-tool-empty-keys button:hover { border-color: var(--mc-brand); background: color-mix(in srgb, var(--mc-brand) 6%, #fff); color: var(--mc-brand); }
+
+          /* 推荐位：3 张横排大卡（邮件追踪 / AI 助手 / 客户速查），跟下面 4 列小卡区分开 */
+          #mail-center .mc-tool-hero-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+          #mail-center .mc-tool.is-featured {
+            align-items: center;
+            gap: 13px;
+            padding: 17px 18px;
+            border-radius: 14px;
+            border-color: color-mix(in srgb, var(--mc-tool-color) 18%, #e9eff8);
+            background: linear-gradient(135deg, color-mix(in srgb, var(--mc-tool-color) 7%, #fff), #fff 64%);
+          }
+          #mail-center .mc-tool.is-featured .mc-tool-icon { width: 40px; height: 40px; border-radius: 12px; }
+          #mail-center .mc-tool.is-featured .mc-tool-icon svg { width: 19px; height: 19px; }
+          #mail-center .mc-tool.is-featured .mc-tool-body b { font-size: 13.6px; }
+          #mail-center .mc-tool.is-featured .mc-tool-body > span { font-size: 12.2px; -webkit-line-clamp: 2; }
+
+          /* ── AI 邮件助手抽屉 ─────────────────────────────────────────────── */
+          #mail-center .mc-assist-mask {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            background: rgba(12, 22, 38, .34);
+            animation: mcAssistFade .18s ease-out;
+          }
+          #mail-center .mc-assist {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 81;
+            display: flex;
+            flex-direction: column;
+            width: min(486px, 100vw);
+            background: #fff;
+            border-left: 1px solid var(--mc-line);
+            box-shadow: -40px 0 80px -60px rgba(11, 22, 40, .8);
+            animation: mcAssistIn .26s var(--ease-out);
+          }
+          #mail-center .mc-assist-head {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            padding: 16px 16px 14px;
+            border-bottom: 1px solid #f1f5fb;
+          }
+          #mail-center .mc-assist-mark {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            flex: none;
+            border-radius: 11px;
+            background: linear-gradient(135deg, #7c5cff, #4a8ef7);
+            color: #fff;
+            box-shadow: 0 10px 20px -14px rgba(88, 80, 236, .9);
+          }
+          #mail-center .mc-assist-mark svg { width: 17px; height: 17px; }
+          #mail-center .mc-assist-title { min-width: 0; flex: 1; display: grid; gap: 2px; }
+          #mail-center .mc-assist-title b { color: var(--mc-ink); font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; }
+          #mail-center .mc-assist-title small { color: var(--mc-sub); font-size: 11.5px; }
+          #mail-center .mc-assist-x {
+            display: grid;
+            place-items: center;
+            width: 30px;
+            height: 30px;
+            flex: none;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 9px;
+            background: transparent;
+            color: #8496ab;
+            cursor: pointer;
+            transition: background .16s var(--ease-out), color .16s var(--ease-out);
+          }
+          #mail-center .mc-assist-x:hover { background: #f1f5fb; color: var(--mc-ink); }
+          #mail-center .mc-assist-x svg { width: 14px; height: 14px; }
+
+          #mail-center .mc-assist-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px 0; }
+          #mail-center .mc-assist-tab {
+            height: 28px;
+            padding: 0 11px;
+            border: 1px solid var(--mc-line);
+            border-radius: 999px;
+            background: #fff;
+            color: var(--mc-sub);
+            font-size: 11.5px;
+            cursor: pointer;
+            transition: background .16s var(--ease-out), border-color .16s var(--ease-out), color .16s var(--ease-out);
+          }
+          #mail-center .mc-assist-tab:hover { border-color: #cbdcf3; background: #f8fbff; color: var(--mc-ink); }
+          #mail-center .mc-assist-tab.is-active {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--mc-violet) 12%, #fff);
+            color: color-mix(in srgb, var(--mc-violet) 82%, #101b2e);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mc-violet) 26%, transparent);
+          }
+          #mail-center .mc-assist-lang { display: flex; align-items: center; gap: 6px; padding: 10px 16px 0; color: var(--mc-sub); font-size: 11.5px; }
+          #mail-center .mc-assist-lang button {
+            height: 26px;
+            padding: 0 11px;
+            border: 1px solid var(--mc-line);
+            border-radius: 8px;
+            background: #fff;
+            color: var(--mc-sub);
+            font-size: 11.5px;
+            cursor: pointer;
+          }
+          #mail-center .mc-assist-lang button.is-active { border-color: var(--mc-brand); background: color-mix(in srgb, var(--mc-brand) 8%, #fff); color: var(--mc-brand); font-weight: 600; }
+
+          #mail-center .mc-assist-field { display: grid; gap: 7px; padding: 12px 16px 0; }
+          #mail-center .mc-assist-field-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+          #mail-center .mc-assist-field-head b { flex: none; color: var(--mc-ink); font-size: 12px; font-weight: 700; }
+          #mail-center .mc-assist-field-head span { min-width: 0; overflow: hidden; color: #9aa9bb; font-size: 10.8px; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-assist-field textarea {
+            width: 100%;
+            min-height: 176px;
+            max-height: 34vh;
+            padding: 11px 12px;
+            border: 1px solid var(--mc-line);
+            border-radius: 11px;
+            background: var(--mc-soft);
+            color: var(--mc-ink);
+            font: inherit;
+            font-size: 12.3px;
+            line-height: 1.7;
+            resize: vertical;
+            outline: 0;
+            transition: border-color .16s var(--ease-out), background .16s var(--ease-out), box-shadow .16s var(--ease-out);
+          }
+          #mail-center .mc-assist-field textarea:focus { border-color: var(--mc-brand); background: #fff; box-shadow: var(--mc-ring); }
+          #mail-center .mc-assist-field textarea::placeholder { color: #a3b0c2; }
+
+          #mail-center .mc-assist-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; }
+          #mail-center .mc-assist-bar .btn { height: 32px; padding: 0 15px; font-size: 12.3px; }
+          #mail-center .mc-assist-note { flex: 1 1 100%; color: #9aa9bb; font-size: 10.6px; line-height: 1.55; }
+
+          #mail-center .mc-assist-out { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 18px; border-top: 1px solid #f5f8fc; }
+          #mail-center .mc-assist-idle { display: grid; justify-items: center; gap: 6px; padding: 42px 16px; text-align: center; }
+          #mail-center .mc-assist-idle > span:first-child { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: color-mix(in srgb, var(--mc-violet) 10%, #fff); color: var(--mc-violet); }
+          #mail-center .mc-assist-idle svg { width: 20px; height: 20px; }
+          #mail-center .mc-assist-idle b { color: var(--mc-ink); font-size: 12.8px; font-weight: 700; }
+          #mail-center .mc-assist-idle > span:last-child { color: #9aa9bb; font-size: 11.3px; }
+          #mail-center .mc-assist-loading { display: grid; grid-template-columns: repeat(3, 7px) minmax(0, 1fr); align-items: center; gap: 9px; padding: 24px 4px; color: var(--mc-sub); font-size: 11.5px; }
+          #mail-center .mc-assist-loading i { width: 7px; height: 7px; border-radius: 50%; background: var(--mc-violet); animation: mcAssistDot 1.1s ease-in-out infinite; }
+          #mail-center .mc-assist-loading i:nth-child(2) { animation-delay: .16s; }
+          #mail-center .mc-assist-loading i:nth-child(3) { animation-delay: .32s; }
+          #mail-center .mc-assist-error { display: grid; justify-items: start; gap: 7px; margin-top: 14px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--mc-rose) 26%, #f0d6dd); border-radius: 12px; background: color-mix(in srgb, var(--mc-rose) 5%, #fff); }
+          #mail-center .mc-assist-error b { color: #a82f4b; font-size: 12.5px; }
+          #mail-center .mc-assist-error span { color: #8a5563; font-size: 11.5px; line-height: 1.6; word-break: break-word; }
+          #mail-center .mc-assist-error .btn { height: 28px; padding: 0 12px; margin-top: 2px; font-size: 11.5px; }
+          #mail-center .mc-assist-result { display: grid; gap: 9px; padding-top: 13px; animation: mcFocusIn .3s var(--ease-out); }
+          #mail-center .mc-assist-result-head { display: flex; align-items: center; gap: 8px; }
+          #mail-center .mc-assist-result-head b { color: var(--mc-ink); font-size: 12px; font-weight: 700; }
+          #mail-center .mc-assist-mini {
+            height: 25px;
+            padding: 0 10px;
+            border: 1px solid var(--mc-line);
+            border-radius: 8px;
+            background: #fff;
+            color: var(--mc-sub);
+            font-size: 11px;
+            cursor: pointer;
+            transition: border-color .16s var(--ease-out), color .16s var(--ease-out), background .16s var(--ease-out);
+          }
+          #mail-center .mc-assist-mini:hover { border-color: var(--mc-brand); background: color-mix(in srgb, var(--mc-brand) 6%, #fff); color: var(--mc-brand); }
+          #mail-center .mc-assist-text {
+            padding: 13px 14px;
+            border: 1px solid #eef3fa;
+            border-radius: 12px;
+            background: #fbfdff;
+            color: var(--mc-ink);
+            font-size: 12.6px;
+            line-height: 1.78;
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+          @keyframes mcAssistIn { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
+          @keyframes mcAssistFade { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes mcAssistDot { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
+
+          /* 滚动条：只在邮件中心内部细化，不影响全局 */
+          #mail-center ::-webkit-scrollbar { width: 10px; height: 10px; }
+          #mail-center ::-webkit-scrollbar-track { background: transparent; }
+          #mail-center ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: #d5e0ee; background-clip: content-box; }
+          #mail-center ::-webkit-scrollbar-thumb:hover { background: #b9c9dd; background-clip: content-box; }
+
+          /* 弹窗：绑定邮箱 */
+          .mail-center-account-modal { width: min(640px, calc(100vw - 32px)); }
+          .mail-center-account-modal #modalDescription { display: none; }
+          .mail-center-account-modal .mc-form-note { padding: 9px 11px; border-radius: 8px; background: #f4f8fd; color: #5b7591; font-size: 11.5px; line-height: 1.6; }
+
+          /* 弹窗：写邮件（邮箱客户端式：信封分行卡 + 独立正文画布） */
+          /* ⚠️ 弹窗挂在 #appModal，不在 #mail-center 子树内 → --mc-* 令牌必须在这里自带一份，否则 var 全部解析失败（边框会回退成 currentColor 深色） */
+          .mail-center-compose-modal {
+            --mc-brand: #378ADD;
+            --mc-ink: #131c2e;
+            --mc-sub: #6b7d94;
+            --mc-line: #e4eaf3;
+            --mc-card: #ffffff;
+            --mc-ring: 0 0 0 3px rgba(74, 142, 247, .14);
+            width: min(680px, calc(100vw - 32px));
+          }
+          .mail-center-compose-modal #modalDescription { display: none; }
+          .mail-center-compose-modal .mc-compose-stack { display: grid; gap: 12px; }
+          /* 信封区：行内输入无边框，聚焦染整行 —— 这是与常见邮箱客户端一致的写法 */
+          .mail-center-compose-modal .mc-compose-env { border: 1px solid var(--mc-line); border-radius: 12px; background: var(--mc-card); overflow: hidden; }
+          .mail-center-compose-modal .mc-compose-row { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 14px; border-top: 1px solid var(--mc-line); transition: background .15s var(--ease-out), box-shadow .15s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-row[hidden] { display: none; }
+          .mail-center-compose-modal .mc-compose-row:first-child { border-top: 0; }
+          .mail-center-compose-modal .mc-compose-row:focus-within { background: rgba(74, 142, 247, .045); box-shadow: inset 2px 0 0 var(--mc-brand); }
+          .mail-center-compose-modal .mc-compose-row-label { flex: none; width: 46px; color: var(--mc-sub); font-size: 12px; font-weight: 600; }
+          .mail-center-compose-modal .mc-compose-row-main { flex: 1; min-width: 0; }
+          .mail-center-compose-modal .mc-compose-row input,
+          .mail-center-compose-modal .mc-compose-row select {
+            width: 100%; height: 40px; padding: 0; border: 0; background: transparent;
+            color: var(--mc-ink); font-size: 13px; font-family: var(--font-sans); outline: none;
+          }
+          .mail-center-compose-modal .mc-compose-row input::placeholder { color: #a5b1c2; }
+          .mail-center-compose-modal .mc-compose-row select {
+            appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 20px;
+            background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7d94' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") no-repeat right center / 12px;
+            text-overflow: ellipsis;
+          }
+          .mail-center-compose-modal .mc-compose-link { flex: none; border: 0; padding: 3px 9px; border-radius: 999px; background: none; color: var(--mc-brand); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .15s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-link:hover { background: rgba(74, 142, 247, .09); }
+          /* 收件人 chips：与常见邮箱客户端一致的地址标签 */
+          .mail-center-compose-modal .mc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px; }
+          .mail-center-compose-modal .mc-chips input { width: auto; flex: 1 1 150px; min-width: 150px; }
+          .mail-center-compose-modal .mc-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 4px 2px 9px; border-radius: 999px; background: rgba(74, 142, 247, .09); border: 1px solid rgba(74, 142, 247, .22); color: var(--mc-ink); font-size: 12px; line-height: 1.6; }
+          .mail-center-compose-modal .mc-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .mail-center-compose-modal .mc-chip-x { width: 16px; height: 16px; flex: none; border: 0; border-radius: 50%; background: none; color: var(--mc-sub); cursor: pointer; font-size: 12px; line-height: 1; display: grid; place-items: center; }
+          .mail-center-compose-modal .mc-chip-x:hover { background: rgba(217, 74, 106, .12); color: var(--mc-rose); }
+          /* 联系人补全下拉：fixed 定位挂在 body，避开信封卡 overflow:hidden 的裁剪 */
+          .mc-suggest { position: fixed; z-index: 2100; display: grid; padding: 4px; background: #fff; border: 1px solid #e4eaf3; border-radius: 10px; box-shadow: 0 16px 40px -16px rgba(19, 28, 46, .35); }
+          .mc-suggest-item { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border: 0; padding: 7px 10px; border-radius: 7px; background: none; cursor: pointer; text-align: left; }
+          .mc-suggest-item:hover, .mc-suggest-item.is-active { background: rgba(74, 142, 247, .08); }
+          .mc-suggest-email { font-size: 12.5px; color: #131c2e; }
+          .mc-suggest-label { font-size: 11px; color: #6b7d94; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+          /* 正文画布 = 收件人看到的版式（与后端 buildTrackedHtmlBody 包装逐项一致：Arial 14px/1.6/#16223b），所见即所得 */
+          .mail-center-compose-modal .mc-compose-editor-wrap { display: grid; }
+          .mail-center-compose-modal .mc-compose-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 4px 6px; border: 1px solid var(--mc-line); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--mc-soft, #f6f9fd); }
+          .mail-center-compose-modal .mc-compose-tools button { min-width: 26px; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--mc-sub, #6b7d94); font-size: 11.5px; cursor: pointer; transition: background .14s var(--ease-out), color .14s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-tools button:hover { background: #fff; color: var(--mc-ink, #131c2e); box-shadow: 0 1px 2px rgba(19, 28, 46, .12); }
+          .mail-center-compose-modal .mc-compose-tools button svg { width: 13px; height: 13px; display: block; }
+          .mail-center-compose-modal .mc-compose-tools .mc-compose-hint { margin-left: auto; padding-right: 6px; color: #a5b1c2; font-size: 10.5px; }
+          .mail-center-compose-modal .mc-compose-tools .mc-tools-sep { width: 1px; height: 15px; margin: 0 3px; background: #e2e9f3; flex: none; }
+          .mail-center-compose-modal .mc-compose-tools button.is-armed { background: rgba(74, 142, 247, .16); color: #2f6bc4; box-shadow: inset 0 0 0 1px rgba(74, 142, 247, .35); }
+          .mail-center-compose-modal .mc-compose-tools select { height: 24px; padding: 0 2px; border: 0; border-radius: 6px; background: none; color: var(--mc-sub, #6b7d94); font-size: 11.5px; cursor: pointer; outline: 0; max-width: 86px; }
+          .mail-center-compose-modal .mc-compose-tools select:hover { background: #fff; color: var(--mc-ink, #131c2e); }
+          .mail-center-compose-modal .mc-compose-tools .mc-tool-color { position: relative; display: inline-grid; place-items: center; min-width: 26px; height: 24px; border-radius: 6px; cursor: pointer; transition: background .14s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-tools .mc-tool-color:hover { background: #fff; box-shadow: 0 1px 2px rgba(19, 28, 46, .12); }
+          .mail-center-compose-modal .mc-compose-tools .mc-tool-color input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; background: none; }
+          .mail-center-compose-modal .mc-compose-tools .mc-tool-color .mc-tool-color-a { font-size: 12px; font-weight: 700; pointer-events: none; border-radius: 3px; padding: 0 3px; }
+          .mail-center-compose-modal .mc-compose-editor img { max-width: 100%; height: auto; border-radius: 4px; }
+
+          /* 就地回复（Gmail inline reply）：长在阅读栏里，原信就在上面 */
+          .mc-compose-inline {
+            margin: 14px 20px 18px;
+            border: 1px solid #dfe7f2; border-radius: 13px; overflow: hidden;
+            background: #fff;
+            box-shadow: 0 12px 32px -14px rgba(19, 28, 46, .22);
+          }
+          .mc-compose-inline-head { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid #e4eaf3; background: linear-gradient(180deg, #fbfdff, #fff); cursor: default; }
+          .mc-compose-inline.is-min .mc-compose-inline-head { border-bottom: 0; cursor: pointer; }
+          .mc-compose-inline.is-min .mc-compose-inline-body,
+          .mc-compose-inline.is-min .mc-compose-drawer-foot { display: none; }
+          .mc-compose-inline-head h3 { margin: 0; overflow: hidden; color: #131c2e; font-size: 13.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+          .mc-compose-inline-sub { overflow: hidden; color: #a5b1c2; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; margin-right: auto; }
+          .mc-compose-inline.is-min { margin-bottom: 0; }
+          .mc-compose-inline .mc-compose-stack { padding: 12px 14px; }
+          .mc-compose-inline .mc-compose-env { margin-bottom: 10px; }
+          .mail-center-compose-modal #mcComposeBody {
+            width: 100%; min-height: 200px; max-height: 380px; overflow-y: auto; padding: 12px 14px;
+            border: 1px solid var(--mc-line); border-radius: 0 0 12px 12px; background: var(--mc-card);
+            /* !important：全局 `input,select,textarea{font:var(--ctrl-fs)!important}` 会压掉 id 规则；正文必须是 14px/1.6 才与发出的 HTML 版式一致（WYSIWYG） */
+            font-family: Arial, Helvetica, sans-serif; font-size: 14px !important; line-height: 1.6; color: #16223b;
+            transition: border-color .16s var(--ease-out), box-shadow .16s var(--ease-out);
+            word-break: break-word;
+          }
+          .mail-center-compose-modal #mcComposeBody:focus { outline: none; border-color: rgba(74, 142, 247, .55); box-shadow: var(--mc-ring); }
+          .mail-center-compose-modal #mcComposeBody:empty::before { content: attr(data-placeholder); color: #a5b1c2; pointer-events: none; }
+          .mail-center-compose-modal #mcComposeBody.is-dragover { border-color: rgba(74, 142, 247, .6); background: rgba(74, 142, 247, .04); }
+          .mail-center-compose-modal #mcComposeBody a { color: #2f6fb5; }
+          .mail-center-compose-modal #mcComposeBody ul, .mail-center-compose-modal #mcComposeBody ol { margin: 4px 0; padding-left: 22px; }
+          /* 附件条与附件 chips */
+          .mail-center-compose-modal .mc-compose-bar { display: flex; align-items: center; gap: 10px; }
+          .mail-center-compose-modal .mc-compose-bar-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px dashed var(--mc-line); border-radius: 999px; background: none; color: var(--mc-sub); font-size: 12px; cursor: pointer; transition: color .15s var(--ease-out), border-color .15s var(--ease-out), background .15s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-bar-btn:hover { color: var(--mc-brand); border-color: rgba(74, 142, 247, .45); background: rgba(74, 142, 247, .05); }
+          .mail-center-compose-modal .mc-compose-bar-btn svg { width: 13px; height: 13px; flex: none; }
+          .mail-center-compose-modal .mc-compose-draft { color: #a5b1c2; font-size: 11px; opacity: 0; transition: opacity .3s var(--ease-out); }
+          .mail-center-compose-modal .mc-compose-draft.is-visible { opacity: 1; }
+          .mail-center-compose-modal .mc-attach-list { display: flex; flex-wrap: wrap; gap: 6px; }
+          .mail-center-compose-modal .mc-attach-list:empty { display: none; }
+          .mail-center-compose-modal .mc-attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 10px; border: 1px solid var(--mc-line); border-radius: 8px; background: var(--mc-soft, #f6f9fd); color: var(--mc-ink); font-size: 11.5px; }
+          .mail-center-compose-modal .mc-attach-chip > svg { width: 12px; height: 12px; flex: none; color: var(--mc-brand); }
+          .mail-center-compose-modal .mc-attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+          .mail-center-compose-modal .mc-attach-chip small { color: var(--mc-sub); flex: none; }
+          .mail-center-compose-modal .mc-attach-x { border: 0; padding: 0 2px; background: none; color: var(--mc-sub); font-size: 13px; line-height: 1; cursor: pointer; }
+          .mail-center-compose-modal .mc-attach-x:hover { color: var(--mc-rose, #d94a6a); }
+          .mail-center-compose-modal .mc-form-note { padding: 0 2px; border: 0; background: none; color: var(--mc-sub); font-size: 11px; line-height: 1.55; }
+
+          /* 写邮件 = 右下角浮窗（Gmail / QQ 邮箱惯例）：不遮邮件列表，可最小化成标题条，
+             收起草稿自动保留；打开时让开右下角「看邮箱」悬浮钮 */
+          .mc-compose-drawer {
+            position: fixed; right: 22px; bottom: 22px; z-index: 1200;
+            display: flex; flex-direction: column;
+            width: min(620px, calc(100vw - 44px));
+            height: min(660px, calc(100dvh - 44px));
+            background: #fff; border: 1px solid #dfe7f2; border-radius: 14px; overflow: hidden;
+            box-shadow: 0 24px 64px -18px rgba(19, 28, 46, .34), 0 6px 18px -8px rgba(19, 28, 46, .18);
+            opacity: 0; transform: translateY(26px) scale(.97); transform-origin: 100% 100%;
+            transition: opacity .22s var(--ease-out, ease-out), transform .26s var(--ease-expo, cubic-bezier(.16,1,.3,1));
+          }
+          .mc-compose-drawer.is-open { opacity: 1; transform: none; }
+          .mc-compose-drawer.is-min { height: auto; } /* 容器随内容收缩，只剩标题条 */
+          .mc-compose-drawer-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #e4eaf3; background: linear-gradient(180deg, #fbfdff, #fff); cursor: default; }
+          .mc-compose-drawer.is-min .mc-compose-drawer-head { border-bottom: 0; cursor: pointer; }
+          .mc-compose-drawer.is-min .mc-compose-drawer-body,
+          .mc-compose-drawer.is-min .mc-compose-drawer-foot { display: none; }
+          .mc-compose-drawer-head h3 { margin: 0; color: #131c2e; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+          .mc-compose-drawer-sub { color: #a5b1c2; font-size: 11px; margin-right: auto; }
+          .mc-compose-drawer-head .mc-compose-head-btn { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #6b7d94; cursor: pointer; transition: background .14s var(--ease-out), color .14s var(--ease-out); }
+          .mc-compose-drawer-head .mc-compose-head-btn:hover { background: #f0f4fa; color: #131c2e; }
+          .mc-compose-head-btn svg { width: 13px; height: 13px; flex: none; }
+          .mc-compose-drawer-close { font-size: 19px; }
+          .mc-compose-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px; }
+          .mc-compose-drawer-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 11px 16px; border-top: 1px solid #e4eaf3; background: #fafbfd; }
+          .mc-compose-drawer-foot .btn { height: 34px; padding: 0 16px; white-space: nowrap; }
+          /* 发送按钮里的纸飞机 svg 无固有尺寸，不给定宽高会吃光 flex 空间把「发送」挤成竖排（同 mcIcon 事故） */
+          .mc-compose-drawer-foot .btn svg { width: 13px; height: 13px; flex: none; }
+          /* 发送中：按钮里转一个圈，提示已在投递、防重复点击 */
+          #mcComposeSend.is-sending::before { content: ""; width: 12px; height: 12px; flex: none; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: mc-send-spin .7s linear infinite; }
+          @keyframes mc-send-spin { to { transform: rotate(360deg); } }
+          /* 引用块：折叠/展开（块整体不可编辑，标题条可点） */
+          .mail-center-compose-modal .mc-quote-block { margin: 10px 0 4px; border: 1px solid #e4eaf3; border-radius: 10px; background: #f8fafd; overflow: hidden; }
+          .mail-center-compose-modal .mc-quote-toggle { display: block; width: 100%; padding: 7px 12px; border: 0; background: none; color: #6b7d94; font-size: 11px; cursor: pointer; text-align: left; transition: background .14s var(--ease-out), color .14s var(--ease-out); }
+          .mail-center-compose-modal .mc-quote-toggle:hover { background: #eef4fb; color: #131c2e; }
+          .mail-center-compose-modal .mc-quote-content { padding: 2px 12px 10px; border-top: 1px solid #eef2f8; color: #55647a; font-size: 13px; line-height: 1.65; word-break: break-word; }
+          .mail-center-compose-modal .mc-quote-block.is-collapsed .mc-quote-content { display: none; }
+          .mail-center-compose-modal .mc-quote-block.is-collapsed { background: transparent; }
+          /* 通讯录选人面板 */
+          .mc-picker { --mc-brand:#378ADD; --mc-ink:#131c2e; --mc-sub:#6b7d94; --mc-line:#e4eaf3; }
+          .mc-picker-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+          .mc-picker-bar input { flex: 1; }
+          .mc-picker-bar select { width: auto; flex: none; }
+          .mc-picker-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--mc-line); border-radius: 10px; }
+          .mc-picker-loading { padding: 26px 14px; text-align: center; color: var(--mc-sub); font-size: 12px; }
+          .mc-picker-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid #f0f4fa; transition: background .12s var(--ease-out); }
+          .mc-picker-row:last-child { border-bottom: 0; }
+          .mc-picker-row:hover { background: #f6f9fd; }
+          .mc-picker-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--mc-brand); flex: none; }
+          .mc-picker-row-text { display: flex; flex-direction: column; min-width: 0; }
+          .mc-picker-row-text b { color: var(--mc-ink); font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .mc-picker-row-text small { color: var(--mc-sub); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .mc-picker-count { margin-top: 8px; color: var(--mc-sub); font-size: 11px; text-align: right; }
+          /* 浮窗开着时，右下角「看邮箱」悬浮钮让位（撰写浮窗本身就是入口） */
+          body:has(.mc-compose-drawer) .mc-mail-fab { display: none; }
+          /* 头部按钮（最小化/关闭）：浮窗头与就地回复头共用 */
+          .mc-compose-drawer-head .mc-compose-head-btn, .mc-compose-inline-head .mc-compose-head-btn { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #6b7d94; cursor: pointer; transition: background .14s var(--ease-out), color .14s var(--ease-out); }
+          .mc-compose-drawer-head .mc-compose-head-btn:hover, .mc-compose-inline-head .mc-compose-head-btn:hover { background: #f0f4fa; color: #131c2e; }
+          .mc-compose-head-btn svg { width: 13px; height: 13px; flex: none; }
+          .mc-compose-drawer-close { font-size: 19px; }
+          /* 窄屏：浮窗贴满宽度，贴底 */
+          @media (max-width: 720px) {
+            .mc-compose-drawer { right: 0; bottom: 0; width: 100vw; height: calc(100dvh - 30px); border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .mc-compose-drawer { transition: none; }
+          }
+
+          .mail-center-compose-modal .mc-compose-drawer-head .mc-personalize-btn svg { width: 13px; height: 13px; flex: none; }
+          /* 千人千面按钮：品牌蓝幽灵胶囊（勿用紫蓝渐变 —— 那是上一版的败笔），生成中雷达呼吸 */
+          .mail-center-compose-modal .modal-head { gap: 10px; }
+          .mail-center-compose-modal .mc-personalize-btn {
+            margin-left: auto; white-space: nowrap; flex: none;
+            display: inline-flex; align-items: center; gap: 6px;
+            border: 1px solid rgba(74, 142, 247, .32); cursor: pointer; border-radius: 999px; padding: 6px 13px;
+            color: var(--mc-brand); font-size: 12.5px; font-weight: 600;
+            background: rgba(74, 142, 247, .07);
+            transition: transform .16s var(--ease-out), box-shadow .16s var(--ease-out), border-color .16s var(--ease-out), background .16s var(--ease-out);
+          }
+          .mail-center-compose-modal .mc-personalize-btn svg { width: 13px; height: 13px; flex: none; }
+          .mail-center-compose-modal .mc-personalize-btn:hover { background: rgba(74, 142, 247, .12); border-color: rgba(74, 142, 247, .5); box-shadow: 0 6px 16px -8px rgba(55, 138, 221, .55); transform: translateY(-1px); }
+          .mail-center-compose-modal .mc-personalize-btn:active { transform: scale(.97); }
+          .mail-center-compose-modal .mc-personalize-btn:disabled { cursor: default; }
+          .mail-center-compose-modal .mc-personalize-btn.is-busy {
+            background: rgba(74, 142, 247, .12); border-color: rgba(74, 142, 247, .55);
+            animation: mcPersonPulse 1.6s ease-in-out infinite;
+          }
+          @keyframes mcPersonPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(55, 138, 221, .30); }
+            50% { box-shadow: 0 0 0 6px rgba(55, 138, 221, 0); }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .mail-center-compose-modal .mc-personalize-btn,
+            .mail-center-compose-modal .mc-personalize-btn.is-busy { animation: none; }
+          }
+
+          @keyframes mcCardIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+          @keyframes mcFabIn { from { opacity: 0; transform: translateY(16px) scale(.92); } to { opacity: 1; transform: none; } }
+          @keyframes mcEvIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+          @keyframes mcNodeIn { from { opacity: 0; transform: scale(.35) translateY(5px); } to { opacity: 1; transform: none; } }
+          @keyframes mcNodeRing { 0% { opacity: .8; transform: scale(.82); } 70% { opacity: 0; transform: scale(1.55); } 100% { opacity: 0; transform: scale(1.55); } }
+          @keyframes mcNodeFlash { 0% { transform: scale(1); } 35% { transform: scale(1.32); filter: brightness(1.12); } 70% { transform: scale(.97); } 100% { transform: scale(1); } }
+          @keyframes mcFlowSweep { from { left: -90px; } to { left: 100%; } }
+          @keyframes mcFocusIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+          /* 每组正好 4 个工具：4 列在 1400 以下会把卡片压到 260 上下、描述折成三行，
+             这时候直接落成 2 列，并把内边距、图标、字号放大一档，免得宽卡片显得空 */
+          @media (max-width: 1399px) {
+            #mail-center .mc-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            /* 推荐位只有 3 个：落成 2 列会出现 2+1 的孤卡，保持 3 列、收紧内边距 */
+            #mail-center .mc-tool-hero-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+            #mail-center .mc-tool.is-featured { padding: 14px 15px; gap: 11px; }
+            #mail-center .mc-tool.is-featured .mc-tool-icon { width: 36px; height: 36px; }
+            #mail-center .mc-tool { padding: 15px 16px; }
+            #mail-center .mc-tool-icon { width: 38px; height: 38px; border-radius: 11px; }
+            #mail-center .mc-tool-icon svg { width: 17px; height: 17px; }
+            #mail-center .mc-tool-body b { font-size: 13.5px; }
+            #mail-center .mc-tool-body > span { font-size: 12.2px; }
+          }
+          @media (max-width: 1099px) {
+            #mail-center .mc-inbox,
+            #mail-center .mc-lookup-grid { grid-template-columns: minmax(0, 1fr); }
+            #mail-center .mc-flow-tools { padding: 10px 14px 0; }
+          }
+          @media (max-width: 860px) {
+            #mail-center .mc-lookup-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            /* 3 列在 860 以下会把标题折成两行，推荐位改成整行横条 */
+            #mail-center .mc-tool-hero-grid { grid-template-columns: minmax(0, 1fr); }
+            /* 窄一格放不下「搜索框 + 计数」，把计数换到第二行 */
+            #mail-center .mc-tool-bar { grid-template-columns: minmax(0, 1fr); }
+            #mail-center .mc-tool-total { justify-self: start; }
+            /* 事件卡的三栏放不下：图标 + 正文占两栏，「距上一条 / 上一条下一条」换到底部一行 */
+            #mail-center .mc-focus { grid-template-columns: auto minmax(0, 1fr); gap: 11px 12px; }
+            #mail-center .mc-focus-side { grid-column: 1 / -1; grid-auto-flow: column; align-items: center; justify-content: space-between; justify-items: start; }
+            #mail-center .mc-focus-gap { text-align: left; }
+            #mail-center .mc-focus-gap b { display: inline; margin-right: 4px; }
+            #mail-center .mc-focus-top time { margin-left: 0; }
+            #mail-center .mc-journey-legend { gap: 8px; }
+          }
+          @media (max-width: 560px) {
+            #mail-center .mc-tool-grid { grid-template-columns: minmax(0, 1fr); }
+            #mail-center .mc-journey-title b { font-size: 15px; }
+            #mail-center .mc-flow-canvas { padding: 0 18px; }
+            #mail-center .mc-flow-axis { left: 18px; right: 18px; }
+            #mail-center .mc-tool-section-head > span { display: none; }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            #mail-center .mc-account,
+            #mail-center .mc-msg,
+            #mail-center .mc-person,
+            #mail-center .mc-tool,
+            #mail-center .mc-node,
+            #mail-center .mc-node.is-active::after,
+            #mail-center .mc-flow-axis::after,
+            #mail-center .mc-focus,
+            #mail-center .mc-mail-fab,
+            #mail-center .mc-account-dot.is-running { animation: none !important; }
+            #mail-center .mc-account:hover,
+            #mail-center .mc-tool:hover,
+            #mail-center .mc-node:hover,
+            #mail-center .mc-mail-fab:hover { transform: none; }
+            #mail-center .mc-tool:hover .mc-tool-icon,
+            #mail-center .mc-tool-pill:hover,
+            #mail-center .mc-tool-go { transform: none; }
+            #mail-center .mc-tool-go { opacity: 1; }
+            #mail-center .mc-assist,
+            #mail-center .mc-assist-mask,
+            #mail-center .mc-assist-result,
+            #mail-center .mc-assist-loading i { animation: none !important; }
+          }
+        </style>
 
         <div class="view" id="pipeline">
           <div class="page-head">
@@ -31098,11 +32355,11 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <div class="view" id="profile">
           <div class="page-head">
             <div><h1>个人主页</h1></div>
-            <div class="head-actions"><button class="btn" id="profileRefreshButton">刷新资料</button><button class="btn" id="profileDomainAuthButton">域名检测</button><button class="btn" id="profileTestSmtpButton">发送测试邮件</button><button class="btn danger" id="profileClearEmailButton">清空邮箱绑定</button><button class="btn primary" id="profileSaveButton">保存个人资料</button></div>
+            <div class="head-actions"><button class="btn" id="profileRefreshButton">刷新资料</button><button class="btn primary" id="profileSaveButton">保存个人资料</button></div>
           </div>
 
           <div class="profile-grid">
-            <div class="email-config-reminder missing" id="profileDevelopmentEmailReady"><i></i><div><span>开发信发件配置</span><b>正在检查</b></div></div>
+            <div class="email-config-reminder missing" id="profileDevelopmentEmailReady" role="button" tabindex="0" title="去邮件中心 → 邮箱设置"><i></i><div><span>开发信发件配置</span><b>正在检查</b></div></div>
             <section class="profile-hero-panel">
               <div class="profile-identity">
                 <div class="profile-avatar-xl" id="profileAvatarLarge">--</div>
@@ -31119,7 +32376,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div class="profile-hero-metrics">
                 <div><span>数据范围</span><b id="profileScopeMetric">本人业务</b></div>
                 <div><span>账号角色</span><b id="profileRoleMetric">业务员</b></div>
-                <div><span>发件身份</span><b id="profileMailMetric">未绑定</b></div>
+                <div class="is-link" data-goto-mail-settings role="button" tabindex="0" title="去邮件中心 → 邮箱设置"><span>发件身份</span><b id="profileMailMetric">未绑定</b><small>邮箱设置 →</small></div>
               </div>
             </section>
 
@@ -31132,21 +32389,6 @@ body.platform-mode .workspace-tabs { display:none !important; }
               </div>
               <div class="profile-form-grid" style="margin-top:12px">
                 <div class="form-field"><label>登录账号</label><input id="profileLoginEmail" readonly></div>
-                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 sales@your-company.com"></div>
-                <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Sales Team"></div>
-                <div class="form-field"><label>SMTP服务器</label><input id="profileSmtpHost" placeholder="例如 smtp.exmail.qq.com"></div>
-                <div class="form-field"><label>SMTP端口</label><input id="profileSmtpPort" type="number" min="1" max="65535" placeholder="465 或 587"></div>
-                <div class="form-field"><label>SMTP账号</label><input id="profileSmtpUser" placeholder="通常与发件邮箱一致"></div>
-                <div class="form-field"><label>SMTP授权码/密码</label><input id="profileSmtpPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small id="profileSmtpPasswordHint">保存后不会明文回显。</small></div>
-                <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给发件邮箱"></div>
-                <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select><small id="profileSmtpConfigHint">465 通常选 SSL/TLS，587 通常选 STARTTLS/普通。</small></div>
-                <div class="form-field"><label>邮箱用途</label><input value="搜客清单真实发信身份" readonly></div>
-                <div class="form-field full"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea></div>
-              </div>
-              <div class="email-status-box">
-                <div><span>绑定状态</span><b id="profileEmailStatus">未绑定</b></div>
-                <div><span>签名状态</span><b id="profileSignatureStatus">待完善</b></div>
-                <div><span>SMTP状态</span><b id="profileSmtpStatus">未配置</b></div>
               </div>
             </section>
 
@@ -31155,42 +32397,8 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div class="profile-password-form">
                 <div class="form-field"><label for="profileCurrentPassword">当前密码</label><input id="profileCurrentPassword" type="password" autocomplete="current-password" placeholder="输入当前登录密码"></div>
                 <div class="form-field"><label for="profileNewPassword">新密码</label><input id="profileNewPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位"></div>
-                <div class="form-field"><label for="profileConfirmPassword">确认新密码</label><input id="profileConfirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入新密码"></div>
+                <div class="form-field"><label for="profileConfirmPassword">确认新密码</label><input id="profileConfirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入"></div>
                 <div class="profile-password-actions"><small>密码长度为 8 至 128 位。保存后，旧密码和当前登录会话都会失效。</small><button class="btn primary" id="profileChangePasswordButton" type="button">修改登录密码</button></div>
-              </div>
-            </section>
-
-            <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div><h2>收信监听（开发信回流）</h2><small>开启后自动轮询收件箱，识别客户回信与退信，回流到触达记录</small></div></div></div>
-              <div class="profile-form-grid" style="margin-top:12px">
-                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="profileImapEnabled"> 启用 IMAP 收信监听</label></div>
-                <div class="form-field"><label>IMAP服务器</label><input id="profileImapHost" placeholder="例如 imap.exmail.qq.com"></div>
-                <div class="form-field"><label>IMAP端口</label><input id="profileImapPort" type="number" min="1" max="65535" placeholder="993"></div>
-                <div class="form-field"><label>IMAP账号</label><input id="profileImapUser" placeholder="通常与发件邮箱一致"></div>
-                <div class="form-field"><label>IMAP授权码/密码</label><input id="profileImapPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small>保存后不会明文回显。</small></div>
-                <div class="form-field"><label>加密方式</label><select id="profileImapSecure"><option value="true">SSL/TLS（993）</option><option value="false">STARTTLS/普通（143）</option></select></div>
-                <div class="form-field"><label>最近同步</label><b id="profileImapSyncStatus" class="field-value">尚未同步</b></div>
-                <div class="form-field full"><div class="row-actions"><button class="btn" id="profileTestImapButton" type="button">测试 IMAP</button><button class="btn" id="profileClearImapButton" type="button">清除 IMAP 密码</button></div></div>
-              </div>
-            </section>
-
-            <section class="panel section">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>发件邮箱池（轮换发信）</h2><small>登记多个 SMTP 发件邮箱后，自动发信方案可按「每 N 封」轮流使用，降低单个邮箱的发信压力</small></div></div>
-                <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 登记发件邮箱</button></div>
-              </div>
-              <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
-            </section>
-
-            <section class="panel section">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.5"/></svg></span><div><h2>已读追踪（客户是否看了邮件）</h2><small>填写本系统对收件人<strong>公网可达</strong>的访问地址后，发出的开发信会自动附带追踪信号：客户打开邮件（加载像素）或点击链接，都会回流到「开发信 → 回流」台账</small></div></div>
-                <div class="head-actions"><button class="btn primary" id="trackingSaveButton" type="button">保存</button></div>
-              </div>
-              <div class="form-grid">
-                <div class="form-field full"><label>追踪回传地址（留空 = 关闭追踪）</label><input id="trackingBaseUrlInput" placeholder="例如 https://crm.your-company.com"><small>要求：收件人的邮件客户端必须能访问这个地址（公网域名或公网 IP）。本机 localhost / 内网地址对客户不可达，填了也不会有信号。</small></div>
-                <div class="form-field full"><label>当前状态</label><div id="trackingConfigStatus" class="field-value">加载中…</div></div>
-                <div class="form-field full"><small style="color:#8a94a6;line-height:1.8">判读口径：打开信号 = 客户端加载了 1×1 像素，属「参考信号」而非铁证——部分客户端默认拦远程图片、Apple 邮件隐私保护会代为预取，可能高估；点击信号需客户真实点击链接，更可靠。两者都只是信号，客户回信才是确证。</small></div>
               </div>
             </section>
 

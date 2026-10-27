@@ -105,7 +105,43 @@ export function ensureSenderMailboxSchema(pool: Pool) {
     updated_at DATETIME(3) NOT NULL,
     INDEX idx_sender_mailbox_owner(owner_id, enabled),
     INDEX idx_sender_mailbox_team(team_id)
-  )`);
+  )`).then(async () => {
+    // 邮件中心：收件同步状态与频率（同表扩列，避免第二套账号体系）
+    await ensureSenderMailboxColumn(pool, "sync_enabled", "TINYINT(1) NOT NULL DEFAULT 1");
+    await ensureSenderMailboxColumn(pool, "sync_interval_minutes", "INT NOT NULL DEFAULT 60");
+    await ensureSenderMailboxColumn(pool, "last_sync_at", "DATETIME(3) NULL");
+    await ensureSenderMailboxColumn(pool, "last_sync_status", "VARCHAR(20) NOT NULL DEFAULT ''");
+    await ensureSenderMailboxColumn(pool, "last_sync_error", "TEXT");
+    await ensureSenderMailboxColumn(pool, "last_sync_scanned", "INT NOT NULL DEFAULT 0");
+    await ensureSenderMailboxColumn(pool, "last_sync_saved", "INT NOT NULL DEFAULT 0");
+    await ensureSenderMailboxColumn(pool, "sync_cursor_json", "TEXT");
+  });
+}
+
+/** 补列幂等（并发迁移下另一个连接刚加过同一列视为成功） */
+async function ensureSenderMailboxColumn(pool: Pool, column: string, definition: string) {
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS count FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'sender_mailboxes' AND column_name = ?`,
+    [column]
+  );
+  if (Number((rows as Array<{ count: number }>)[0]?.count || 0) > 0) return;
+  try {
+    await pool.query(`ALTER TABLE sender_mailboxes ADD COLUMN ${column} ${definition}`);
+  } catch (error: any) {
+    if (error?.errno !== 1060 && error?.code !== "ER_DUP_FIELDNAME") throw error;
+  }
+}
+
+function readSyncCursor(raw: unknown) {
+  const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw || "");
+  if (!text.trim()) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 class MysqlSenderMailboxRepository {
@@ -131,7 +167,15 @@ class MysqlSenderMailboxRepository {
       imapPassword: decryptMailCredential({ ...context, kind: "imap" }, String(row.imap_password || "")),
       enabled: Boolean(row.enabled),
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ""),
-      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at || "")
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at || ""),
+      syncEnabled: row.sync_enabled === undefined || row.sync_enabled === null ? true : Boolean(row.sync_enabled),
+      syncIntervalMinutes: Number(row.sync_interval_minutes || 60) || 60,
+      lastSyncAt: row.last_sync_at instanceof Date ? row.last_sync_at.toISOString() : String(row.last_sync_at || ""),
+      lastSyncStatus: String(row.last_sync_status || ""),
+      lastSyncError: String(row.last_sync_error || ""),
+      lastSyncScanned: Number(row.last_sync_scanned || 0),
+      lastSyncSaved: Number(row.last_sync_saved || 0),
+      syncCursor: readSyncCursor(row.sync_cursor_json) as SenderMailbox["syncCursor"]
     };
   }
 

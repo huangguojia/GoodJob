@@ -43,6 +43,7 @@ const externalPatterns = [
   /^\/api\/prospect-list\/[^/]+\/send-development-email$/u,
   /^\/api\/development-email\/send$/u,
   /^\/api\/outreach-journey\/send$/u,
+  /^\/api\/mail-center\/send$/u,
   /^\/api\/leads\/[^/]+\/send-email$/u,
   /^\/api\/whatsapp\/customers\/[^/]+\/messages$/u,
   /^\/api\/trade-documents\/[^/]+\/send$/u,

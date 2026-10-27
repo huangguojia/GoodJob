@@ -1037,4 +1037,65 @@ if (kbBackendServer) {
   }
 }
 
+// ── 邮件中心：视图 / 导航 / 页签 / 路由必须成套存在 ──────────────────────────
+assert.ok(prototype.includes('id="mail-center"'), "缺少邮件中心视图容器 #mail-center");
+assert.ok(prototype.includes('data-view="mail-center"'), "缺少左侧导航「邮件中心」入口");
+["收件箱", "客户速查", "交互旅程", "工具箱"].forEach((label) => {
+  assert.ok(apiLayer.includes(`"${label}"`), `邮件中心缺少页签「${label}」`);
+});
+assert.ok(
+  apiLayer.includes('"mail-center": "communication.read"'),
+  "邮件中心视图缺少权限要求 communication.read"
+);
+assert.ok(
+  apiLayer.includes('if (view === "mail-center")'),
+  "activateNavView 缺少邮件中心的加载钩子（进入视图不会拉数据）"
+);
+// 收件箱里必须能切到已发送 / 垃圾箱 / 垃圾邮件，少了这几项用户只能看到一半往来
+["inbox", "sent", "trash", "junk"].forEach((kind) => {
+  assert.ok(
+    apiLayer.includes(`kind: "${kind}"`),
+    `邮件中心缺少文件夹「${kind}」（收件箱外的已发送/垃圾箱/垃圾邮件）`
+  );
+});
+assert.ok(apiLayer.includes("data-mc-folder"), "文件夹切换缺少 data-mc-folder 标记（点了没反应）");
+assert.ok(
+  apiLayer.includes('params.set("folder"') || apiLayer.includes('folder: mailCenterState.folder'),
+  "邮件列表请求没有带 folder 参数（切文件夹不会换数据）"
+);
+// 旅程必须合并多源，少一路就会「只有发信、看不到回复」
+["outbound_log", "mail_center", "touchpoint", "customer_activity"].forEach((source) => {
+  assert.ok(
+    apiLayer.includes(`"${source}"`) || readFileSync(new URL("../../backend/src/mail-center.ts", import.meta.url), "utf8").includes(`"${source}"`),
+    `交互旅程缺少 ${source} 来源`
+  );
+});
+const mailCenterServer = (() => {
+  try {
+    return readFileSync(new URL("../../backend/src/server.ts", import.meta.url), "utf8");
+  } catch {
+    return "";
+  }
+})();
+if (mailCenterServer) {
+  [
+    ["get", "/api/mail-center/accounts"],
+    ["patch", "/api/mail-center/accounts/:id/sync"],
+    ["post", "/api/mail-center/accounts/:id/sync"],
+    ["post", "/api/mail-center/accounts/:id/check"],
+    ["get", "/api/mail-center/folders"],
+    ["get", "/api/mail-center/messages"],
+    ["get", "/api/mail-center/messages/:id"],
+    ["post", "/api/mail-center/messages/:id/read"],
+    ["get", "/api/mail-center/customers"],
+    ["get", "/api/mail-center/customer/:entityType/:entityId"],
+    ["get", "/api/mail-center/journey/:entityType/:entityId"]
+  ].forEach(([method, route]) => {
+    assert.ok(
+      mailCenterServer.includes(`app.${method}("${route}"`),
+      `后端缺少 ${method.toUpperCase()} ${route}`
+    );
+  });
+}
+
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

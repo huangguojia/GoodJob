@@ -361,6 +361,44 @@ define("PUT /api/sender-mailboxes/{id}", objectSchema(["email", "smtpHost", "smt
 }), "更新发件邮箱池里自己名下的一个发件邮箱；smtpPassword 留空表示保留原授权码。");
 define("DELETE /api/sender-mailboxes/{id}", emptySchema, "从发件邮箱池删除自己名下的一个发件邮箱；删除不可撤销，需要明确确认。");
 define("POST /api/sender-mailboxes/{id}/test", objectSchema([], { to: string({ format: "email", maxLength: 255 }) }), "用发件邮箱池里的指定邮箱发一封测试邮件验证 SMTP 配置；默认发给该邮箱自己。");
+define("PATCH /api/mail-center/accounts/{id}/sync", objectSchema([], {
+  syncEnabled: boolean(),
+  syncIntervalMinutes: integer({ minimum: 5, maximum: 1440 })
+}), "调整邮件中心某个收件账号的自动同步开关与同步频率（分钟，5–1440）；不改变邮箱凭据本身。");
+define("POST /api/mail-center/accounts/{id}/sync", emptySchema, "立即同步邮件中心里指定账号的收件箱（只读拉取 IMAP 收件箱并写入本机索引，不发送、不删除、不回信）。");
+define("POST /api/mail-center/accounts/{id}/check", emptySchema, "体检邮件中心里指定账号的 IMAP 连接与文件夹可用性，只读探测，不写入任何邮件。");
+define("POST /api/mail-center/messages/{id}/read", emptySchema, "把邮件中心的一封邮件标记为已读；只改本机索引的阅读状态，不回写邮箱服务器。");
+define("POST /api/mail-center/messages/{id}/unread", emptySchema, "把邮件中心的一封邮件标记为未读（read_at 清空，列表重新显示未读样式）；只改本机索引，不回写邮箱服务器。");
+define("POST /api/mail-center/send", objectSchema(["mailboxId", "to", "subject"], {
+  mailboxId: string({ minLength: 1, maxLength: 80 }),
+  to: string({ minLength: 1, maxLength: 2000 }),
+  cc: string({ maxLength: 2000 }),
+  bcc: string({ maxLength: 2000 }),
+  subject: string({ minLength: 1, maxLength: 300 }),
+  content: string({ maxLength: 80000 }),
+  html: string({ maxLength: 8000000 }),
+  attachments: array(objectSchema(["filename"], {
+    filename: string({ minLength: 1, maxLength: 255 }),
+    contentBase64: string({ minLength: 1, maxLength: 14000000 }),
+    contentType: string({ maxLength: 120 })
+  }), { maxItems: 10 }),
+  inReplyTo: string({ maxLength: 998 }),
+  references: string({ maxLength: 2000 })
+}), "用邮件中心里自己名下的发件邮箱账号真实发送一封邮件（SMTP 投递 + 副本归档已发送）；正文/附件至少其一，真外发动作，收件人、主题、正文必须冻结后确认。回复/转发时传 inReplyTo=原邮件 Message-ID、references=完整引用链。");
+define("POST /api/mail-center/assist", objectSchema(["action"], {
+  action: oneOf("draft", "summarize", "polish", "continue", "translate", "optimize"),
+  text: string({ maxLength: 20000 }),
+  messageId: string({ maxLength: 80 }),
+  lang: oneOf("", "zh", "en")
+}), "AI 邮件助手：按动作（起草/总结/润色/续写/翻译/优化）用本机 CLI 生成一段可复制的邮件文案；只生成文本，不落库、不改已读、不自动发送。");
+define("POST /api/mail-center/personalize", objectSchema(["to"], {
+  to: string({ minLength: 1, maxLength: 2000 }),
+  subject: string({ maxLength: 300 }),
+  content: string({ maxLength: 60000 }),
+  lang: oneOf("", "zh", "en"),
+  entityType: oneOf("", "customer", "lead"),
+  entityId: string({ maxLength: 120 })
+}), "写邮件弹窗的千人千面助手：收件人匹配到客户/线索时补跑背调留档，再用本机 CLI 结合背调与当前邮件内容生成个性化版本；只生成文本，不落库、不发送。");
 define("POST /api/outreach-journey/send", objectSchema(["entityType", "entityId", "requestId", "to", "subject", "body"], {
   entityType: oneOf("customer", "lead", "prospect_candidate"),
   entityId: string({ minLength: 1, maxLength: 120 }),

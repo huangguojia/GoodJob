@@ -1307,6 +1307,19 @@ export interface SenderMailbox {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+  // ── 邮件中心：收件同步状态（sender_mailboxes 同表扩列，不另建账号体系）──
+  /** 是否参与定时收件同步 */
+  syncEnabled?: boolean;
+  /** 同步间隔（分钟），默认 60 */
+  syncIntervalMinutes?: number;
+  lastSyncAt?: string;
+  /** idle | running | ok | partial | error */
+  lastSyncStatus?: string;
+  lastSyncError?: string;
+  lastSyncScanned?: number;
+  lastSyncSaved?: number;
+  /** folder -> 增量游标 */
+  syncCursor?: Record<string, { uidValidity: string; lastUid: number }>;
 }
 
 export interface ProspectOutreachBatchStep {

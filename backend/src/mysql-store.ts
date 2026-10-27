@@ -59,6 +59,7 @@ import { ensureOutreachJourneySchema, MysqlBackgroundResearchRepository, setBack
 import { ensureAppSettingsSchema, setAppSettingsPool } from "./app-settings.js";
 import { ensureAiEngineSchema, MysqlAiEngineJobRepository, setAiEngineJobRepository } from "./ai-engine-jobs.js";
 import { createMysqlSenderMailboxRepository, ensureSenderMailboxSchema, setSenderMailboxRepository } from "./sender-mailbox.js";
+import { MailCenterSyncService, createMysqlMailCenterRepository, ensureMailCenterSchema, setMailCenterRepository, setMailCenterSyncService } from "./mail-center.js";
 import { createMysqlResourceHubRepository, ensureResourceHubSchema, setResourceHubRepository } from "./resource-hub.js";
 import {
   createMysqlKnowledgeGovernanceRepository,
@@ -630,6 +631,7 @@ export async function createMysqlStore(
   await ensureKbTrainingSchema(pool);
   await ensureOutreachJourneySchema(pool);
   await ensureSenderMailboxSchema(pool);
+  await ensureMailCenterSchema(pool);
   await ensureResourceHubSchema(pool);
   await ensureKnowledgeGovernanceSchema(pool);
   await ensureAppSettingsSchema(pool);
@@ -642,6 +644,12 @@ export async function createMysqlStore(
   setKbTrainingRepository(new MysqlKbTrainingRepository(pool));
   setBackgroundResearchRepository(new MysqlBackgroundResearchRepository(pool));
   setSenderMailboxRepository(createMysqlSenderMailboxRepository(pool));
+  setMailCenterRepository(createMysqlMailCenterRepository(pool));
+  setMailCenterSyncService(new MailCenterSyncService(pool, {
+    tickMs: Number(process.env.MAIL_CENTER_SYNC_TICK_MS || 60_000),
+    lookbackDays: Number(process.env.MAIL_CENTER_LOOKBACK_DAYS || 7),
+    maxMessagesPerSync: Number(process.env.MAIL_CENTER_MAX_MESSAGES || 150)
+  }));
   setResourceHubRepository(createMysqlResourceHubRepository(pool));
   setKnowledgeGovernanceRepository(createMysqlKnowledgeGovernanceRepository(pool));
   setLocalRunnerService(new LocalRunnerService(new MysqlLocalRunnerRepository(pool)));
@@ -1296,6 +1304,8 @@ export async function createMysqlStore(
     setKbTrainingRepository(null);
     setBackgroundResearchRepository(null);
     setSenderMailboxRepository(null);
+    setMailCenterRepository(null);
+    setMailCenterSyncService(null);
     setResourceHubRepository(null);
     setKnowledgeGovernanceRepository(null);
     setAiEngineJobRepository(null);
@@ -2125,7 +2135,7 @@ export async function createMysqlStore(
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.22-kb-training-progress";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.23-mail-center";
 
 /** 内置超级管理员（公司最高权限账号）：可登录、管理账号、一键批量生成带有效期的体验账号 */
 const BUILT_IN_SUPERADMIN = {
@@ -2253,6 +2263,7 @@ export async function migrateMysqlSchema(input: {
     await ensureKbTrainingSchema(pool);
     await ensureOutreachJourneySchema(pool);
     await ensureSenderMailboxSchema(pool);
+    await ensureMailCenterSchema(pool);
     await ensureResourceHubSchema(pool);
     await ensureKnowledgeGovernanceSchema(pool);
     await ensureAppSettingsSchema(pool);

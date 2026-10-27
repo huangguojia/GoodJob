@@ -34,6 +34,14 @@ export interface DevelopmentEmailStagePlan {
   maxWords: number;
   /** 主题行规则 */
   subjectRule: string;
+  /**
+   * 这个阶段**按设计**要不要用背调与行业角度。
+   *
+   * 为什么要显式声明：已转客户 / 明确拒绝 / 退信 这几档是流程确认信，正文本来就不该
+   * 引用背调。把它当成"没做好"，面板就会天天亮红；反过来把它当成"用了背调"，
+   * 又变成说假话。只有阶段自己知道答案。
+   */
+  personalizes: boolean;
 }
 
 const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = {
@@ -50,7 +58,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["罗列参数与型号", "报价", "公司发展史", "超过三段的篇幅"],
     cta: "询问是否可以把最相关的产品资料发过去供参考。",
     maxWords: 130,
-    subjectRule: "包含对方公司名 + 一句具体价值，不要用 Hi / Hello 这类空主题。"
+    subjectRule: "包含对方公司名 + 一句具体价值，不要用 Hi / Hello 这类空主题。",
+    personalizes: true
   },
   first_touch_sent: {
     key: "first_touch_sent",
@@ -65,7 +74,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["重复首封内容", "质问为什么没回", "「再次打扰」之类的讨好措辞", "一次性堆三条以上价值点"],
     cta: "给两个二选一的轻量回复路径（要资料 / 暂不合适）。",
     maxWords: 140,
-    subjectRule: "复用首封主题做 Re: 回复线索，或换成更具体的应用主题。"
+    subjectRule: "复用首封主题做 Re: 回复线索，或换成更具体的应用主题。",
+    personalizes: true
   },
   following_up: {
     key: "following_up",
@@ -76,7 +86,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["再讲一遍产品", "任何新卖点", "让收件人感到愧疚的措辞"],
     cta: "请对方用一句话确认「相关 / 不相关」。",
     maxWords: 90,
-    subjectRule: "短、平和，例如 Closing the loop on ...。"
+    subjectRule: "短、平和，例如 Closing the loop on ...。",
+    personalizes: true
   },
   replied_interested: {
     key: "replied_interested",
@@ -87,7 +98,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["重新做一遍公司介绍", "在没有对方需求的情况下给报价", "答非所问"],
     cta: "索取规格、目标价或采购时间表中的一项。",
     maxWords: 170,
-    subjectRule: "沿用客户回复的主题（Re:）。"
+    subjectRule: "沿用客户回复的主题（Re:）。",
+    personalizes: true
   },
   replied_negative: {
     key: "replied_negative",
@@ -98,7 +110,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["一切内容的发送"],
     cta: "—",
     maxWords: 0,
-    subjectRule: "—"
+    subjectRule: "—",
+    personalizes: false
   },
   bounced: {
     key: "bounced",
@@ -109,7 +122,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["向已退信地址重复发送"],
     cta: "—",
     maxWords: 0,
-    subjectRule: "—"
+    subjectRule: "—",
+    personalizes: false
   },
   converted: {
     key: "converted",
@@ -120,7 +134,8 @@ const STAGE_PLANS: Record<OutreachJourneyStageKey, DevelopmentEmailStagePlan> = 
     mustAvoid: ["继续按开发信节奏多轮触达"],
     cta: "确认当前需求是否有效、对接人是否本人。",
     maxWords: 90,
-    subjectRule: "平和的 check-in 主题。"
+    subjectRule: "平和的 check-in 主题。",
+    personalizes: false
   }
 };
 
@@ -322,7 +337,25 @@ export function developmentEmailRecipientRole(contactName: string, email: string
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 「千人千面」方案：同样的阶段、同样的模板骨架，靠这几项让每一封不一样。
+ * 一条「为什么这么写」的依据。
+ *
+ * 用户的原话是「写开发信的时候，要把这么写的原因写出来」——
+ * 所以每条都必须能对应到正文里真实存在的那一句，并且理由要落在
+ * 「这一封为什么这样说」上，不能写成"因为这样更专业"这种放之四海皆准的套话。
+ */
+export interface DevelopmentEmailReason {
+  /** 这一段是什么：主题 / 开场 / 为什么是我们 / 收尾问题 / 篇幅 / 个性化 */
+  part: string;
+  /** 这一段的实际写法（正文摘录或主题原文；空串 = 这封没有这一段） */
+  text: string;
+  /** 为什么这么写（人话，带上这一封的具体依据） */
+  why: string;
+  /** true = 这不是"依据"，而是"这封没写好"的如实说明 */
+  weak?: boolean;
+}
+
+/**
+ * 个性化方案：同样的阶段、同样的模板骨架，靠这几项让每一封不一样。
  *
  * 为什么不靠随机/轮换句式：那种"看起来不一样"的信，收件人一读就知道是群发。
  * 真正让开发信不同的是 **对他这家公司说的具体事**（应用、市场、需求），
@@ -345,6 +378,8 @@ export interface DevelopmentEmailPersonalization {
   trace: string[];
   /** 一句话说清「这封和同阶段别人的信差在哪」 */
   difference: string;
+  /** 逐段说明「为什么这么写」；由最终正文校准后给出，模板与 AI 两条路都有 */
+  reasons: DevelopmentEmailReason[];
   /** 是否真的做到了个性化（有事实或角度才算） */
   personalized: boolean;
 }
@@ -446,7 +481,7 @@ export function buildDevelopmentEmailPersonalization(
     ? `与同阶段的其他客户相比，这封多引用了${primary ? `「${primary.short}」这个应用角度` : "业务描述"}${
         factsUsed.length ? `，以及 ${factsUsed.map((fact) => fact.label).join("、")} 共 ${factsUsed.length} 条背调事实` : ""
       }`
-    : "没有背调依据：这封与同阶段其他客户的信只差公司名与称呼，千人千面没有生效";
+    : "没有背调依据：这封与同阶段其他客户的信只差公司名与称呼";
 
   return {
     hook,
@@ -457,6 +492,8 @@ export function buildDevelopmentEmailPersonalization(
     angles: angles.map((angle) => angle.short),
     trace,
     difference,
+    // 逐条理由要等最终正文出来才能写（正文可能被 AI/CLI 重写），此处先留空
+    reasons: [],
     personalized
   };
 }
@@ -573,7 +610,7 @@ export function assembleDevelopmentEmailBrief(input: DevelopmentEmailBriefInput)
   if (!input.sender.products.trim()) missing.push("我方主营产品");
   if (!input.sender.name.trim()) missing.push("我方发件人名称");
   if (!input.recipient.email.trim()) missing.push("收件邮箱");
-  if (!research) missing.push("背调结果（建议先跑一次 AI 背调）");
+  if (!research && plan.personalizes) missing.push("背调结果（建议先跑一次 AI 背调）");
   // 姓名已知、只是职位推断不出来时，不能说"姓名或职位"都缺（自相矛盾）
   if (role.key === "unknown") missing.push(placeholderContact ? "收件人姓名" : "收件人职位");
 
@@ -723,8 +760,8 @@ export function buildDevelopmentEmailFallback(brief: DevelopmentEmailBrief): Dev
       subject,
       body,
       basis,
-      // 以正文实际内容校准，避免「有素材」被说成「已经用上」
-      personalization: finalizePersonalization(personalization, body, brief)
+      // 以最终正文（连主题一起）校准，避免「有素材」被说成「已经用上」
+      personalization: finalizePersonalization(personalization, { subject, body }, brief)
     };
   };
 
@@ -1034,8 +1071,211 @@ export function draftUsesResearch(body: string, brief: DevelopmentEmailBrief): b
   return draftResearchSignals(brief).some((signal) => meaningful.includes(signal));
 }
 
+/** 正文里「称呼之后的第一句」——用来对照开场到底写了什么 */
+function openingSentence(body: string): string {
+  const lines = String(body || "").split(/\n/u).map((line) => line.trim());
+  const salutationAt = lines.findIndex((line) => /^dear\b/iu.test(line));
+  const rest = (salutationAt >= 0 ? lines.slice(salutationAt + 1) : lines).filter(Boolean);
+  const firstLine = rest[0] || "";
+  if (!firstLine) return "";
+  // 断句要小心 "Co., Ltd." —— 只看「句点 + 空格/结尾」，避免在缩写处截断
+  return (firstLine.match(/^.*?[.?!](?=\s|$)/u)?.[0] || firstLine).trim();
+}
+
+/** 正文里最后一句提问——收尾到底问的是什么，只能看它，不能看计划里写了什么 */
+function closingQuestion(body: string): string {
+  const hits = String(body || "").match(/[^.!?\n]{4,}\?/gu);
+  return hits && hits.length ? hits[hits.length - 1]!.trim() : "";
+}
+
+/** 这段文字里有没有出现任何一个背调角度（用来判断"开场是不是点了对方"） */
+function mentionsAny(text: string, phrases: string[]): boolean {
+  const hay = String(text || "").toLowerCase().replace(/\s+/gu, " ");
+  if (!hay) return false;
+  return phrases.some((phrase) => {
+    const clean = String(phrase || "").toLowerCase().replace(/\s+/gu, " ").trim();
+    return clean.length >= 4 && hay.includes(clean);
+  });
+}
+
+/** 阶段目标自带句号，拼进另一句话会变成「许可。。」——先去掉尾部标点 */
+function trimSentenceTail(value: string) {
+  return String(value || "").replace(/[。！？；;,.\s]+$/u, "");
+}
+
+/** 收尾问题为什么是这一句——由「对谁说」决定，不是随机挑的 */
+function askReason(roleKey: string, market: string): string {
+  switch (roleKey) {
+    case "decision_maker":
+      return `对方是决策人，问的是「${market ? `在 ${market} 的规划` : "这件事"}值不值得花 15 分钟」，不是「要不要合作」。先换一个成本最低的下一步，报价才排得上。`;
+    case "procurement":
+      return "对方是采购，最关心能不能横向比价：所以问的是规格、交期和文件，而不是先让他表态。";
+    case "technical":
+      return "对方偏技术，先给可验证的工况与配置数据，比谈价格更能推进。";
+    case "commercial":
+      return "对方是商务 / 渠道，关心的是好不好卖：所以给的是能直接拿给他自己客户的 line card。";
+    case "general":
+      return "收的是通用邮箱（info@ / sales@），不知道谁会看：所以问的是「由谁来决定，我直接把资料发给那个人」。";
+    default:
+      return "职位没确认，就不假设他是决策人：问的是「这份规格书发过去，负责的人能不能快速判断」。";
+  }
+}
+
 /**
- * 用**最终正文**校准「千人千面到底有没有生效」。
+ * 逐条说明「为什么这么写」。
+ *
+ * 每一条都要能对上正文里真实存在的那一句（`text` 就是摘录）。
+ * 对不上的时候不许编一个理由糊过去 —— 如实标 `weak`：
+ * 「主题本来该带角度，但没带」「这一段换掉公司名还能发给下一家」。
+ * 面板上"承认这封没写好"，比"给每条都配一句漂亮话"有用得多。
+ */
+export function buildDevelopmentEmailReasons(
+  brief: DevelopmentEmailBrief,
+  personalization: DevelopmentEmailPersonalization,
+  content: { subject: string; body: string }
+): DevelopmentEmailReason[] {
+  const reasons: DevelopmentEmailReason[] = [];
+  const { plan, role, recipient, sender } = brief;
+  const subject = String(content.subject || "").trim();
+  const body = String(content.body || "").trim();
+  const bodyNorm = body.toLowerCase().replace(/\s+/gu, " ");
+  const words = body.split(/\s+/u).filter(Boolean).length;
+  const primary = brief.angles[0];
+  const angleLabel = personalization.subjectAngle || primary?.keyword || "";
+  const anglePhrases = [personalization.subjectAngle, ...brief.angles.map((angle) => angle.keyword)].filter(Boolean);
+  const products = englishOnly(sender.products, "");
+  const market = englishOnly(recipient.market, "");
+  const marketKnown = Boolean(market) && market !== "your market";
+  // 这一阶段按设计要不要用背调：确认信/收尾信本来就不该引用，别拿它当"没做好"
+  const usable = plan.personalizes;
+
+  // ① 主题：带没带对方的角度，是"一眼能看出群发与否"的分水岭
+  if (!usable) {
+    reasons.push({
+      part: "主题",
+      text: subject,
+      why: `这是${plan.label}阶段的确认信：标题只要让对方认出"是我们、什么事"，不用带业务角度——带上反而像在重新推销。`
+    });
+  } else if (angleLabel) {
+    const inSubject = subject.toLowerCase().includes(angleLabel.toLowerCase());
+    reasons.push({
+      part: "主题",
+      text: subject,
+      why: inSubject
+        ? `标题带上「${angleLabel}」这个对方业务上的词，收件人扫一眼就能判断"这跟我有关"。没用 cooperation / opportunity 这类词——那种标题一看就是群发。`
+        : `本来该在标题里带上「${angleLabel}」，实际没带：这一封的标题和同阶段其他人一样，建议补上。`,
+      ...(inSubject ? {} : { weak: true })
+    });
+  } else {
+    reasons.push({
+      part: "主题",
+      text: subject,
+      why: "没有拿到对方的具体业务，标题只能写通用说法——这是这一封最明显的短板。",
+      weak: true
+    });
+  }
+
+  // ② 开场：先点对方，还是先自我介绍
+  const opening = openingSentence(body);
+  if (opening) {
+    // 判"有没有点到对方"之前要先摘掉公司名：公司名里往往就含行业词（Focus Automation System），
+    // 不摘掉的话"你已在我们的记录里"这种开场也会被算成"点到了对方的业务"。
+    const openingForCheck = recipient.englishCompany
+      ? opening.split(recipient.englishCompany).join(" ")
+      : opening;
+    const hits = usable && mentionsAny(openingForCheck, anglePhrases);
+    reasons.push({
+      part: "开场",
+      text: opening,
+      why: !usable
+        ? `第一句先说明这封是关于什么的（对方已经在我们的流程里），不重新自我介绍、也不重新推销——这一阶段要的是${trimSentenceTail(plan.objective)}。`
+        : hits
+          ? "第一句先点对方在做什么，而不是先自我介绍。收件人只判断「这跟我有没有关系」，先自报家门的第一段通常被直接划走。"
+          : "这一段没有点出对方的具体业务——把公司名换掉，它还能原样发给下一家。",
+      ...(!usable || hits ? {} : { weak: true })
+    });
+  }
+
+  // ③ 为什么是我们：只提交集的那条线，别铺目录。
+  //    这一段的理由只在正文里真有这句时才成立 —— 否则引用的"原句"是计划里写的，不是这封信里的。
+  const relevance = String(personalization.relevance || "").trim();
+  const relevanceUsed = Boolean(relevance) && bodyNorm.includes(relevance.toLowerCase().replace(/\s+/gu, " "));
+  if (!relevanceUsed) {
+    reasons.push({
+      part: "为什么是我们",
+      text: "",
+      why: usable
+        ? `这封没有单独写"我们是谁、为什么合适"——${plan.label}这一阶段只做一件事：${trimSentenceTail(plan.objective)}，多插一段自我介绍就会被读成群发。`
+        : `${plan.label}不再做自我介绍——对方已经在正式流程里，重复介绍只会显得没在跟进。`
+    });
+  } else if (primary && products) {
+    reasons.push({
+      part: "为什么是我们",
+      text: relevance,
+      why: `对方做「${primary.angle}」，我们供 ${products}——所以只提交集的那条产品线，不铺全目录。摊得越全，越像一份群发目录。`
+    });
+  } else if (primary) {
+    reasons.push({
+      part: "为什么是我们",
+      text: relevance,
+      why: `对方做「${primary.angle}」，我们主攻的也正是这条线。没有铺开产品清单，是因为"我们什么都做"在第一次接触里等于什么都没说。`
+    });
+  } else if (marketKnown) {
+    reasons.push({
+      part: "为什么是我们",
+      text: relevance,
+      why: `没有能用的行业角度，只能退回市场（${market}）——这是这封里唯一一句真的属于他的信息。`,
+      weak: true
+    });
+  } else {
+    reasons.push({
+      part: "为什么是我们",
+      text: relevance,
+      why: "既没有背调也没有市场信息，这一段只能写通用句：换掉公司名照样能发出去。",
+      weak: true
+    });
+  }
+
+  // ④ 收尾问题：正文里实际问的是哪一句，就解释哪一句
+  const ask = String(personalization.ask || "").trim();
+  const askUsed = Boolean(ask) && bodyNorm.includes(ask.toLowerCase().replace(/\s+/gu, " "));
+  const question = closingQuestion(body);
+  if (askUsed) {
+    reasons.push({
+      part: "收尾问题",
+      text: ask,
+      why: askReason(role.key, marketKnown ? market : "")
+    });
+  } else if (question) {
+    reasons.push({
+      part: "收尾问题",
+      text: question,
+      why: `这一阶段（${plan.label}）要的是${trimSentenceTail(plan.objective)}；所以收尾没有按角色去要资料，而是把"继续还是结束"交给对方一句话定。`
+    });
+  }
+
+  // ⑤ 篇幅：阶段目标决定长度
+  if (plan.maxWords) {
+    reasons.push({
+      part: "篇幅",
+      text: `${words} 词`,
+      why: `${plan.label}这一阶段只做一件事：${trimSentenceTail(plan.objective)}；所以控制在 ${plan.maxWords} 词上下——${
+        plan.personalizes ? "第一次接触就写长信，回复率会掉。" : "确认信写长了反而像在重新推销。"
+      }`
+    });
+  } else {
+    reasons.push({
+      part: "篇幅",
+      text: `${words} 词`,
+      why: `${plan.label}阶段按规则不再主动推销，所以信里只写"不再打扰 + 留一个改口的出口"。`
+    });
+  }
+
+  return reasons;
+}
+
+/**
+ * 用**最终正文**校准「这封到底有没有按这家公司写」，并生成逐条理由。
  *
  * 为什么必须校准：`personalization` 描述的是「手上有哪些素材」，不是「这封真的用了」。
  * 实测过一种尴尬情况——客户已在流程里（converted 阶段），写的是流程确认信，
@@ -1044,22 +1284,62 @@ export function draftUsesResearch(body: string, brief: DevelopmentEmailBrief): b
  */
 export function finalizePersonalization(
   personalization: DevelopmentEmailPersonalization,
-  body: string,
+  content: { subject: string; body: string },
   brief: DevelopmentEmailBrief
 ): DevelopmentEmailPersonalization {
-  if (draftUsesResearch(body, brief)) return { ...personalization, personalized: true };
-  return {
-    ...personalization,
-    personalized: false,
-    // trace 的语义是「手上有哪些素材」。没用上时必须先说清，
-    // 否则「引用背调事实 1 条」会被读成「已经引用了」。
-    trace: personalization.personalized
-      ? ["这封没有引用背调：下面是手上有的素材，但没写进正文", ...personalization.trace]
-      : personalization.trace,
-    difference: personalization.personalized
-      ? "这个阶段用不到背调（流程确认 / 收尾），这封只按阶段写；首次触达或跟进阶段才会用上背调"
-      : "没有背调依据：这封与同阶段其他客户的信只差公司名与称呼，千人千面没有生效"
-  };
+  const personalized = draftUsesResearch(content.body, brief);
+  const bodyLower = String(content.body || "").toLowerCase();
+  // 「差异说明」只许说正文里真出现过的东西：
+  // this 之前把「引用 1 条背调事实」写死在句子里，实测出现过"角度用了、事实没用"的信，
+  // 句子却仍然声称引用了事实 —— 和"面板说假话"是同一类问题，只是更隐蔽。
+  const citedFacts = personalization.factsUsed.filter((fact) => {
+    const words = signalWords(fact.value);
+    return words.length > 0 && words.some((word) => bodyLower.includes(word));
+  });
+  const angleShort = brief.angles[0]?.short || "";
+  const personalizedDifference = `与同阶段的其他客户相比，这封多引用了${
+    angleShort ? `「${angleShort}」这个应用角度` : "对方业务描述"
+  }${citedFacts.length ? `，以及 ${citedFacts.map((fact) => fact.label).join("、")} 共 ${citedFacts.length} 条背调事实` : ""}`;
+
+  const base: DevelopmentEmailPersonalization = personalized
+    ? { ...personalization, personalized: true, difference: personalizedDifference }
+    : {
+        ...personalization,
+        personalized: false,
+        // trace 的语义是「手上有哪些素材」。没用上时必须先说清，
+        // 否则「引用背调事实 1 条」会被读成「已经引用了」。
+        trace: personalization.personalized
+          ? ["这封没有引用背调：下面是手上有的素材，但没写进正文", ...personalization.trace]
+          : personalization.trace,
+        // 三种情况要分开说，否则会把「按设计不用」说成「没做好」：
+        //   ① 这一阶段本来就不用背调（流程确认 / 收尾）
+        //   ② 手上有背调，但正文没用上
+        //   ③ 压根没有背调
+        difference: !brief.plan.personalizes
+          ? "这是流程确认 / 收尾信，按设计不引用背调——这封只按当前状态写"
+          : personalization.personalized
+            ? "手上有背调，但这封正文没用上：它和同阶段其他客户的信只差公司名与称呼"
+            : "没有背调依据：这封与同阶段其他客户的信只差公司名与称呼"
+      };
+
+  const reasons = buildDevelopmentEmailReasons(brief, base, content);
+  if (!personalized) {
+    reasons.push(
+      brief.plan.personalizes
+        ? {
+            part: "个性化",
+            text: "",
+            why: "这封正文没有引用任何背调：除了公司名和称呼，它和同阶段其他客户的信完全一样。要真的不一样，得先有这家公司的背调，再按背调重写。",
+            weak: true
+          }
+        : {
+            part: "个性化",
+            text: "",
+            why: "这个阶段按设计不用背调（流程确认 / 收尾）——不是没做到，是不该做：把已经回复或已经成交的客户当新客户重新开发，反而掉分。"
+          }
+    );
+  }
+  return { ...base, reasons };
 }
 
 export function checkDevelopmentEmailDraft(
@@ -1090,7 +1370,7 @@ export function checkDevelopmentEmailDraft(
   const researchSignals = draftResearchSignals(brief);
   const researchUsed = draftUsesResearch(body, brief);
   if (researchSignals.length && !researchUsed) {
-    issues.push("正文没有引用任何背调信息（换掉公司名就能发给下一家），千人千面没生效");
+    issues.push("正文没有引用任何背调信息（换掉公司名就能发给下一家），这封并没有真的按这家公司写");
   }
   if (!brief.recipient.email) issues.push("缺收件邮箱");
   return { ok: issues.length === 0, issues, researchUsed, researchSignals };

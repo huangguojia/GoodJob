@@ -272,6 +272,20 @@ import {
   senderMailboxOverrides,
   toSenderMailboxView
 } from "./sender-mailbox.js";
+import {
+  FOLDER_LABELS,
+  SYNC_FOLDER_KINDS,
+  buildMailAssistPrompt,
+  buildMailPersonalizePrompt,
+  getMailCenterRepository,
+  getMailCenterSyncService,
+  isMailAssistAction,
+  journeyStats,
+  mailAccountOverview,
+  mergeJourneyEvents
+} from "./mail-center.js";
+import type { MailPersonalizeResearch } from "./mail-center.js";
+import { runCliSummary } from "./cli-ai.js";
 import type { BackgroundResearchRecord } from "./outreach-journey.js";
 import type { OutboundEmailLog, OutreachSequence, OutreachSequenceStepSnapshot, OutreachStageKey, PeerRelation, ProspectOutreachBatch, ProspectOutreachBatchItem, ProspectOutreachBatchPolicy } from "./types.js";
 import {
@@ -513,11 +527,14 @@ import {
   TRANSPARENT_GIF,
   buildOutboundMessageId,
   buildTrackedEmailHtml,
+  buildTrackedHtmlBody,
   emailTrackingSecret,
   emailTrackingStatus,
+  extractInlineDataImages,
   isEmailTrackingEnabled,
   messageIdDomain,
   normalizeMessageIdValue,
+  sanitizeEmailHtml,
   setEmailTrackingRuntimeBaseUrl,
   validateEmailTrackingSecurity,
   verifyClickToken,
@@ -909,6 +926,12 @@ app.use(["/api/whatsapp", "/api/wecom"], requireAuth, asyncRoute(async (req, res
 app.use(["/api/development-email", "/api/outbound-emails"], requireAuth, asyncRoute(async (req, res, next) => {
   const readOnly = req.method === "GET" || req.path.endsWith("/draft");
   await enforceIamTenantPermission(req, res, next, readOnly ? "communication.read" : "communication.send");
+}));
+// ⚠️ 邮件中心必须挂在这道闸上：canSeeOwner 在 IAM 账号下若无 iamDataScope 会直接返回 false
+// （auth.ts:321-322），而 iamDataScope 只由 enforceIamTenantPermission 填充。漏了这道闸，
+// 客户速查永远 total 0、旅程/单客户一律 404「客户不存在或无权访问」，且不报任何错误。
+app.use("/api/mail-center", requireAuth, asyncRoute(async (req, res, next) => {
+  await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "communication.read" : "communication.send");
 }));
 app.use([
   "/api/profile/send-development-email",
@@ -2124,7 +2147,7 @@ function validateOutboundEmailConfiguration(user: ReturnType<typeof getStore>["u
   return { smtpPort, smtpSecure };
 }
 
-async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; subject: string; body: string; messageId?: string }) {
+async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][number], payload: { to: string; cc?: string; bcc?: string; subject: string; body: string; html?: string; attachments?: Array<{ filename: string; content: Buffer; contentType?: string; cid?: string }>; messageId?: string; inReplyTo?: string; references?: string; appendOptOut?: boolean; htmlAlways?: boolean }) {
   outboundEmailDispatchObserver?.({
     userId: user.id,
     to: payload.to,
@@ -2144,17 +2167,30 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
       }
     });
   const messageId = payload.messageId || buildOutboundMessageId();
-  const optOutBody = process.env.OUTBOUND_EMAIL_APPEND_OPTOUT === "false"
-    ? payload.body
-    : `${payload.body.trim()}\n\nIf you prefer not to receive further emails, reply with "unsubscribe".`;
-  const tracked = buildTrackedEmailHtml(optOutBody, messageId);
+  // 退订提示是「营销群发」的合规尾缀；邮件中心手工写信走 appendOptOut:false，别给客户添堵。
+  const appendOptOut = payload.appendOptOut !== false && process.env.OUTBOUND_EMAIL_APPEND_OPTOUT !== "false";
+  const optOutBody = appendOptOut
+    ? `${payload.body.trim()}\n\nIf you prefer not to receive further emails, reply with "unsubscribe".`
+    : payload.body;
+  // htmlAlways（邮件中心手工写信）：没开追踪也要带 HTML 版式，所见即所得；
+  // 群发管线维持原样（开了追踪才有 HTML），避免影响投递习惯。
+  // 富文本正文（payload.html）走 buildTrackedHtmlBody：同样的链接改写 + 像素 + 版式包装。
+  const tracked = payload.html
+    ? buildTrackedHtmlBody(payload.html, messageId, { trackingOptional: payload.htmlAlways === true })
+    : buildTrackedEmailHtml(optOutBody, messageId, { trackingOptional: payload.htmlAlways === true });
   const mailOptions = {
     messageId,
     from: `"${user.emailSenderName || user.name}" <${user.outboundEmail}>`,
     replyTo: user.outboundEmail,
     to: payload.to,
+    ...(payload.cc ? { cc: payload.cc } : {}),
+    ...(payload.bcc ? { bcc: payload.bcc } : {}),
     subject: payload.subject,
     text: optOutBody,
+    // 会话线程头：回复/转发时带上，邮件客户端才能把这封信归进原会话
+    ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo } : {}),
+    ...(payload.references ? { references: payload.references } : {}),
+    ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
     headers: {
       "List-Unsubscribe": `<mailto:${user.outboundEmail}?subject=unsubscribe>`
     },
@@ -2171,7 +2207,7 @@ async function sendOutboundEmail(user: ReturnType<typeof getStore>["users"][numb
     : await compileOutboundRawMessage(mailOptions);
   const info = raw
     ? await transport.sendMail({
-      envelope: { from: user.outboundEmail, to: payload.to },
+      envelope: { from: user.outboundEmail, to: [payload.to, payload.cc, payload.bcc].filter(Boolean).join(",") },
       raw
     })
     : await transport.sendMail(mailOptions);
@@ -3417,6 +3453,681 @@ app.post("/api/sender-mailboxes/:id/test", requireAuth, asyncRoute(async (req, r
   } catch (error) {
     res.status(400).json({ message: outboundEmailError(error, { ...user, ...senderMailboxOverrides(mailbox) }) });
   }
+}));
+
+// ── 邮件中心：多账号收件同步 / 客户邮件速查 / 交互旅程 ───────────────────────
+let activeMailCenterSync: ReturnType<typeof getMailCenterSyncService> = null;
+
+function mailCenterAddressOf(value: string) {
+  const match = String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : "";
+}
+
+function mailCenterVisibleOwner(req: Request, ownerId: string, teamId: string) {
+  const user = req.user;
+  return !!user && canSeeOwner(user, ownerId, teamId);
+}
+
+app.get("/api/mail-center/accounts", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  const mailboxRepository = getSenderMailboxRepository();
+  if (!repository || !mailboxRepository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailboxes = await mailboxRepository.list(user.id, user.teamId);
+  // 首次进入：把账号级「默认发件邮箱」自动登记成一个收件账号，避免打开邮件中心是一片空白。
+  // 只做一次（有账号就不再导入），凭据复用 users 表里已解密的 SMTP/IMAP 配置。
+  if (!mailboxes.length && user.smtpHost && user.smtpUser && user.smtpPassword) {
+    try {
+      const created = await mailboxRepository.create(user.id, user.teamId, {
+        label: "主发件邮箱",
+        email: user.outboundEmail || user.smtpUser,
+        fromName: user.emailSenderName || "",
+        smtpHost: user.smtpHost,
+        smtpPort: user.smtpPort || 465,
+        smtpSecure: user.smtpSecure ?? true,
+        smtpUser: user.smtpUser,
+        smtpPassword: user.smtpPassword,
+        imapHost: user.imapHost || "",
+        imapPort: user.imapPort || 993,
+        imapUser: user.imapUser || "",
+        imapPassword: user.imapPassword || "",
+        enabled: true
+      });
+      mailboxes.push(created);
+    } catch {
+      /* 导入失败不阻断账号列表（用户仍可手工绑定） */
+    }
+  }
+  const stats = await repository.accountStats(user.id, user.teamId, mailboxes.map((item) => item.id));
+  res.json({
+    accounts: mailboxes.map((mailbox) => mailAccountOverview(mailbox, stats.get(mailbox.id))),
+    limits: { maxAccounts: 10, minIntervalMinutes: 5, maxIntervalMinutes: 1440 }
+  });
+}));
+
+app.patch("/api/mail-center/accounts/:id/sync", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  const mailboxRepository = getSenderMailboxRepository();
+  if (!repository || !mailboxRepository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailbox = await mailboxRepository.get(user.id, user.teamId, req.params.id);
+  if (!mailbox) { res.status(404).json({ message: "邮箱不存在或无权访问" }); return; }
+  const body = z.object({
+    syncEnabled: z.coerce.boolean().optional(),
+    syncIntervalMinutes: z.coerce.number().int().min(5).max(1440).optional()
+  }).parse(req.body || {});
+  const syncEnabled = body.syncEnabled ?? mailbox.syncEnabled ?? true;
+  const syncIntervalMinutes = body.syncIntervalMinutes ?? mailbox.syncIntervalMinutes ?? 60;
+  await repository.setSyncSettings(mailbox.id, syncEnabled, syncIntervalMinutes);
+  res.json({ ok: true, syncEnabled, syncIntervalMinutes });
+}));
+
+app.post("/api/mail-center/accounts/:id/sync", requireAuth, asyncRoute(async (req, res) => {
+  const mailboxRepository = getSenderMailboxRepository();
+  if (!mailboxRepository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailbox = await mailboxRepository.get(user.id, user.teamId, req.params.id);
+  if (!mailbox) { res.status(404).json({ message: "邮箱不存在或无权访问" }); return; }
+  const service = activeMailCenterSync || getMailCenterSyncService();
+  if (!service) { res.status(503).json({ message: "同步服务未启动" }); return; }
+  try {
+    const summary = await service.syncAccountById(mailbox.id);
+    res.json({ ok: true, summary });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : String(error) });
+  }
+}));
+
+app.post("/api/mail-center/accounts/:id/check", requireAuth, asyncRoute(async (req, res) => {
+  const mailboxRepository = getSenderMailboxRepository();
+  if (!mailboxRepository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const mailbox = await mailboxRepository.get(user.id, user.teamId, req.params.id);
+  if (!mailbox) { res.status(404).json({ message: "邮箱不存在或无权访问" }); return; }
+  const service = activeMailCenterSync || getMailCenterSyncService();
+  if (!service) { res.status(503).json({ message: "同步服务未启动" }); return; }
+  try {
+    const result = await service.checkAccount(mailbox.id);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : String(error) });
+  }
+}));
+
+/** 各文件夹封数/未读数：给界面的「收件箱 / 已发送 / 垃圾箱 / 垃圾邮件」切换用 */
+app.get("/api/mail-center/folders", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const map = await repository.folderStats(user.id, user.teamId, String(req.query.mailboxId || ""));
+  res.json({
+    folders: SYNC_FOLDER_KINDS.map((kind) => ({
+      kind,
+      label: FOLDER_LABELS[kind],
+      total: map.get(kind)?.total || 0,
+      unread: map.get(kind)?.unread || 0
+    }))
+  });
+}));
+
+app.get("/api/mail-center/messages", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const result = await repository.listMessages(user.id, user.teamId, {
+    mailboxId: String(req.query.mailboxId || ""),
+    entityType: String(req.query.entityType || ""),
+    entityId: String(req.query.entityId || ""),
+    direction: String(req.query.direction || ""),
+    folder: String(req.query.folder || ""),
+    q: String(req.query.q || ""),
+    limit: Number(req.query.limit || 30),
+    offset: Number(req.query.offset || 0),
+    focusId: String(req.query.focusId || "")
+  });
+  res.json(result);
+}));
+
+app.get("/api/mail-center/messages/:id", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const message = await repository.getMessage(user.id, user.teamId, req.params.id);
+  if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
+  res.json({ message });
+}));
+
+app.post("/api/mail-center/messages/:id/read", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const message = await repository.getMessage(user.id, user.teamId, req.params.id);
+  if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
+  await repository.markRead(user.id, user.teamId, message.id);
+  res.json({ ok: true });
+}));
+
+app.post("/api/mail-center/messages/:id/unread", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const message = await repository.getMessage(user.id, user.teamId, req.params.id);
+  if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
+  await repository.markUnread(user.id, user.teamId, message.id);
+  res.json({ ok: true });
+}));
+
+/** 邮件中心：手工写邮件。用指定邮箱账号的 SMTP 发出，副本归档到该账号的「已发送」，
+ *  并记一条 outbound_email_logs（source=mail-center）让交互旅程能看到这封信。 */
+app.post("/api/mail-center/send", requireAuth, asyncRoute(async (req, res) => {
+  const mailboxRepository = getSenderMailboxRepository();
+  if (!mailboxRepository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const input = z.object({
+    mailboxId: z.string().min(1),
+    to: z.string().min(1, "请填写收件人").max(2000),
+    cc: z.string().max(2000).optional().default(""),
+    bcc: z.string().max(2000).optional().default(""),
+    subject: z.string().min(1, "请填写邮件主题").max(300),
+    content: z.string().max(80000).optional().default(""),
+    // 正文里可能带内嵌图（dataURL），放宽到 8M 字符；发送前抽出图片转 CID 附件
+    html: z.string().max(8_000_000).optional().default(""),
+    attachments: z.array(z.object({
+      filename: z.string().min(1).max(255),
+      contentBase64: z.string().min(1).max(14_000_000),
+      contentType: z.string().max(120).optional().default("")
+    })).max(10).optional().default([]),
+    // 会话线程：回复/转发时由前端带上原邮件的 Message-ID 链
+    inReplyTo: z.string().max(998).optional().default(""),
+    references: z.string().max(2000).optional().default("")
+  }).parse(req.body || {});
+  if (!input.content.trim() && !input.html.trim() && !input.attachments.length) {
+    res.status(400).json({ message: "邮件正文不能为空" });
+    return;
+  }
+  // 附件守门：解码后总量 ≤ 12MB（SMTP 与 IMAP 归档都会感谢这个上限）
+  const decodedAttachments: Array<{ filename: string; content: Buffer; contentType?: string }> = [];
+  let attachmentsTotal = 0;
+  for (const item of input.attachments) {
+    const content = Buffer.from(item.contentBase64, "base64");
+    attachmentsTotal += content.length;
+    if (attachmentsTotal > 12 * 1024 * 1024) {
+      res.status(400).json({ message: "附件总大小超过 12MB 上限，请压缩后再发" });
+      return;
+    }
+    decodedAttachments.push({ filename: item.filename, content, contentType: item.contentType || undefined });
+  }
+  const mailbox = await mailboxRepository.get(user.id, user.teamId, input.mailboxId);
+  if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+  if (mailbox.enabled === false) { res.status(400).json({ message: "该邮箱已停用，请先在账号卡里启用" }); return; }
+  // 线程头规范化：Message-ID 必须是 <id@host> 形式（References 允许多个空格分隔）
+  const normalizeMessageIdHeader = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return trimmed.startsWith("<") ? trimmed : `<${trimmed}>`;
+  };
+  const normalizeReferencesHeader = (value: string) =>
+    value.split(/\s+/).map((item) => item.trim()).filter(Boolean).map(normalizeMessageIdHeader).join(" ").slice(0, 2000);
+  // 正文内嵌图（data URI）抽出来转 CID 内嵌附件：Gmail/Outlook 会吞 data URI，只有 CID 图能显示
+  const inlineImages: Array<{ filename: string; content: Buffer; contentType: string; cid: string }> = [];
+  let bodyHtml = input.html.trim() ? sanitizeEmailHtml(input.html) : undefined;
+  if (bodyHtml) {
+    const extracted = extractInlineDataImages(bodyHtml);
+    bodyHtml = extracted.html;
+    inlineImages.push(...extracted.images);
+  }
+  if (attachmentsTotal + inlineImages.reduce((sum, item) => sum + item.content.length, 0) > 12 * 1024 * 1024) {
+    res.status(400).json({ message: "附件与内嵌图总量超过 12MB 上限，请压缩后再发" });
+    return;
+  }
+  const sender = { ...user, ...senderMailboxOverrides(mailbox) };
+  try {
+    const info = await sendOutboundEmail(sender, {
+      to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
+      subject: input.subject,
+      body: input.content,
+      html: bodyHtml,
+      attachments: [...decodedAttachments, ...inlineImages],
+      inReplyTo: normalizeMessageIdHeader(input.inReplyTo) || undefined,
+      references: normalizeReferencesHeader(input.references) || undefined,
+      appendOptOut: false,
+      htmlAlways: true
+    });
+    // 台账归属按收件邮箱匹配（客户优先，其次线索），旅程才会把这封信挂到对应档案；
+    // 匹配不到就维持 unknown（只进发信台账，不进任何人的旅程）。
+    const toAddress = mailCenterAddressOf(input.to);
+    let logEntityType: "customer" | "lead" | "unknown" = "unknown";
+    let logEntityId = "";
+    if (toAddress) {
+      const store = getStore();
+      const customer = store.customers.find((item) =>
+        mailCenterAddressOf(item.email || "") === toAddress && mailCenterVisibleOwner(req, item.ownerId, item.teamId));
+      if (customer) {
+        logEntityType = "customer";
+        logEntityId = customer.id;
+      } else {
+        const lead = store.leads.find((item) =>
+          mailCenterAddressOf(item.email || "") === toAddress && mailCenterVisibleOwner(req, item.ownerId, item.teamId));
+        if (lead) {
+          logEntityType = "lead";
+          logEntityId = lead.id;
+        }
+      }
+    }
+    recordOutboundEmailLog(getStore(), {
+      messageId: info.messageId,
+      teamId: user.teamId,
+      ownerId: user.id,
+      entityType: logEntityType,
+      entityId: logEntityId,
+      to: input.to,
+      subject: input.subject,
+      source: "mail-center",
+      sentAt: new Date().toISOString()
+    });
+    res.json({ ok: true, messageId: info.messageId, entityType: logEntityType, entityId: logEntityId });
+  } catch (error) {
+    res.status(400).json({ message: outboundEmailError(error, sender) });
+  }
+}));
+
+/** 千人千面：写邮件弹窗里的一键个性化。
+ *  收件人匹配到客户/线索时：没有背调留档就先跑一次背调（AI 同步路径直接等结果；
+ *  本机 CLI 引擎路径在请求内长等 150s，等不到回 202 交给前端提示），
+ *  然后用本机 CLI 按「背调 + 当前邮件内容」产出个性化版本。
+ *  只生成文本，不落库、不发送；生成的背调与背调页同口径留档。 */
+app.post("/api/mail-center/personalize", requireAuth, asyncRoute(async (req, res) => {
+  const store = getStore();
+  const actor = req.user!;
+  const user = store.users.find((item) => item.id === actor.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const input = z.object({
+    to: z.string().min(1).max(2000),
+    subject: z.string().max(300).optional().default(""),
+    content: z.string().max(60000).optional().default(""),
+    lang: z.enum(["", "zh", "en"]).optional().default(""),
+    entityType: z.enum(["", "customer", "lead"]).optional().default(""),
+    entityId: z.string().max(120).optional().default("")
+  }).parse(req.body || {});
+
+  // 定位收件人：显式指定 > 按邮箱匹配（客户优先，其次线索）
+  const email = mailCenterAddressOf(input.to);
+  let entityType: "" | "customer" | "lead" = input.entityType === "customer" || input.entityType === "lead" ? input.entityType : "";
+  let entityId = entityType ? input.entityId.trim() : "";
+  let company = "";
+  let contact = "";
+  if ((!entityType || !entityId) && email) {
+    const customer = store.customers.find((item) =>
+      mailCenterAddressOf(item.email || "") === email && mailCenterVisibleOwner(req, item.ownerId, item.teamId));
+    if (customer) {
+      entityType = "customer";
+      entityId = customer.id;
+      company = customer.company || "";
+      contact = customer.contact || "";
+    } else {
+      const lead = store.leads.find((item) =>
+        mailCenterAddressOf(item.email || "") === email && mailCenterVisibleOwner(req, item.ownerId, item.teamId));
+      if (lead) {
+        entityType = "lead";
+        entityId = lead.id;
+        company = lead.company || "";
+        contact = lead.contact || "";
+      }
+    }
+  }
+  if (entityType && !entityId) entityType = "";
+
+  let research: MailPersonalizeResearch | null = null;
+  let researchReused = false;
+  let researchRan = false;
+  if (entityType && entityId) {
+    const repository = getBackgroundResearchRepository();
+    const records = repository
+      ? await repository.list(actor.teamId, entityType, entityId, 1).catch(() => [])
+      : [];
+    const record = records[0];
+    if (record) {
+      try {
+        const payload = JSON.parse(record.payloadJson || "null") as Record<string, unknown> | null;
+        research = ((payload?.research ?? payload) as MailPersonalizeResearch | null) || null;
+        researchReused = Boolean(research);
+      } catch {
+        research = null;
+      }
+    }
+    if (!research) {
+      const outcome = await buildBackgroundResearch(actor, { entityType, entityId });
+      if (outcome?.kind === "research") {
+        research = outcome.research;
+        researchRan = true;
+        await persistBackgroundResearchRecord(actor, outcome.research);
+      } else if (outcome?.kind === "cli") {
+        const result = await runEngineCliJob(actor, {
+          kind: "research",
+          entityType,
+          entityId,
+          request: { skeleton: outcome.skeleton },
+          prompt: outcome.prompt,
+          waitMs: 150_000
+        });
+        if (result.pending) {
+          res.status(202).json({
+            pending: true,
+            message: "背调任务已交给本机 CLI（约 1 分钟），完成后请再点一次「千人千面」"
+          });
+          return;
+        }
+        if (result.payload.failed) {
+          // 背调失败不阻断写信：退回 CRM 骨架事实继续生成
+          research = outcome.skeleton;
+        } else {
+          research = (result.payload.research as MailPersonalizeResearch) || outcome.skeleton;
+          researchRan = true;
+        }
+      }
+    }
+  }
+
+  const prompt = buildMailPersonalizePrompt({
+    to: input.to,
+    company,
+    contact,
+    subject: input.subject,
+    content: input.content,
+    lang: input.lang,
+    research
+  });
+  try {
+    const result = await runCliSummary(prompt, { timeoutMs: 100_000 });
+    res.json({
+      text: result.text,
+      model: result.model,
+      durationMs: result.durationMs,
+      research: { matched: Boolean(entityType), reused: researchReused, ran: researchRan },
+      entityType,
+      entityId,
+      company
+    });
+  } catch (error) {
+    res.status(502).json({ message: error instanceof Error ? error.message : "AI 生成失败" });
+  }
+}));
+
+/** AI 邮件助手：读一封邮件（或粘贴的文本）→ 产出一段可复制的文案。
+ *  只生成、不落库、不改已读、不自动发送；正文会交给本机 CLI 的模型处理，
+ *  所以界面上必须明示这一点，且长度由 buildMailAssistPrompt 截断。 */
+app.post("/api/mail-center/assist", requireAuth, asyncRoute(async (req, res) => {
+  const action = String(req.body?.action || "");
+  if (!isMailAssistAction(action)) {
+    res.status(400).json({ message: "不支持的 AI 动作" });
+    return;
+  }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+
+  let text = String(req.body?.text || "").trim();
+  let subject = String(req.body?.subject || "").trim();
+  let company = "";
+  let contact = "";
+  const messageId = String(req.body?.messageId || "").trim();
+
+  if (messageId) {
+    const repository = getMailCenterRepository();
+    if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+    const message = await repository.getMessage(user.id, user.teamId, messageId);
+    if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
+    text = text || message.bodyText || message.snippet;
+    subject = subject || message.subject;
+    contact = message.fromName || message.fromAddress;
+    if (message.entityType === "customer") {
+      const customer = store.customers.find((item) => item.id === message.entityId);
+      company = customer?.company || "";
+    } else if (message.entityType === "lead") {
+      const lead = store.leads.find((item) => item.id === message.entityId);
+      company = lead?.company || "";
+    }
+  }
+
+  if (!text) {
+    res.status(400).json({ message: "没有可处理的邮件正文：先选一封邮件，或粘贴一段内容" });
+    return;
+  }
+
+  const prompt = buildMailAssistPrompt({
+    action,
+    text,
+    subject,
+    company,
+    contact,
+    lang: String(req.body?.lang || "")
+  });
+
+  try {
+    const result = await runCliSummary(prompt, { timeoutMs: 120_000 });
+    res.json({ text: result.text, model: result.model, durationMs: result.durationMs });
+  } catch (error) {
+    res.status(502).json({ message: error instanceof Error ? error.message : "AI 生成失败" });
+  }
+}));
+
+/** 客户速查：按公司/联系人/邮箱找客户，并带上邮件往来统计 */
+app.get("/api/mail-center/customers", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const keyword = String(req.query.q || "").trim().toLowerCase();
+  const withMailOnly = req.query.withMail === "1";
+  const candidates: Array<{
+    entityType: "customer" | "lead";
+    entityId: string;
+    company: string;
+    contact: string;
+    email: string;
+    ownerId: string;
+    ownerName: string;
+    stage: string;
+  }> = [];
+  for (const customer of store.customers) {
+    if (!mailCenterVisibleOwner(req, customer.ownerId, customer.teamId)) continue;
+    candidates.push({
+      entityType: "customer",
+      entityId: customer.id,
+      company: customer.company || "",
+      contact: customer.contact || "",
+      email: String(customer.email || "") || mailCenterAddressOf(customer.contact || ""),
+      ownerId: customer.ownerId,
+      ownerName: store.users.find((item) => item.id === customer.ownerId)?.name || "",
+      stage: customer.stage || ""
+    });
+  }
+  for (const lead of store.leads) {
+    if (!mailCenterVisibleOwner(req, lead.ownerId, lead.teamId)) continue;
+    candidates.push({
+      entityType: "lead",
+      entityId: lead.id,
+      company: lead.company || "",
+      contact: lead.contact || "",
+      email: String(lead.email || "") || mailCenterAddressOf(lead.contact || ""),
+      ownerId: lead.ownerId,
+      ownerName: store.users.find((item) => item.id === lead.ownerId)?.name || "",
+      stage: lead.stage || ""
+    });
+  }
+  const matched = candidates.filter((item) => !keyword
+    || item.company.toLowerCase().includes(keyword)
+    || item.contact.toLowerCase().includes(keyword)
+    || item.email.toLowerCase().includes(keyword));
+
+  const customerStats = await repository.countByEntity(
+    user.id, user.teamId, "customer", matched.filter((item) => item.entityType === "customer").map((item) => item.entityId)
+  );
+  const leadStats = await repository.countByEntity(
+    user.id, user.teamId, "lead", matched.filter((item) => item.entityType === "lead").map((item) => item.entityId)
+  );
+  const items = matched.map((item) => {
+    const stat = (item.entityType === "customer" ? customerStats : leadStats).get(item.entityId);
+    return {
+      ...item,
+      mailTotal: stat?.total || 0,
+      mailInbound: stat?.inbound || 0,
+      lastMailAt: stat?.lastAt || ""
+    };
+  }).filter((item) => !withMailOnly || item.mailTotal > 0)
+    .sort((a, b) => {
+      if (!!b.lastMailAt !== !!a.lastMailAt) return b.lastMailAt ? 1 : -1;
+      if (b.lastMailAt !== a.lastMailAt) return b.lastMailAt.localeCompare(a.lastMailAt);
+      return b.mailTotal - a.mailTotal;
+    })
+    .slice(0, 40);
+  res.json({ items, total: items.length });
+}));
+
+function mailCenterEntity(req: Request, entityType: string, entityId: string) {
+  const store = getStore();
+  if (entityType === "customer") {
+    return store.customers.find((item) => item.id === entityId) || null;
+  }
+  if (entityType === "lead") {
+    return store.leads.find((item) => item.id === entityId) || null;
+  }
+  return null;
+}
+
+app.get("/api/mail-center/customer/:entityType/:entityId", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const user = getStore().users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const entityType = req.params.entityType === "lead" ? "lead" : "customer";
+  const entity = mailCenterEntity(req, entityType, req.params.entityId);
+  if (!entity || !mailCenterVisibleOwner(req, entity.ownerId, entity.teamId)) {
+    res.status(404).json({ message: "客户不存在或无权访问" }); return;
+  }
+  const email = String((entity as { email?: string }).email || "")
+    || mailCenterAddressOf((entity as { contact?: string }).contact || "");
+  const related = await repository.messagesForEntity(user.id, user.teamId, entityType, entity.id);
+  const byAddress = email
+    ? await repository.messagesForAddresses(user.id, user.teamId, [email], 120)
+    : [];
+  const merged = new Map<string, typeof related[number]>();
+  for (const message of [...related, ...byAddress]) merged.set(message.id, message);
+  const messages = Array.from(merged.values())
+    .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
+  // ⚠️ 不能要求 fromAddress 与登记的客户邮箱逐字相同：客户常从同域名的另一个地址回信
+  // （DENSI 登记 densi@densi.com.tr，实际回信人是 scales@densi.com.tr），
+  // 逐字比会把 5 封回信算成 0 封、最近回复显示「—」。这里的 messages 已经按
+  // 主体归属 + 该邮箱地址双重收窄，凡是来信就是该客户的回复。
+  const replies = messages.filter((message) => message.direction === "inbound");
+  res.json({
+    entity: {
+      entityType,
+      entityId: entity.id,
+      company: (entity as { company?: string }).company || "",
+      contact: (entity as { contact?: string }).contact || "",
+      ownerId: entity.ownerId,
+      ownerName: getStore().users.find((item) => item.id === entity.ownerId)?.name || ""
+    },
+    email,
+    messages,
+    stats: {
+      total: messages.length,
+      inbound: messages.filter((message) => message.direction === "inbound").length,
+      replies: replies.length,
+      lastReplyAt: replies[0]?.sentAt || "",
+      lastMessageAt: messages[0]?.sentAt || ""
+    }
+  });
+}));
+
+app.get("/api/mail-center/journey/:entityType/:entityId", requireAuth, asyncRoute(async (req, res) => {
+  const repository = getMailCenterRepository();
+  if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+  const store = getStore();
+  const user = store.users.find((item) => item.id === req.user!.id);
+  if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+  const entityType = req.params.entityType === "lead" ? "lead" : "customer";
+  const entity = mailCenterEntity(req, entityType, req.params.entityId);
+  if (!entity || !mailCenterVisibleOwner(req, entity.ownerId, entity.teamId)) {
+    res.status(404).json({ message: "客户不存在或无权访问" }); return;
+  }
+  const entityId = entity.id;
+  const messages = await repository.messagesForEntity(user.id, user.teamId, entityType, entityId);
+  const outboundLogs = store.outboundEmailLogs.filter((log) =>
+    log.entityType === entityType && log.entityId === entityId && canSeeOwner(user, log.ownerId, log.teamId)
+  );
+  const touchpoints = store.prospectTouchpoints.filter((point) =>
+    (entityType === "customer" ? point.customerId === entityId : point.leadId === entityId)
+    && canSeeOwner(user, point.ownerId, point.teamId)
+  );
+  const activities = entityType === "customer"
+    ? store.customerActivities.filter((activity) => activity.customerId === entityId)
+    : [];
+  const todos = store.todos.filter((todo) =>
+    (entityType === "customer" ? todo.customerId === entityId : todo.leadId === entityId)
+    && canSeeOwner(user, todo.ownerId, todo.teamId)
+  );
+  const events = mergeJourneyEvents({
+    messages,
+    outboundLogs: outboundLogs.map((log) => ({
+      id: log.id,
+      messageId: log.messageId,
+      subject: log.subject,
+      sentAt: log.sentAt,
+      dispatchStatus: log.dispatchStatus,
+      repliedAt: log.repliedAt,
+      bouncedAt: log.bouncedAt,
+      to: log.to
+    })),
+    touchpoints: touchpoints.map((point) => ({
+      id: point.id,
+      direction: point.direction,
+      eventType: point.eventType,
+      subject: point.subject,
+      content: point.content,
+      occurredAt: point.occurredAt,
+      createdAt: point.createdAt,
+      channel: point.channel,
+      messageId: point.messageId,
+      replyClassification: point.replyClassification
+    })),
+    activities: activities.map((activity) => ({
+      id: activity.id,
+      type: activity.type,
+      content: activity.content,
+      createdAt: activity.createdAt
+    })),
+    todos: todos.map((todo) => ({
+      id: todo.id,
+      title: todo.title,
+      createdAt: todo.createdAt,
+      dueAt: todo.dueAt,
+      done: todo.done
+    }))
+  });
+  res.json({
+    entityType,
+    entityId,
+    company: (entity as { company?: string }).company || "",
+    email: String((entity as { email?: string }).email || "")
+      || mailCenterAddressOf((entity as { contact?: string }).contact || ""),
+    events,
+    stats: journeyStats(events)
+  });
 }));
 
 app.post("/api/profile/inbound-mail/test", requireAuth, asyncRoute(async (req, res) => {
@@ -7833,7 +8544,7 @@ async function finalizeEngineCliJobWithoutJson(
   }
   const finalSubject = String(draft.subject || "").slice(0, 160);
   const finalBody = ensureDevelopmentEmailSignature(fallbackBody.slice(0, 5600), String(context.signatureText || "")).slice(0, 6000);
-  const payload: Record<string, unknown> = {
+  const payload: Record<string, unknown> = recalibrateDevelopmentEmailPayload({
     ...template,
     draft: { ...draft, subject: finalSubject, body: finalBody },
     quality: brief ? checkDevelopmentEmailDraft({ subject: finalSubject, body: finalBody }, brief) : null,
@@ -7842,9 +8553,46 @@ async function finalizeEngineCliJobWithoutJson(
     message,
     engineJob: publicEngineJob({ ...job, status: "succeeded", finishedAt, errorMessage: "" }),
     pending: false
-  };
+  }, brief, finalSubject, finalBody);
   await repository.finish(job.id, "succeeded", JSON.stringify(payload), "");
   return payload;
+}
+
+/**
+ * 用 CLI **实际写出来的**正文重算「依据 + 为什么这么写」。
+ *
+ * 为什么必须重算：走 CLI 时响应体在提交作业前就已经冻结了（那时用的是模板草稿），
+ * CLI 回来的是另一封信。不重算的话，面板上的「为什么这么写」描述的是一封
+ * 根本没发出去的信 —— 这是"依据面板说假话"的另一个入口。
+ */
+function recalibrateDevelopmentEmailPayload(
+  payload: Record<string, unknown>,
+  brief: DevelopmentEmailBrief | undefined,
+  subject: string,
+  body: string
+): Record<string, unknown> {
+  if (!brief) return payload;
+  const current = payload.brief;
+  if (!current || typeof current !== "object") return payload;
+  const calibrated = finalizePersonalization(brief.personalization, { subject, body }, brief);
+  return {
+    ...payload,
+    brief: {
+      ...(current as Record<string, unknown>),
+      personalization: {
+        hook: calibrated.hook,
+        relevance: calibrated.relevance,
+        subjectAngle: calibrated.subjectAngle,
+        ask: calibrated.ask,
+        factsUsed: calibrated.factsUsed,
+        angles: calibrated.angles,
+        trace: calibrated.trace,
+        difference: calibrated.difference,
+        reasons: calibrated.reasons,
+        personalized: calibrated.personalized
+      }
+    }
+  };
 }
 
 /**
@@ -7946,13 +8694,13 @@ async function finalizeEngineCliJob(
   const finalSubject = (patch.subject || String(draft.subject || "")).slice(0, 160);
   const finalBody = ensureDevelopmentEmailSignature((patch.body || fallbackBody).slice(0, 5600), signatureText).slice(0, 6000);
   const finalDraft = { ...draft, subject: finalSubject, body: finalBody, engine: job.engine || String(draft.engine || "") };
-  const payload: Record<string, unknown> = {
+  const payload: Record<string, unknown> = recalibrateDevelopmentEmailPayload({
     ...template,
     draft: finalDraft,
     quality: brief ? checkDevelopmentEmailDraft({ subject: finalSubject, body: finalBody }, brief) : null,
     engineJob: publicEngineJob(doneJob),
     pending: false
-  };
+  }, brief, finalSubject, finalBody);
   const readiness = payload.readiness as Record<string, unknown> | undefined;
   if (readiness && typeof readiness === "object") {
     readiness.aiGenerated = true;
@@ -9446,6 +10194,8 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       angle: stagePlan.angle,
       cta: stagePlan.cta,
       maxWords: stagePlan.maxWords,
+      // 这一阶段按设计要不要用背调：界面据此区分「没做到」和「本来就不该做」
+      personalizes: stagePlan.personalizes,
       nextStepLabel: journey?.stage.nextStepLabel || "",
       canSend: journey ? journey.stage.canSend : true,
       blockReason: journey?.stage.blockReason || ""
@@ -9455,12 +10205,12 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
       evidence: brief.evidence,
       missing: brief.missing,
       angles: brief.angles,
-      // 千人千面的依据：这封信具体引用了什么、和同阶段别人的信差在哪。
-      // 界面必须能回答「模板哪来的、有没有用背调」，所以原样带出去，不让前端猜。
-      // 注意必须用 finalBody 再校准一次：AI / CLI 会重写正文，
+      // 个性化与「为什么这么写」：这封具体引用了什么、和同阶段别人的信差在哪。
+      // 界面必须能回答「模板哪来的、有没有用背调、为什么这么写」，所以原样带出去，不让前端猜。
+      // 注意必须用 finalSubject/finalBody 再校准一次：AI / CLI 会重写正文，
       // 请求时那份 brief 的 personalized 只说明「手上有素材」，不等于「真的用上了」。
       personalization: (() => {
-        const calibrated = finalizePersonalization(brief.personalization, finalBody, brief);
+        const calibrated = finalizePersonalization(brief.personalization, { subject: finalSubject, body: finalBody }, brief);
         return {
           hook: calibrated.hook,
           relevance: calibrated.relevance,
@@ -9470,6 +10220,7 @@ app.post("/api/development-email/draft", requireAuth, asyncRoute(async (req, res
           angles: calibrated.angles,
           trace: calibrated.trace,
           difference: calibrated.difference,
+          reasons: calibrated.reasons,
           personalized: calibrated.personalized
         };
       })(),
@@ -28780,6 +29531,16 @@ async function startServer() {
     inboundMailWatcher.start();
     console.log(`GoodJob CRM inbound mail watcher enabled (poll ${Number(process.env.INBOUND_MAIL_POLL_MS || 120_000)}ms, lookback ${Number(process.env.INBOUND_MAIL_LOOKBACK_DAYS || 7)}d)`);
   }
+  // ── 邮件中心：多账号收件同步（每个邮箱按自己的频率；MAIL_CENTER_SYNC=false 关闭）──
+  if (process.env.MAIL_CENTER_SYNC !== "false") {
+    const mailCenterSync = getMailCenterSyncService();
+    if (mailCenterSync) {
+      activeMailCenterSync = mailCenterSync;
+      mailCenterSync.start();
+      console.log("[mail-center] 收件同步已启用（账号级频率，最小 5 分钟，tick "
+        + `${Number(process.env.MAIL_CENTER_SYNC_TICK_MS || 60_000)}ms）`);
+    }
+  }
   // ── 生产模式：后端直接 serve 前端静态文件（单端口模式）────────────
   const frontendDist = process.env.FRONTEND_DIST
     || path.resolve(process.cwd(), "../frontend/dist")
@@ -28841,6 +29602,8 @@ async function startServer() {
     try {
       activeInboundMailWatcher?.stop();
       activeInboundMailWatcher = null;
+      activeMailCenterSync?.stop();
+      activeMailCenterSync = null;
       await stopReminderRuleScheduler();
       await stopResourceEventPruneScheduler();
       stopAiEngineRecoveryScheduler();

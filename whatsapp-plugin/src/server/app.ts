@@ -658,7 +658,9 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
           /** 15 秒 16k 单声道 ≈ 480KB，base64 后 ≈ 640KB；上限留到 2MB 兜住异常调用。 */
           pcm: z.string().min(16).max(2_000_000),
           sampleRate: z.number().int().min(8_000).max(48_000).default(16_000),
-          language: z.string().trim().max(16).optional()
+          language: z.string().trim().max(16).optional(),
+          /** 业务热词（initial prompt）。**必须与 language 同语种**，跨语种会被当成上文续写。 */
+          prompt: z.string().trim().max(600).optional()
         })
         .parse(request.body ?? {});
       const pcm = Buffer.from(input.pcm, "base64");
@@ -667,8 +669,14 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
         return;
       }
       try {
-        const text = await callTranscribe.transcribe(pcm, { sampleRate: input.sampleRate, language: input.language });
-        response.json({ text, bytes: pcm.length, sampleRate: input.sampleRate });
+        const result = await callTranscribe.transcribe(pcm, {
+          sampleRate: input.sampleRate,
+          language: input.language,
+          prompt: input.prompt
+        });
+        // 把识别用的语种一起带回去：页面拿它把「自动」锁成实际语种，
+        // 后面每一段就不用再付一遍探测请求（auto 是两遍，锁定是一遍）。
+        response.json({ text: result.text, language: result.language, bytes: pcm.length, sampleRate: input.sampleRate });
       } catch (error) {
         // 500 而不是 503：调用方（扩展）要区分「这段音频转不出来」和「服务没起来」，
         // 前者重试没有意义，后者值得提示去装模型。

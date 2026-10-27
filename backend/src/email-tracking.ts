@@ -165,11 +165,16 @@ const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/g;
 /**
  * 把纯文本正文转成带追踪的 HTML：链接改写为可追踪跳转，末尾追加 1x1 追踪像素。
  * 未开启追踪时返回 null，调用方继续按纯文本发送。
+ *
+ * trackingOptional=true（邮件中心手工写信）时：即使没开追踪也返回 HTML 版式，
+ * 保证「撰写框里看到的」与「收件人收到的」字体版式一致（只是没有链接改写和像素）。
  */
-export function buildTrackedEmailHtml(body: string, messageId: string) {
-  if (!isEmailTrackingEnabled()) return null;
+export function buildTrackedEmailHtml(body: string, messageId: string, options?: { trackingOptional?: boolean }) {
+  const trackingOptional = options?.trackingOptional === true;
+  if (!isEmailTrackingEnabled() && !trackingOptional) return null;
+  const trackingOn = isEmailTrackingEnabled();
   const normalized = normalizeMessageIdValue(messageId);
-  if (!normalized) return null;
+  if (!normalized && !trackingOptional) return null;
   const text = body || "";
   let cursor = 0;
   let html = "";
@@ -178,14 +183,14 @@ export function buildTrackedEmailHtml(body: string, messageId: string) {
     const index = match.index ?? 0;
     html += escapeHtml(text.slice(cursor, index));
     const rawUrl = match[0];
-    const tracked = buildClickTrackingUrl(normalized, rawUrl);
+    const tracked = trackingOn ? buildClickTrackingUrl(normalized, rawUrl) : rawUrl;
     html += `<a href="${escapeHtml(tracked)}" target="_blank" rel="noopener">${escapeHtml(rawUrl)}</a>`;
     linkCount += 1;
     cursor = index + rawUrl.length;
   }
   html += escapeHtml(text.slice(cursor));
   html = html.replace(/\r\n/g, "\n").replace(/\n/g, "<br />");
-  const pixel = buildOpenPixelUrl(normalized);
+  const pixel = trackingOn ? buildOpenPixelUrl(normalized) : "";
   const pixelTag = pixel
     ? `<img src="${escapeHtml(pixel)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`
     : "";
@@ -194,4 +199,77 @@ export function buildTrackedEmailHtml(body: string, messageId: string) {
     linkCount,
     hasPixel: Boolean(pixel)
   };
+}
+
+/**
+ * 富文本（HTML）正文：走同样的「链接改写 + 追踪像素 + 基础版式包装」管线。
+ * 与 buildTrackedEmailHtml 的差别只在输入是 HTML 片段而非纯文本。
+ * 传入前调用方负责做基础消毒（去 script/iframe/on* 属性）。
+ */
+export function buildTrackedHtmlBody(fragmentHtml: string, messageId: string, options?: { trackingOptional?: boolean }) {
+  const trackingOptional = options?.trackingOptional === true;
+  if (!isEmailTrackingEnabled() && !trackingOptional) return null;
+  const trackingOn = isEmailTrackingEnabled();
+  const normalized = normalizeMessageIdValue(messageId);
+  if (!normalized && !trackingOptional) return null;
+  let html = fragmentHtml || "";
+  let linkCount = 0;
+  if (trackingOn) {
+    html = html.replace(/href\s*=\s*"(https?:\/\/[^"]+)"/gi, (match, url: string) => {
+      linkCount += 1;
+      return `href="${escapeHtml(buildClickTrackingUrl(normalized, url))}"`;
+    });
+  }
+  const pixel = trackingOn ? buildOpenPixelUrl(normalized) : "";
+  const pixelTag = pixel
+    ? `<img src="${escapeHtml(pixel)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`
+    : "";
+  return {
+    html: `<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#16223b;"><div>${html}</div>${pixelTag}</body></html>`,
+    linkCount,
+    hasPixel: Boolean(pixel)
+  };
+}
+
+/** 富文本正文的基础消毒：去 script/iframe/object/embed/style 标签与 on* 事件属性、javascript: 链接。 */
+export function sanitizeEmailHtml(input: string) {
+  return (input || "")
+    .replace(/<\s*(script|iframe|object|embed|style|link|meta)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+    .replace(/<\s*(script|iframe|object|embed|style|link|meta)\b[^>]*\/?\s*>/gi, "")
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/href\s*=\s*"\s*javascript:[^"]*"/gi, 'href="#"');
+}
+
+export interface InlineImageAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+  cid: string;
+}
+
+/**
+ * 抽出正文里的 data URI 内嵌图，替换为 cid: 引用并返回附件列表。
+ * Gmail / Outlook 会吞 data URI 图片，只有 multipart/related 的 CID 内嵌图才能在对方邮箱显示。
+ * 上限默认 10 张，超出原样保留（由外层总量守门兜底）。
+ */
+export function extractInlineDataImages(html: string, options?: { cidPrefix?: string; maxImages?: number }) {
+  const images: InlineImageAttachment[] = [];
+  const max = Math.max(1, options?.maxImages ?? 10);
+  const prefix = (options?.cidPrefix || `mcimg-${Date.now().toString(36)}`).replace(/[^\w.-]/g, "");
+  const next = (html || "").replace(
+    /<img[^>]*\ssrc="data:image\/([^;]+);base64,([^"]+)"[^>]*>/gi,
+    (match, ext: string, base64: string) => {
+      if (images.length >= max) return match;
+      const cleanExt = /^[a-z0-9]+$/i.test(ext) ? ext.toLowerCase() : "png";
+      const cid = `${prefix}-${images.length + 1}@mail.inline`;
+      images.push({
+        filename: `inline-${images.length + 1}.${cleanExt === "jpeg" ? "jpg" : cleanExt}`,
+        content: Buffer.from(base64, "base64"),
+        contentType: `image/${cleanExt}`,
+        cid
+      });
+      return match.replace(/src="[^"]*"/i, `src="cid:${cid}"`);
+    }
+  );
+  return { html: next, images };
 }
