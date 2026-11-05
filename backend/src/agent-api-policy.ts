@@ -64,7 +64,9 @@ const externalPatterns = [
 ];
 
 const readOnlyPostPatterns = [
-  /^\/api\/agent\/tuning\/inspect$/u
+  /^\/api\/agent\/tuning\/inspect$/u,
+  // 「测试连接」只做 SMTP verify + IMAP 只读登录，不发信、不写库
+  /^\/api\/mail-center\/test-connection$/u
 ];
 
 export function normalizeAgentApiPath(rawPath: string) {

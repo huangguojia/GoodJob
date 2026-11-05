@@ -51,7 +51,7 @@ function fakeWritingRuntime(options: {
     name: "Kevin Lau",
     company: "Hong Kong New Longtec Industrial Limited",
     products: "industrial weighing scales and load cells",
-    website: "https://www.newlongtec.com",
+    website: "https://www.demo-trading.com",
     signature: ""
   };
   return {

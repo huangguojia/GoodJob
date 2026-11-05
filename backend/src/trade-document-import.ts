@@ -17,6 +17,8 @@ export const TRADE_DOCUMENT_IMPORT_MAX_BYTES = 8 * 1024 * 1024;
 
 const documentTypes: Array<{ type: TradeDocument["type"]; patterns: RegExp[] }> = [
   { type: "PI", patterns: [/proforma\s+invoice/i, /形式发票/u] },
+  // 采购订单：必须排在 CONTRACT 之前，否则 "purchase order" 这类标题会被销售合同抢先命中
+  { type: "PO", patterns: [/purchase\s+order/i, /采购订单/u, /\bP\.?O\.?\s*(?:#|no\.?|number)/i] },
   { type: "CI", patterns: [/commercial\s+invoice/i, /商业发票/u] },
   { type: "PL", patterns: [/packing\s+list/i, /装箱单/u] },
   { type: "CONTRACT", patterns: [/sales?\s+contract/i, /purchase\s+contract/i, /销售合同/u] },
@@ -27,8 +29,8 @@ const documentTypes: Array<{ type: TradeDocument["type"]; patterns: RegExp[] }> 
 ];
 
 const fieldAliases: Record<Exclude<keyof TradeDocumentImportDraft, "items" | "type" | "language" | "templateStyle" | "customerId" | "dealId" | "title">, string[]> = {
-  number: ["invoice no", "invoice number", "invoice #", "pi no", "quotation no", "quote no", "quote#", "quote #", "contract no", "document no", "no", "单据编号", "发票号", "合同号", "报价单号"],
-  issueDate: ["invoice date", "issue date", "date", "签发日期", "发票日期", "日期"],
+  number: ["invoice no", "invoice number", "invoice #", "pi no", "quotation no", "quote no", "quote#", "quote #", "contract no", "purchase order no", "purchase order number", "po no", "po number", "po#", "po #", "document no", "no", "单据编号", "发票号", "合同号", "报价单号", "采购订单号"],
+  issueDate: ["invoice date", "order date", "issue date", "date", "签发日期", "发票日期", "订单日期", "日期"],
   buyer: ["buyer", "bill to", "customer", "importer", "consignee", "买方", "客户", "收货人"],
   buyerAddress: ["buyer address", "bill to address", "consignee address", "customer address", "买方地址", "客户地址", "收货人地址"],
   buyerContact: ["buyer contact", "contact person", "attention", "attn", "买方联系人", "联系人"],
@@ -310,7 +312,7 @@ function parseRows(rows: unknown[][], fileName: string): ParsedTradeDocumentSour
   const totalField = findField(compactRows, ["grand total", "invoice total", "total payment", "total order", "total amount", "amount due", "总金额", "合计"]);
   const declaredTotal = totalField ? numberValue(totalField.value) : undefined;
   const calculatedTotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-  const title = `${({ PI: "形式发票", CI: "商业发票", PL: "装箱单", CONTRACT: "合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知", CUSTOMS: "报关资料" } as Record<string, string>)[detected.type]} · 导入自 ${fileName}`;
+  const title = `${({ PI: "形式发票", CI: "商业发票", PO: "采购订单", PL: "装箱单", CONTRACT: "合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知", CUSTOMS: "报关资料" } as Record<string, string>)[detected.type]} · 导入自 ${fileName}`;
   const draft: TradeDocumentImportDraft = {
     customerId: "",
     dealId: "",

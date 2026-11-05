@@ -14,7 +14,6 @@ import {
   KB_SEGMENTS_PER_CALL,
   parseKbOutput,
   segmentDocuments,
-  type KbSegment,
   type KbSourceItem
 } from "./kb-training-prompt.js";
 
@@ -141,7 +140,7 @@ export interface KbTrainingDeps {
   /** CRM 已配置且启用的模型：CLI 失败时的降级档。没有就只能如实失败。 */
   aiConfig?: AiModelConfig;
   /** 测试注入点：默认走本机 CLI（runCliSummary）。 */
-  runCli?: (prompt: string, options?: { timeoutMs?: number }) => Promise<{ text: string; model: string }>;
+  runCli?: (prompt: string, options?: { timeoutMs?: number; teamId?: string }) => Promise<{ text: string; model: string }>;
   /** 测试注入点：默认走 callAiModel。 */
   callAi?: (config: AiModelConfig, prompt: string) => Promise<string>;
 }
@@ -259,7 +258,7 @@ export async function executeKbTrainingRun(
         raw = await runAi(deps, prompt);
       } else {
         try {
-          const cli = await (deps.runCli ?? runCliSummary)(prompt, { timeoutMs: KB_CLI_TIMEOUT_MS });
+          const cli = await (deps.runCli ?? runCliSummary)(prompt, { timeoutMs: KB_CLI_TIMEOUT_MS, teamId: actor.teamId });
           stats.cliCalls += 1;
           raw = cli.text;
           if (!chosen) { chosen = "cli"; engine = "cli"; model = cli.model; }
@@ -360,10 +359,6 @@ async function runAi(deps: KbTrainingDeps, prompt: string): Promise<string> {
 }
 
 /** 供路由层复用：把批次里的段落信息整理成「出处」展示文案。 */
-export function describeSegment(segment: KbSegment): string {
-  return `${segment.title || "（未命名）"} ${segment.anchor}`;
-}
-
 // ---------------------------------------------------------------------------
 // 发布编排
 // ---------------------------------------------------------------------------

@@ -35,10 +35,6 @@ export function setEmailTrackingRuntimeBaseUrl(value: string) {
   runtimeBaseUrl = /^https?:\/\//i.test(raw) ? raw.replace(/\/+$/, "") : "";
 }
 
-export function getEmailTrackingRuntimeBaseUrl() {
-  return runtimeBaseUrl;
-}
-
 export function emailTrackingBaseUrl() {
   const raw = runtimeBaseUrl || process.env.EMAIL_TRACKING_BASE_URL?.trim() || "";
   if (!raw) return "";

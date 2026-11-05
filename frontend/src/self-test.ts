@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 import { resolveLeadAiSearchDraft } from "./lead-ai-search.js";
 import {
@@ -7,8 +7,21 @@ import {
   resolveLeadSearchSources
 } from "./lead-source-selection.js";
 
+// 后端 server.ts 已拆分为 server.ts（入口）+ server-core.ts（共享内核）+ routes/*.ts（各业务路由）；
+// 前后端对齐检查读取全部后端 HTTP 源码。后端目录不存在时抛错，由各调用点的 try/catch 跳过。
+function readBackendServerSources() {
+  const backendSrc = new URL("../../backend/src/", import.meta.url);
+  const routeFiles = readdirSync(new URL("routes/", backendSrc)).filter((name) => name.endsWith(".ts")).sort();
+  return ["server.ts", "server-core.ts", ...routeFiles.map((name) => `routes/${name}`)]
+    .map((file) => readFileSync(new URL(file, backendSrc), "utf8"))
+    .join("\n");
+}
 const prototype = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const apiLayer = readFileSync(new URL("./prototype-api.ts", import.meta.url), "utf8");
+// prototype-api.ts 已拆分为入口 + modules/*.ts（函数逐字迁移），源码级断言读取入口与全部模块。
+const apiLayer = [
+  "./prototype-api.ts",
+  ...readdirSync(new URL("./modules/", import.meta.url)).filter((name) => name.endsWith(".ts")).sort().map((name) => `./modules/${name}`)
+].map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 const prospectRadar = readFileSync(new URL("./prospect-radar.ts", import.meta.url), "utf8");
 const integrationCenter = readFileSync(new URL("./integrations/integration-center.ts", import.meta.url), "utf8");
 const productConfig = JSON.parse(readFileSync(new URL("../public/product-config.json", import.meta.url), "utf8")) as {
@@ -598,6 +611,87 @@ assert.match(apiLayer, /applyDocumentCustomerDefaults[\s\S]*applyMatchedSellerTo
 assert.match(apiLayer, /function applyFallbackSellerToEditor/, "人工切回或规则未命中时必须真正恢复兜底卖方资料");
 assert.match(apiLayer, /brandMarkText: documentDefaultValue\("documentDefaultBrandMarkText"\)/, "团队色块文字必须通过默认配置 API 持久化");
 assert.match(apiLayer, /brandMarkText: qs<HTMLInputElement>\("#docBrandMarkTextInput"\)/, "单据级色块文字必须随单据保存");
+
+// 定制B（PI）：黑白制式模板。左上角 Logo 必须取卖方公司档案，模板里不许出现品牌素材或品牌名。
+assert.match(apiLayer, /document\.type === "PI" && document\.templateStyle === "custom-b"/, "PI 必须支持「定制B」专用模板预览");
+assert.match(
+  apiLayer,
+  /function renderCustomBPiPreview[\s\S]{0,1400}?letterhead \? \(letterhead\.logoUrl \|\| ""\) : \(document\.letterheadSnapshot\?\.logoUrl \|\| ""\)/,
+  "定制B 的左上角 Logo 必须取所选卖方公司档案的 logoUrl（没选档案的老单据才用保存快照），不能写死在模板里"
+);
+assert.match(apiLayer, /function renderCustomBPiPreview[\s\S]{0,9000}?cb-logo-image/, "定制B 必须把 Logo 真正渲染在页头（参考 PI 在右上角）");
+assert.doesNotMatch(apiLayer, /function renderCustomBPiPreview[\s\S]{0,9000}?ecore/i, "定制B 模板里不能残留参考件的品牌名");
+assert.match(prototype, /id="docTemplateInput">(?:(?!<\/select>)[\s\S])*?<option value="custom-b">定制B<\/option>/, "单据编辑器必须提供「定制B」模板选项");
+assert.match(prototype, /id="docThemeInput">(?:(?!<\/select>)[\s\S])*?<option value="custom-b">定制B<\/option>/, "主题选择必须同步提供「定制B」");
+assert.match(prototype, /id="documentDefaultTemplateStyle">(?:(?!<\/select>)[\s\S])*?<option value="custom-b">定制B<\/option>/, "团队单据默认配置必须能选「定制B」");
+assert.match(prototype, /\.doc-paper\.custom-b-pi \{/, "定制B 必须有独立纸张样式（去掉主题色顶边、A4 内距）");
+assert.match(prototype, /\.custom-b-pi \.cb-logo-image \{[\s\S]{0,200}?object-fit: contain/, "定制B 的 Logo 必须等比例缩放，不能拉伸变形");
+assert.match(apiLayer, /DOC_PINNED_TEMPLATE_STYLES[\s\S]{0,200}?"custom-b"/, "主题色板切换不能覆盖定制模板的选择");
+// 定制B（PI）必须逐块对上参考 PI（595×842pt，1pt = 1.334px）：坐标由参考件量取后写死。
+assert.match(prototype, /\.doc-paper\.custom-b-pi \{[\s\S]{0,120}?padding: 54px 37px 60px/, "定制B 必须按参考 PI 的页边距（28.34pt）排版");
+assert.match(prototype, /\.custom-b-pi \.cbq-top \{[\s\S]{0,120}?justify-content: flex-end/, "定制B 的 Logo 必须靠右上（参考 PI 的页头）");
+assert.match(prototype, /\.custom-b-pi \.cbq-title \{[\s\S]{0,160}?font-size: 32px;[\s\S]{0,40}?font-weight: 400/, "标题必须是参考件的 24pt 常规字重");
+assert.match(prototype, /\.custom-b-pi \.cbq-party p:nth-child\(3\) \{ margin-top: 10\.5px; \}/, "抬头必须是参考件的五行结构（Company/Address 松、Tell/E-mail/Attn 紧）");
+assert.match(apiLayer, /partyRows[\s\S]{0,400}?T\("tell"\)/, "抬头必须输出 Tell 行（参考件有电话标签）");
+assert.match(prototype, /\.custom-b-pi \.cbq-col-no \{ width: 10%; \}[\s\S]{0,300}?\.custom-b-pi \.cbq-col-amount \{ width: 15%; \}/, "明细表列宽必须是参考件的 10/35/15/15/10/15");
+assert.match(prototype, /\.custom-b-pi \.cbq-table th,[\s\S]{0,120}?border: 0 !important/, "定制B 的明细表必须去掉竖线与外框，只保留横线");
+assert.match(prototype, /\.custom-b-pi \.cbq-table th \{[\s\S]{0,160}?border-bottom: 1\.3px solid #000/, "表头下必须只有一条 1pt 横线");
+assert.match(prototype, /\.custom-b-pi \.cbq-table td \{[\s\S]{0,160}?border-bottom: 1px solid #000/, "明细行下必须是 .75pt 细横线");
+assert.doesNotMatch(prototype, /\.custom-b-pi \.cbq-table tbody tr:last-child/, "明细表末行不能再加粗线（参考件整表同一条 .75pt 线）");
+assert.match(prototype, /\.custom-b-pi \.cbq-totals p:nth-child\(2\) \{[\s\S]{0,80}?border-bottom: 1px solid #000/, "合计区第一条线在 TOTAL NO VAT 下方");
+assert.match(prototype, /\.custom-b-pi \.cbq-totals p:nth-child\(3\) \{[\s\S]{0,120}?border-bottom: 1px solid #000/, "合计区第二条线在 TOTAL USD 下方");
+assert.match(prototype, /\.custom-b-pi \.cbq-terms-title \{ margin: 94px 0 0;[\s\S]{0,120}?border-bottom: 1px solid #000/, "Terms 标题下的线必须整幅通栏（参考件跨到右边距）");
+assert.match(apiLayer, /<h3 class="cbq-terms-title">[\s\S]{0,120}?<\/h3>\s*<section class="cbq-lower">/, "Terms 通栏线必须在左右两栏之外，不能被左列宽度截断");
+assert.match(prototype, /\.custom-b-pi \.cbq-sign \{ width: 251px; margin-top: 122\.3px; \}/, "签署块必须落在参考件右下角的位置");
+assert.match(prototype, /\.custom-b-pi \.cbq-sign-for \{[\s\S]{0,200}?color: #241a7d;[\s\S]{0,120}?font-style: italic/, "签署块必须是参考件的深紫衬线斜体");
+assert.match(prototype, /\.custom-b-pi \.cbq-sign-rule \{[\s\S]{0,120}?border-top: 3px dotted #241a7d/, "签署处必须有参考件的点状虚线");
+assert.match(prototype, /\.custom-b-pi \.cbq-table th\.cbq-col-vat,[\s\S]{0,90}?display: none/, "手机宽度必须收起恒为 No VAT 的列，否则六列会挤在一起");
+assert.match(apiLayer, /function renderCustomBPiPreview[\s\S]{0,9000}?class="cbq-body"/, "定制B 必须是「左标题 + 右侧元信息」两列结构");
+// 卖方公司的 Logo 调节器：两行（上下左右 / 缩小放大），且必须真的作用到定制B 的 PI / PO。
+// 以前这两个模板完全忽略 logoPlacement，用户在「卖方公司」里怎么调都看不到变化。
+assert.match(apiLayer, /data-placement-nudge-dir="\$\{prefix\}" data-nudge-x="0" data-nudge-y="-1"/, "Logo 调节器第一行必须有上移键");
+assert.match(apiLayer, /data-placement-nudge-dir="\$\{prefix\}" data-nudge-x="1" data-nudge-y="0"/, "Logo 调节器第一行必须有右移键");
+assert.match(apiLayer, /data-placement-zoom="\$\{prefix\}" data-zoom="-5"[\s\S]{0,400}?data-placement-zoom="\$\{prefix\}" data-zoom="5"/, "Logo 调节器第二行必须是缩小与放大");
+assert.match(apiLayer, /function documentLogoPlacementStyle[\s\S]{0,700}?transform-origin:\$\{anchor\} top/, "HTML 模板的缩放锚点必须取模板自身的角（PI 右上 / PO 左上）");
+assert.match(apiLayer, /if \(!value\.offsetX && !value\.offsetY && value\.scale === 100\) return "";/, "没调过 Logo 位置时不能输出 transform（默认版式必须与参考件一致）");
+assert.match(apiLayer, /function renderCustomBPiPreview[\s\S]{0,2400}?documentLogoPlacementStyle\(documentLogoPlacementFor\([\s\S]{0,120}?"PI"\), "right"\)[\s\S]{0,4000}?class="cb-logo-image"[^>]*?\$\{logoStyle\}/, "定制B PI 必须把卖方公司里为 PI 调好的 Logo 位置贴到 Logo 上（锚点取右上）");
+assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,2400}?documentLogoPlacementStyle\(documentLogoPlacementFor\([\s\S]{0,120}?"PO"\), "left"\)[\s\S]{0,4000}?class="cb-logo-image"[^>]*?\$\{logoStyle\}/, "定制B PO 必须把卖方公司里为 PO 调好的 Logo 位置贴到 Logo 上（锚点取左上）");
+// 分模板记忆：同一张 Logo 在 PI / PO / 通用（Excel 导出）各存一套，互不覆盖
+assert.match(apiLayer, /function documentLogoPlacementFor[\s\S]{0,620}?source\.logoPlacements\?\.\[key\] \|\| source\.logoPlacement/, "没单独调过的模板必须回落到通用值（不能让老档案突然丢掉已调好的位置）");
+assert.match(apiLayer, /data-placement-tab-key="\$\{escapeHtml\(slot\.key\)\}"[\s\S]{0,200}?data-placement-tab-excel=/, "Logo 调节器必须按模板分页签");
+assert.match(apiLayer, /\{ key: "custom-b:PI"[\s\S]{0,400}?\{ key: "custom-b:PO"[\s\S]{0,400}?\{ key: ""/, "页签必须包含定制B · PI、定制B · PO 与通用（Excel 导出）");
+assert.match(apiLayer, /const persistDraft = \(\) => \{[\s\S]{0,220}?drafts\[currentKey\] = readDocumentAssetPlacement\(prefix\);/, "切模板前必须先把当前这套调节值存进草稿，否则来回切会丢");
+assert.match(apiLayer, /function readDocumentLetterheadLogoPlacements[\s\S]{0,700}?logoPlacement: documentAssetPlacementValue\(map\[""\]\)/, "保存时必须把通用值单独取出来回传 logoPlacement");
+assert.match(apiLayer, /logoUrl, \.\.\.readDocumentLetterheadLogoPlacements\("assetLetterhead"\)/, "保存卖方公司必须同时回传 logoPlacement 与分模板的 logoPlacements");
+// 单据编辑里的一行式 Logo 调节器：挂在卖方公司档案下拉下，随预览同步，停手后静默存回档案
+assert.match(prototype, /id="docSellerProfileInput"[\s\S]{0,1400}?class="doc-logo-inline" id="docLogoInline"/, "一行式 Logo 调节器必须放在卖方公司档案下方（单据编辑表单里）");
+assert.match(prototype, /id="docLogoInline"[^>]*hidden[\s\S]{0,600}?data-doc-logo-dir="0\|-1"[\s\S]{0,800}?data-doc-logo-zoom="-5"[\s\S]{0,400}?data-doc-logo-zoom="5"/, "一行调节器默认隐藏，且必须带方向键与缩小/放大键");
+assert.match(apiLayer, /function syncDocumentLogoInline[\s\S]{0,400}?if \(!active \|\| !letterhead\) \{\s*row\.hidden = true;\s*return;/, "调节器只对会消费该设置的模板出现（定制B 的 PI / PO），其余模板必须隐藏");
+assert.match(apiLayer, /function renderDocumentPreview\([\s\S]{0,200}?syncDocumentLogoInline\(document\);/, "调节器必须随预览刷新同步（预览画哪套值，调节器就显示哪套）");
+assert.match(apiLayer, /letterhead\.logoPlacements = \{ \.\.\.\(letterhead\.logoPlacements \|\| \{\}\), \[key\]: value \}/, "行内调节必须按当前模板的键写入对应那一套，不能覆盖其他模板");
+assert.match(apiLayer, /docLogoInlineSaveTimer = window\.setTimeout\([\s\S]{0,120}?saveDocumentLogoInline/, "行内调节必须停手后静默保存，不能只在内存里改");
+assert.match(apiLayer, /async function saveDocumentLogoInline[\s\S]{0,900}?\/api\/document-assets\/letterheads[\s\S]{0,700}?logoPlacements: asset\.logoPlacements \|\| \{\}/, "静默保存必须把分模板 logoPlacements 一并回传给卖方公司档案");
+
+// 定制B（PO）：采购订单版式。买方主体在页头（Logo / 公司名 / Ship to / Confirmed By），
+// Vendor 才是供应商；Logo 仍然取公司档案，不写死在模板里。
+assert.match(apiLayer, /document\.type === "PO" && document\.templateStyle === "custom-b"/, "PO 必须支持「定制B」专用模板预览");
+assert.match(
+  apiLayer,
+  /function renderCustomBPoPreview[\s\S]{0,1500}?letterhead \? \(letterhead\.logoUrl \|\| ""\) : \(document\.letterheadSnapshot\?\.logoUrl \|\| ""\)/,
+  "PO 定制B 的左上角 Logo 也必须取所选公司档案的 logoUrl，不能写死在模板里"
+);
+assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?cbp-parties/, "PO 定制B 必须有 Vendor / Ship to 两栏");
+assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?Confirmed By:/, "PO 定制B 必须有 Confirmed By 签章区");
+assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?STANDARD PURCHASE ORDER TERMS AND CONDITIONS/, "PO 定制B 必须带标准采购条款");
+assert.doesNotMatch(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?ecore/i, "PO 定制B 模板里不能残留参考件的品牌名");
+assert.match(prototype, /data-doc-type="PO"/, "单据类型页签必须能切到 PO");
+assert.match(apiLayer, /PO: "采购订单"/, "PO 必须登记中文单据名");
+assert.match(prototype, /\.doc-paper\.custom-b-po \{/, "PO 定制B 必须有独立纸张样式");
+assert.match(prototype, /\.custom-b-po \.cbp-parties \{[\s\S]{0,200}?grid-template-columns: 1fr 1fr/, "PO 的 Vendor / Ship to 必须是两栏等高");
+assert.match(prototype, /\.custom-b-po \.cbp-table th \{[\s\S]{0,160}?background: #d9d9d9/, "PO 表头必须是黑白模板的浅灰底");
+assert.match(prototype, /\.custom-b-po \.cbp-head \{[\s\S]{0,160}?justify-content: space-between/, "PO 页头必须是 Logo 与公司名左右分置");
+assert.match(prototype, /\.custom-b-po \.cbp-sign \{[\s\S]{0,120}?grid-template-columns: 1fr 1fr/, "PO 的 Confirmed By / For and on behalf of 必须是双栏签章区");
+assert.match(prototype, /\.custom-b-po \.cbp-terms-table th:nth-child\(4\) \{ width: 26%; \}/, "PO 条款表必须固定五列比例，否则 Payment Term 会把 Terms 挤没");
 assert.match(prototype, /id="leadFinderLfindButton"[\s\S]*Lfind 深入查询/, "自动获客页必须提供 Lfind 深入查询入口");
 assert.match(prototype, /id="leadFinderLfindInlineButton"[\s\S]*Lfind 深入查询/, "来源与执行设置中必须提供 Lfind 深入查询入口");
 assert.match(apiLayer, /\/api\/lead-finder\/lfind-tasks/, "前端必须通过 Lfind 任务接口启动和轮询本地 Skill");
@@ -983,7 +1077,7 @@ kbHasLiveLine(apiLayer, (line) => line.includes('title: "删除知识库"'), "�
 // 前后端路由对齐：前端调了而后端没有 = 上线即 404。后端目录不在时跳过（前端可单独跑）。
 let kbBackendServer = "";
 try {
-  kbBackendServer = readFileSync(new URL("../../backend/src/server.ts", import.meta.url), "utf8");
+  kbBackendServer = readBackendServerSources();
 } catch {
   kbBackendServer = "";
 }
@@ -1070,9 +1164,66 @@ assert.ok(
     `交互旅程缺少 ${source} 来源`
   );
 });
+// 写邮件 / 回复都必须长在阅读栏那一整块里（用户明确：不要右下角小浮窗、不要侧边抽屉）
+assert.ok(
+  apiLayer.includes('id = "mcComposePane"') && apiLayer.includes("openMailCenterComposePane(host"),
+  "写邮件没有挂到阅读栏（#mcComposePane）——又退回右下角浮窗 / 侧边抽屉了"
+);
+assert.ok(
+  /\.mc-compose-pane\s*\{[^}]*width:\s*100%/u.test(prototype),
+  "阅读栏写信区没有压掉 .mail-center-compose-modal 的 680px 固定宽（会顶出右栏）"
+);
+assert.ok(
+  /\.mc-compose-inline\s*\{[^}]*width:\s*auto/u.test(prototype),
+  "就地回复卡片没有覆盖 680px 固定宽（会把阅读栏撑出横向滚动、正文被推着往左跑）"
+);
+// 回复框必须钉在阅读栏底部（原信上半截自己滚），不能接在长正文末尾——那样一点「回复」只看到半个框
+assert.ok(apiLayer.includes('classList.add("is-replying")'), "回复没有进入阅读栏底部布局（is-replying）");
+assert.ok(prototype.includes("mc-detail-scroll"), "阅读栏缺少可滚动区包装 .mc-detail-scroll");
+assert.ok(
+  /#mcMessageDetail\.is-replying\s*\{[^}]*display:\s*flex/u.test(prototype),
+  "缺少回复态的两段式布局样式（#mcMessageDetail.is-replying）"
+);
+// 回复卡是「阅读栏的一个区」，不是浮在里面的小窗：圆角/外边距/投影一留，观感立刻回到小弹窗
+assert.ok(
+  /\.mc-compose-inline\s*\{[^}]*border-radius:\s*0/u.test(prototype),
+  "就地回复卡还留着圆角（观感上仍是浮窗，而不是阅读栏底部的一块）"
+);
+// 800px 高的窗口里，页头+账号卡占 250px，三栏只剩 360px：不回血 130px，回复框一开原信就没了
+assert.ok(
+  apiLayer.includes('classList.toggle("is-writing"') &&
+    /#mail-center\.is-writing\s+\.mc-accounts\s*\{[^}]*display:\s*none/u.test(prototype),
+  "写信/回复时没有收起账号统计条（阅读栏太矮，原信会被回复框挤没）"
+);
+assert.ok(
+  apiLayer.includes("mcFocusWriting(false)"),
+  "关闭写信后没有撤销专注态（账号统计条会一直不回来）"
+);
+// 抬头「取消」不能抢页脚的 #mcComposeCancel（重复 id 会让「存草稿并收起」失去处理函数）
+assert.ok(
+  apiLayer.includes("data-mc-compose-cancel") &&
+    (apiLayer.match(/id="mcComposeCancel"/gu) || []).length === 1,
+  "就地回复抬头的取消按钮没有接线，或与页脚按钮复用了同一个 id"
+);
+// 就地回复抬头不许出现 ×/最小化：那两个是浮窗的招牌动作，留着就还是「小弹窗」
+assert.ok(
+  apiLayer.includes("mcComposeHeadButtonsHtml(false, false)"),
+  "就地回复抬头又带上了 × 或最小化按钮（观感会退回小弹窗）"
+);
+// 切文件夹/切账号会重建 #mcTabBody，把写信界面整个换掉：专注态必须同时撤，
+// 否则账号统计条一直藏着不回来（实测切「已发送」后复现）。先切出函数体，避免正则跨函数误命中。
+const tabBodyFn = (() => {
+  const start = apiLayer.indexOf("function renderMailCenterTabBody()");
+  const end = apiLayer.indexOf("function renderMailCenterMessageList()");
+  return start >= 0 && end > start ? apiLayer.slice(start, end) : "";
+})();
+assert.ok(
+  tabBodyFn.includes("mcFocusWriting(false)"),
+  "重建页签体时没有撤销专注态（切文件夹后账号统计条再也不回来）"
+);
 const mailCenterServer = (() => {
   try {
-    return readFileSync(new URL("../../backend/src/server.ts", import.meta.url), "utf8");
+    return readBackendServerSources();
   } catch {
     return "";
   }
@@ -1097,5 +1248,757 @@ if (mailCenterServer) {
     );
   });
 }
+
+/* ------------------------------ 订单履约 ------------------------------ */
+assert.ok(prototype.includes('id="orders"') && prototype.includes('data-view="orders"'), "缺少订单列表视图或导航入口");
+assert.ok(prototype.includes('id="order-detail"'), "缺少订单详情视图");
+assert.ok(/\.ord-badge\.t-(warn|info|accent|ok|done|muted)/u.test(prototype), "订单状态徽章样式不完整");
+// 弹窗挂在 #appModal，不在 #orders 子树：令牌少一份 → .ord-btn.primary 白底白字，主按钮像消失
+assert.ok(
+  prototype.includes("#orders, #order-detail, #appModal"),
+  "订单弹窗没有继承 --od-* 令牌，主按钮会白底白字"
+);
+// display:flex 会压掉 [hidden]，空横幅会留一条空胶囊
+assert.ok(prototype.includes(".ord-banner[hidden]"), "订单横幅缺少 [hidden] 兜底，没有缺单时也会留一条空条");
+// 视图显隐只能由 .view.active 控制：任何以 #orders 为唯一主体的 display 规则都会压掉它
+assert.ok(
+  !/#orders\s*\{[^}]*display\s*:/u.test(prototype),
+  "订单视图写了以 #orders 为主体的 display 规则，会覆盖 .view 的显隐"
+);
+assert.ok(apiLayer.includes("/api/orders") && apiLayer.includes("expectedStatus"), "订单接口缺少幂等状态参数");
+assert.ok(
+  apiLayer.includes("orderItemId") && apiLayer.includes("/api/tools/shipments"),
+  "发货回写没有传 orderItemId，进度只能靠品名猜"
+);
+assert.ok(apiLayer.includes('data-ord-attach') && apiLayer.includes("/api/knowledge/assets"), "订单缺少文件关联入口");
+// 文件管理不是「挂个链接」：打开必须走 access（否则百度网盘提取码拿不到），分类必须可改，
+// 文件中心必须能反查被哪些订单引用。
+assert.ok(
+  apiLayer.includes("/api/knowledge/assets/${assetId}/access")
+    && !apiLayer.includes('data-ord-open-file="${escapeHtml(file.sourceUrl)}"'),
+  "订单里打开文件绕过了 access 接口：百度网盘只给链接不给提取码，用户点开是死路"
+);
+assert.ok(
+  apiLayer.includes("ordEditFileKind") && apiLayer.includes("data-ord-file-kind"),
+  "订单文件分类选错后改不了，只能删了重挂"
+);
+assert.ok(
+  apiLayer.includes("#ordAssetList") && apiLayer.includes("#ordAssetSearch"),
+  "关联文件弹窗没有搜索：文件一多只能翻列表"
+);
+// 弹窗读的是 /api/knowledge/assets（资料维护），按钮却叫「去文件中心」并跳到 knowledge，
+// 而菜单里的「文件中心」是另一套 files 台账 —— 名字撞车，用户点了只会更困惑。
+assert.ok(
+  !apiLayer.includes("data-ord-goto-knowledge>去文件中心"),
+  "订单文件弹窗还把资料维护叫「文件中心」：菜单里另有同名页面，用户会以为跳错地方"
+);
+assert.ok(
+  apiLayer.includes("去资料维护添加") && apiLayer.includes('activateNavView("knowledge")'),
+  "订单里想新增可复用资料时没有回到资料维护的入口"
+);
+assert.ok(
+  apiLayer.includes("资料维护里还没有资料——切到「上传新文件」"),
+  "资料为空时仍让用户去别处找资料：应直接引导到同一弹窗的上传页签"
+);
+assert.ok(
+  /let tab: "assets" \| "upload" = selectable\.length \? "assets" : "upload"/u.test(apiLayer),
+  "资料维护为空时默认打开空列表：应默认落在「上传新文件」，让用户在订单里就能传完"
+);
+assert.ok(
+  apiLayer.includes("linkedOrderCount") && apiLayer.includes("data-knowledge-order"),
+  "文件中心看不到「被哪些订单引用」，只能从订单单向看文件"
+);
+assert.ok(
+  apiLayer.includes("data-ord-page") && apiLayer.includes("ORD_PAGE_SIZE"),
+  "订单列表没有分页：超过一页的结果会被静默截断，用户看不到后面还有单"
+);
+assert.ok(apiLayer.includes("ordReqSeq"), "订单列表没有请求序号：快速切筛选时旧响应会盖掉新结果");
+assert.ok(
+  apiLayer.includes('tabindex="0"') && apiLayer.includes('event.key !== "Enter"'),
+  "订单行只能鼠标点开，键盘用户进不去详情"
+);
+assert.ok(
+  apiLayer.includes("data-line-product") && apiLayer.includes("itemsLocked"),
+  "编辑弹窗改不了明细，或没有锁住已有发货记录的明细"
+);
+// 详情页一页一件事：六块内容如果又平铺回一条长页，用户翻到底也不知道先做哪件
+assert.ok(
+  apiLayer.includes('data-od-tab="${key}"') && apiLayer.includes('data-od-page="ov"') && apiLayer.includes("function ordShowTab"),
+  "订单详情没有页签结构：明细/单证/发货/文件又会被平铺成一条长页"
+);
+assert.ok(
+  apiLayer.includes("ordDetailTabOrderId") && apiLayer.includes("function ordPrimaryAction"),
+  "订单详情改完状态就退回概览，或缺少唯一主动作（页头与「下一步」各弹一个主按钮）"
+);
+assert.ok(
+  !/class="od-grid"/u.test(apiLayer) && !/class="od-stats"/u.test(apiLayer),
+  "订单详情还在用两栏长页版式（od-grid / od-stats），旧版式已由页签取代"
+);
+// 串联：成交之后三个入口缺一个，用户就会在界面里「找不到单」
+assert.ok(
+  apiLayer.includes("drawerOpenOrderButton"),
+  "商机详情没有「查看订单」入口：成交后用户在界面上找不到这张单"
+);assert.ok(
+  apiLayer.includes("renderCustomerOrders") && apiLayer.includes("customerId=${encodeURIComponent(customer.id)}"),
+  "客户详情没有订单履约区块：跟进客户时看不到货发到哪一步"
+);
+
+const orderServer = (() => {
+  try {
+    return readBackendServerSources();
+  } catch {
+    return "";
+  }
+})();
+const orderService = (() => {
+  try {
+    return readFileSync(new URL("../../backend/src/order-service.ts", import.meta.url), "utf8");
+  } catch {
+    return "";
+  }
+})();
+const iamService = (() => {
+  try {
+    return readFileSync(new URL("../../backend/src/iam/iam-management-service.ts", import.meta.url), "utf8");
+  } catch {
+    return "";
+  }
+})();
+const deriveSource = (() => {
+  try {
+    return readFileSync(new URL("../../backend/src/file-derive.ts", import.meta.url), "utf8");
+  } catch {
+    return "";
+  }
+})();
+const storageSource = (() => {
+  try {
+    return readFileSync(new URL("../../backend/src/file-storage.ts", import.meta.url), "utf8");
+  } catch {
+    return "";
+  }
+})();
+if (orderServer && orderService) {
+  // 成员必须能删除：停用不释放邮箱，同邮箱重建会 409 —— 这条链路不能靠「停用」糊过去
+  assert.match(orderServer, /app\.delete\("\/api\/v1\/members\/:id"/, "成员缺少删除接口，停用后邮箱会被永久占用");
+  assert.match(orderServer, /confirmName: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(100\)/, "删除成员必须要求输入姓名二次确认");
+  assert.match(iamService, /operation === "member\.delete"/, "IAM 服务缺少删除成员分支");
+  assert.match(iamService, /UPDATE users SET email = \?, status = 'deleted'/, "删除有业务引用的成员必须释放邮箱");
+  assert.match(iamService, /不能删除当前登录账号/, "删除成员必须拦住删除自己");
+  assert.match(iamService, /最后一个管理员/, "删除成员必须拦住删掉最后一个管理员");
+  assert.match(iamService, /memberBusinessReferences/, "删除成员前必须先查业务引用，否则会留下孤儿数据");
+  assert.match(apiLayer, /data-ac-member-delete/, "成员列表没有删除入口");
+  assert.match(apiLayer, /data-ac-member-toggle/, "成员列表没有停用入口");
+  assert.match(apiLayer, /请输入完整的成员姓名以确认删除/, "删除确认没有比对成员姓名");
+  assert.ok(orderServer.includes('app.use("/api/orders"'), "订单路由没有挂权限中间件");
+  assert.ok(orderServer.includes("order.status.override"), "缺少订单状态回退/强推的权限校验");
+  // 红线：订单模块不得写客户跟进记录（它是业绩考核数据源，写入不可逆）
+  assert.ok(
+    !orderService.includes("customerActivities"),
+    "订单规则层出现 customerActivities：业绩考核数据被污染"
+  );
+  assert.ok(
+    orderServer.includes("sumOrderItems(items)"),
+    "订单金额没有服务端按明细汇总"
+  );
+  assert.ok(
+    orderServer.includes("dealTitle: deal?.title"),
+    "订单详情没有带来源商机标题：界面上只能看到一个 dealId"
+  );
+  // 回退只改状态不清时间 → 详情时间条会把「已签收」和「已发货」并排显示
+  assert.ok(
+    orderServer.includes("clearForwardTimestamps(order, body.toStatus)"),
+    "状态回退没有清理目标阶段之后的时间戳"
+  );
+  assert.ok(
+    orderService.includes("export function clearForwardTimestamps"),
+    "规则层缺少 clearForwardTimestamps"
+  );
+  // 订单详情必须把提取码/关联人一起带出来，否则前端只能显示一个裸类型
+  assert.ok(
+    orderServer.includes("shareCode: visible ? asset!.shareCode")
+      && orderServer.includes("createdByName: store.users.find"),
+    "订单详情的文件没有带提取码与关联人，百度网盘资料在订单里打不开"
+  );
+  assert.ok(
+    orderServer.includes('app.patch("/api/orders/:id/files/:fileId"'),
+    "订单文件分类没有修改接口：选错只能删了重挂"
+  );
+  assert.ok(
+    orderServer.includes("linkedOrders") && orderServer.includes("linkedOrderCount"),
+    "文件中心接口没有反向索引，看不到资料被哪些订单引用"
+  );
+
+  // ---- 两个单号：CRM 系统编号 ≠ 公司实际订单号 ----
+  // 系统编号是 GJ-SO-YYMM-NNNN 流水号，公司对外用的是自己编的号；
+  // 以前把系统编号当公司单号展示，业务员以为单号已经有了，实际合同/单证上没有号可填。
+  assert.ok(
+    apiLayer.includes("function ordIdentity") && apiLayer.includes("companyOrderNo"),
+    "订单没有区分「系统编号」与「公司单号」：界面上会把 CRM 流水号当成公司实际订单号"
+  );
+  assert.ok(
+    apiLayer.includes("待补公司单号") && apiLayer.includes("系统编号"),
+    "公司单号为空时界面上没有任何提示，用户无法发现这张单还缺对外单号"
+  );
+  assert.ok(
+    apiLayer.includes("data-ord-numbers") && apiLayer.includes("function ordNumbersModal")
+      && apiLayer.includes("ordNumCompany") && apiLayer.includes("ordNumPo") && apiLayer.includes("ordNumErp"),
+    "单号入口只开放了公司单号：客户 PO / ERP 单号在界面上没有可编辑的地方"
+  );
+  // 列表主标识必须走 ordIdentity，不能再直接把 orderNo 当单号印在首列
+  assert.ok(
+    !/class="ord-no">\$\{escapeHtml\(order\.orderNo\)\}/u.test(apiLayer),
+    "订单列表仍把系统编号当主标识显示"
+  );
+  assert.ok(
+    orderServer.includes("companyOrderNo: z.string().trim().max(80).optional()")
+      && orderServer.includes("companyOrderNo: z.string().trim().max(80).optional().default"),
+    "建单/改单接口不收 companyOrderNo，界面上填了也存不下来"
+  );
+  assert.ok(
+    orderServer.includes("${row.companyOrderNo} ${row.orderNo}"),
+    "订单搜索不含公司单号：业务员拿真实单号搜不到单"
+  );
+  assert.ok(
+    orderService.includes("companyOrderNo: \"\""),
+    "成交自动建单没有初始化 companyOrderNo 字段"
+  );
+  // 单号是「标识」不是「条款」：公司单号 / 客户 PO / ERP 单号都不能跟着发货后锁定
+  assert.ok(
+    !/editableFields = \[[^\]]*(companyOrderNo|buyerPoNo|erpOrderNo)/u.test(orderServer),
+    "单号类字段被卷进「已发货后锁定」的清单：发货后财务/生产给的号永远补不上"
+  );
+  assert.ok(
+    orderServer.includes("erpOrderNo: z.string().trim().max(80).optional()")
+      && orderServer.includes("order.erpOrderNo = body.erpOrderNo"),
+    "改单接口不收 erpOrderNo，ERP 单号界面上填了也存不下来"
+  );
+}
+
+// ---- 文件中心（M1–M6）----
+// 视图显隐靠 .view.active。视图自带的 <style> 一旦写「以视图 id 为唯一主体」的 display，
+// ID 权重会压掉 .view → 每页都渲染（2026-10-16 事故）。这条必须在。
+assert.ok(
+  !/#file-center\s*\{[^}]*display\s*:/s.test(prototype),
+  "文件中心样式直接用 #file-center 写 display：会压掉 .view 的显隐"
+);
+assert.ok(
+  prototype.includes('class="view" id="file-center"') && prototype.includes('data-view="file-center"'),
+  "文件中心缺少视图容器或侧栏入口"
+);
+assert.ok(
+  apiLayer.includes('"file-center": "文件中心"') && apiLayer.includes('if (view === "file-center") void loadFileCenter();'),
+  "文件中心没有接进 VIEW_TITLES 或导航懒加载"
+);
+// 全局 table{min-width:900px}：放进窄栏的自建表格必须显式 min-width:0，
+// 否则 width:100% + table-layout:fixed 全失效，右侧列被 overflow:hidden 裁掉
+assert.ok(
+  /#file-center table\.fc-table \{[^}]*min-width:0/s.test(prototype),
+  "文件中心表格没有覆盖全局 table min-width，右侧列会被裁掉"
+);
+// 审计表列的含义和台账不同（首列是占位而非勾选），共用列宽会把「文件」压成 84px 只显示 id
+assert.ok(
+  /#file-center table\.fc-audit th:nth-child\(5\)/.test(prototype),
+  "审计表没有独立列宽：文件名会被截断成文件 id"
+);
+// .fc-bulk 是 display:flex，会压掉 [hidden] 的 display:none → 未选中时留一条空横幅
+assert.ok(
+  /#file-center \.fc-bulk\[hidden\] \{ display:none; \}/.test(prototype),
+  "批量条缺 [hidden] 兜底：没选中文件也会留一条空横幅"
+);
+// 列表过一屏必须分页；只设固定 pageSize 不配分页会静默截断
+assert.ok(
+  apiLayer.includes("#fcPager") && apiLayer.includes("fileCenterState.pageSize"),
+  "文件台账没有分页：超出 pageSize 的记录会被静默截断"
+);
+// 分享状态必须跟真实可用性一致：文件已删还标「有效」，点开是 410
+assert.ok(
+  apiLayer.includes('"文件已删除"') && apiLayer.includes('share.fileStatus !== "active"'),
+  "分享列表没有按文件真实状态降级显示，「有效」的链接点开可能是 410"
+);
+// 审计日志表只有 file_id，接口不回填文件名，列表就只能显示一串 id
+assert.ok(
+  orderServer.includes('fileName: log.fileId ? names.get(log.fileId)'),
+  "审计接口没有回填文件名"
+);
+// 文本响应不带 charset 时，Chrome 按本地编码解码 → 中文 txt/csv 预览整篇乱码
+assert.ok(
+  orderServer.includes('baseType.startsWith("text/")') && orderServer.includes("charset=utf-8"),
+  "文本预览响应没有声明 charset=utf-8：中文 txt/csv 会整篇乱码"
+);
+// text/csv 在 iframe 里会被 Chrome 直接触发下载，「预览」按钮变成下载文件
+assert.ok(
+  apiLayer.includes('contentType.startsWith("text/")') && apiLayer.includes("od-preview-text"),
+  "文本类预览仍交给 iframe：Chrome 对 text/csv 会直接下载而不是显示"
+);
+// sips/soffice 的 stderr 是给开发者的（"Try 'sips --help'"），不能拼进用户可见文案
+assert.ok(
+  deriveSource.length > 2000 &&
+    !deriveSource.includes("brew install --cask libreoffice") &&
+    !deriveSource.includes("line.slice(0, 160)"),
+  "派生失败文案把安装命令或外部工具 stderr 甩给了业务用户"
+);
+// 「转换失败 N」如果点不进去，用户只知道有失败、不知道是哪几个文件
+assert.ok(
+  apiLayer.includes("data-fc-metric-failed") && apiLayer.includes("fcDeriveFailedOnly") && orderServer.includes("deriveFailed"),
+  "转换失败指标卡没有落到具体文件的入口"
+);
+// 预览能力不可见 = Office/HEIC 全失败时没人知道是缺组件还是文件坏了
+assert.ok(
+  apiLayer.includes("在线预览能力") && apiLayer.includes("derive?.capabilities"),
+  "存储设置没有展示在线预览能力，转换失败时无从判断原因"
+);
+// 项目要开源，服务器可能是 Windows / Linux。安装指引写死 brew 等于把人带进沟里
+assert.ok(
+  apiLayer.includes("winget install TheDocumentFoundation.LibreOffice") &&
+    apiLayer.includes("apt install libreoffice-writer") &&
+    apiLayer.includes("caps?.platform"),
+  "存储设置的安装指引只考虑了 macOS：Windows / Linux 部署会拿到错误的安装命令"
+);
+// 能力探测要把平台带出去，前端才有依据切换指引
+assert.ok(
+  deriveSource.includes("platform: process.platform"),
+  "能力探测没有返回 platform，前端无法按服务器平台给安装指引"
+);
+// 跨平台部署资产：开源后最主流的两种装法是 Docker 和 Windows 便携部署
+{
+  const readRepoFile = (rel: string) => {
+    try {
+      return readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
+    } catch {
+      return "";
+    }
+  };
+  // 只检查真实配置，不检查注释：注释里提一句「别用 macOS 的目录」不该触发断言
+  const linuxFontconf = readRepoFile("deploy/fontconfig/fonts.linux.conf").replace(/<!--[\s\S]*?-->/gu, "");
+  assert.ok(
+    linuxFontconf.includes("/usr/share/fonts") && !linuxFontconf.includes("/System/Library/Fonts"),
+    "Linux fontconfig 用了 macOS 的字体目录：容器里会被当成「系统没有字体」，中文全丢"
+  );
+  assert.ok(
+    linuxFontconf.includes("Noto Serif CJK SC") && linuxFontconf.includes("微软雅黑"),
+    "Linux fontconfig 缺字体名别名：docx 里写的「宋体/微软雅黑」在 Linux 上会退到无中文字形的字体"
+  );
+
+  const winInstall = readRepoFile("deploy/install-libreoffice.ps1");
+  const findBody = winInstall.match(/function Find-Soffice[\s\S]*?\n}/)?.[0] || "";
+  assert.ok(
+    findBody.includes("soffice.com") && !findBody.includes("soffice.exe"),
+    "Windows 安装脚本的探测没有只认 soffice.com：用 soffice.exe 会立刻返回 0，转换实际没完成"
+  );
+  assert.ok(
+    winInstall.includes("/a") && winInstall.includes("TARGETDIR"),
+    "Windows 安装脚本没有免管理员的解包路径：普通用户装不上就没法预览"
+  );
+
+  const dockerfile = readRepoFile("deploy/docker-compose/Dockerfile.backend");
+  assert.ok(
+    dockerfile.includes("libreoffice-writer") && dockerfile.includes("libreoffice-impress"),
+    "后端镜像只装了 libreoffice-calc：docx/pptx 预览会全部转换失败"
+  );
+  assert.ok(
+    dockerfile.includes("poppler-utils") && dockerfile.includes("deploy/fontconfig"),
+    "后端镜像缺 pdftoppm 或 fontconfig：缩略图没有，中文也可能整段消失"
+  );
+}
+
+// 文件中心自己不提供上传入口时，不属于任何订单的基础文档根本进不了文件池
+assert.ok(
+  prototype.includes('id="fcUploadButton"') && prototype.includes('id="fcUploadInput"'),
+  "文件中心没有上传入口：通用基础文档无处可放"
+);
+// 只放 .docx/.xlsx 会把用 WPS 专有格式存的单据挡在门外
+assert.ok(
+  /id="fcUploadInput"[\s\S]{0,400}accept="[^"]*\.wps/.test(prototype),
+  "上传控件 accept 没有包含 WPS 格式：客户用 WPS 存的单据选不到"
+);
+assert.ok(
+  apiLayer.includes("/api/files?kind=other") && apiLayer.includes("/api/files/uploads"),
+  "文件中心上传没有同时支持直传与分片：大文件断线要整份重传"
+);
+
+// LibreOffice 在 macOS 上默认看不见系统字体，中文会整段消失，而转换仍报「成功」
+assert.ok(
+  deriveSource.includes("export function fontConfigEnv") && deriveSource.includes("env: fontConfigEnv()"),
+  "转换子进程没有注入 fontconfig：macOS 上会把中文转丢，只剩数字和英文"
+);
+// 缩略图：sips 不依赖 QuickLook 服务，必须排在 qlmanage 之前
+{
+  const thumbBody = deriveSource.match(/private async pdfThumb\([\s\S]*?\n  \}/)?.[0] || "";
+  assert.ok(
+    thumbBody.includes("caps.sips") && thumbBody.indexOf("caps.sips") < thumbBody.indexOf("caps.pdftoppm"),
+    "PDF 缩略图没有优先用 sips：qlmanage 在后台服务里会 sandbox 初始化失败"
+  );
+}
+// 按后缀硬转会失败：WPS 常把 OOXML 存成 .doc/.wps
+assert.ok(
+  deriveSource.includes("export function conversionExtension") && deriveSource.includes("if (!isZip) return fallback;"),
+  "转换前没有按魔数纠正后缀：WPS 存出的 .doc/.wps 会解析失败"
+);
+// OLE2（97-2003 与 WPS 原生格式）不识别 → sniff 返回 null → 上传直接被 415 拒掉
+assert.ok(
+  storageSource.includes("0xd0 && buffer[1] === 0xcf") && storageSource.includes('wps: "application/x-wps"'),
+  "文件类型探测不识别 OLE2：WPS/老版 Office 文件会被 415 拒绝"
+);
+
+// 工作台不再展示「管道健康度」：商机阶段口径归商机页，工作台只留漏斗 / 跟进队列 / 竞标日报。
+// 删掉后海外竞标日报要吃掉整行（span 12），否则右半边会空出 5 列。
+assert.ok(
+  !prototype.includes("管道健康度") && !prototype.includes("dp-pipeline") && !apiLayer.includes("renderPipelineHealth"),
+  "工作台「管道健康度」已下线，不要再挂回来（区块 DOM / CSS / 渲染函数三处都要保持为空）"
+);
+assert.ok(
+  /#dashboard\.dashboard-v2 \.dp-tasks \{ grid-column: span 7; \}\s*\n\s*#dashboard\.dashboard-v2 \.dp-tender \{ grid-column: span 12; \}/.test(prototype)
+    && !/#dashboard\.dashboard-v2 \.dp-tender \{ grid-column: span 7; \}/.test(prototype),
+  "管道健康度下线后，海外竞标日报必须通栏（基础栅格 span 12），否则第二行右侧留白 5 列"
+);
+// 竞标日报是付费动作（派本机 CLI 联网检索），必须手动触发：
+// 打开工作台只读团队留档（GET /api/tender-daily/latest），绝不能在 ensureTenderDaily 里 POST /run。
+{
+  const ensureIdx = apiLayer.indexOf("function ensureTenderDaily()");
+  const ensureBody = ensureIdx >= 0 ? apiLayer.slice(ensureIdx, ensureIdx + 260) : "";
+  assert.ok(
+    ensureIdx > -1
+      && ensureBody.includes("loadTenderDailySnapshot()")
+      && !ensureBody.includes("loadTenderDaily(")
+      && !/ensureTenderDaily[\s\S]{0,160}loadTenderDaily\(/u.test(apiLayer),
+    "海外竞标日报又变回自动派单了：打开工作台只能读留档（loadTenderDailySnapshot），必须点「开始查询」才 POST /run，否则每次刷新都烧积分"
+  );
+}
+
+// 顶栏页签的选中态要点主题色：换肤时跟着 --brand 走，不能写死近黑。
+assert.ok(
+  /\.top-tab\.active \{[^}]*color: var\(--brand-strong\)[^}]*\}/.test(prototype)
+    && /\.top-tab\.active::after \{[^}]*background: var\(--brand\)[^}]*\}/.test(prototype),
+  "顶栏页签选中项没有主题色（文字 + 下划线都应取 --brand），换肤后仍是黑白"
+);
+
+// 顶栏「待办」：固定在右上动作区（站内信左侧），点一下直达待办中心，颜色跟主题色走。
+{
+  const actionsIdx = prototype.indexOf('<div class="top-actions">');
+  const pillIdx = prototype.indexOf('id="topTodoPill"');
+  const bellIdx = prototype.indexOf('id="notificationBellButton"');
+  assert.ok(
+    actionsIdx > -1 && pillIdx > actionsIdx && bellIdx > pillIdx,
+    "顶栏待办入口不在站内信旁边：必须放在 .top-actions 里、通知铃之前，否则页签一变它就跟着漂"
+  );
+  assert.ok(
+    apiLayer.includes('qs<HTMLButtonElement>("#topTodoPill")?.addEventListener("click", () => activateNavView("todo"))'),
+    "顶栏待办入口点了不跳转（应 activateNavView(\"todo\")）"
+  );
+  assert.ok(
+    /\.top-pill \{[^}]*background: var\(--brand-tint\)/.test(prototype)
+      && /\.top-pill b \{[^}]*background: var\(--brand\)/.test(prototype),
+    "顶栏待办按钮没用主题色（底色与计数都应取 --brand 系）"
+  );
+}
+
+// 顶栏账号头像：浅色半透明品牌色，换肤自动跟随；禁止再写死渐变（绿/紫都不行）。
+assert.ok(
+  /\.avatar \{[^}]*background: color-mix\(in srgb, var\(--brand\) 12%, transparent\)/s.test(prototype)
+    && /\.avatar \{[^}]*color: var\(--brand-strong\)/s.test(prototype),
+  "顶栏头像不是半透明品牌色（底色 color-mix 12% + 文字 --brand-strong），换肤后会跟主题脱节"
+);
+assert.ok(
+  !/\.avatar \{[^}]*background: linear-gradient/s.test(prototype),
+  "顶栏头像不能再用写死的渐变，换肤时不会跟随主题"
+);
+
+// 订单详情必须跟着工作区宽度自适应：写死 max-width 会在 2K/4K 上缩成居中窄栏，
+// 和客户列表（满宽）完全两个版式。宽度只由 .workspace 决定。
+assert.ok(
+  /#order-detail \.od-page \{[^}]*\}/s.test(prototype)
+    && !/#order-detail \.od-page \{[^}]*max-width:\s*\d+px/s.test(prototype),
+  "订单详情页不能写死 max-width（会在大屏上缩成窄栏、两侧空出上千像素）"
+);
+
+// 单据 PDF 导出：一页报价单曾经 10MB，且「显示一张、打印两张」。
+// ① jsPDF 的 addImage 不传压缩级别时默认 image_compression.NONE，整页位图按原始 RGB 写进 PDF
+//    （1588×2246×3 ≈ 10.7MB）；
+// ② A4 在 794px 宽下正好 1122.9px，元素高度取整成 1123px → 297.02mm，比 297mm 多 0.02mm，
+//    `while (heightLeft > 0)` 必然再吐一张空白页。
+// ③ 8 种单据（PI/CI/报关/装箱单/合同/报价/原产地证/装运通知）共用同一条导出链路，
+//    所以压缩不能只保证报价单：整份源码只允许一个 addImage 出口，且必须带压缩级别常量。
+{
+  const start = apiLayer.indexOf("async function downloadDocumentPdf(");
+  const end = apiLayer.indexOf("function parseNumberCell(", start);
+  const body = start > -1 && end > start ? apiLayer.slice(start, end) : "";
+  // 注释行里也会出现被禁的写法（解释"老坑"时引用了旧代码），断言只对去注释后的真实代码生效
+  const code = body.replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(body.length > 0, "找不到 downloadDocumentPdf 的代码，PDF 导出逻辑被挪走了，请同步本断言");
+  const addImageCalls = (code.match(/\.addImage\(/g) || []).length;
+  assert.ok(addImageCalls === 0, "downloadDocumentPdf 必须通过 addDocumentPdfPage 贴图，不要在函数里直接写 addImage");
+  assert.ok(
+    !/while\s*\(\s*heightLeft\s*>\s*0\s*\)/.test(code),
+    "PDF 分页不能再写 while (heightLeft > 0)：像素取整后必然多出零点几毫米，会多打印一张空白纸"
+  );
+  assert.ok(
+    /const\s+ONE_PAGE_TOLERANCE\s*=/.test(code) && /imgH\s*<=\s*pageH\s*\*\s*ONE_PAGE_TOLERANCE/.test(code),
+    "PDF 导出缺少「一页容差」：接近 A4 高度的单据必须压回一页，不能甩出几乎空白的第二页"
+  );
+
+  // 全文件只允许一个 addImage 出口，且压缩级别来自常量。新增单据类型若另起一条位图导出，
+  // 这里立刻变红 —— 这正是「报价单压了、PI/CI/装箱单又变 10MB」的防线。
+  const allCode = apiLayer.replace(/^\s*\/\/.*$/gm, "");
+  assert.equal((allCode.match(/\.addImage\(/g) || []).length, 1,
+    "整份源码只允许一个 addImage 出口（addDocumentPdfPage），否则新单据类型可能绕开压缩");
+  assert.ok(
+    /const\s+DOCUMENT_PDF_IMAGE_COMPRESSION\s*=\s*"FAST"/.test(allCode),
+    "PDF 位图压缩级别必须是常量 DOCUMENT_PDF_IMAGE_COMPRESSION = \"FAST\"（Flate 无损，约 1/45 体积）"
+  );
+  assert.ok(
+    /function\s+addDocumentPdfPage\([\s\S]{0,700}?\.addImage\([\s\S]{0,200}?DOCUMENT_PDF_IMAGE_COMPRESSION\s*\)/.test(allCode),
+    "addDocumentPdfPage 必须把 DOCUMENT_PDF_IMAGE_COMPRESSION 作为 addImage 的第 8 个参数传进去"
+  );
+  assert.ok(
+    (code.match(/addDocumentPdfPage\(/g) || []).length >= 3,
+    "单页 / 多页首屏 / 多页续页三条分支都必须走 addDocumentPdfPage"
+  );
+
+  // 所有单据类型共用一个导出函数，不允许按 type 分流到别的 PDF 实现。
+  const exportStart = apiLayer.indexOf("async function exportTradeDocumentPdfInner(");
+  const exportEnd = apiLayer.indexOf("function printDocumentPreview(", exportStart);
+  const exportCode = exportStart > -1 ? apiLayer.slice(exportStart, exportEnd > exportStart ? exportEnd : exportStart + 4000) : "";
+  assert.ok(/await\s+downloadDocumentPdf\(/.test(exportCode),
+    "单据导出必须统一调用 downloadDocumentPdf，不能按单据类型分流");
+  const unionLine = (apiLayer.match(/type:\s*("PI"[^;]*);/) || [])[1] || "";
+  ["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"].forEach((type) => {
+    assert.ok(unionLine.includes(`"${type}"`), `单据类型 ${type} 必须留在 TradeDocumentType 里，共用同一条导出链路`);
+  });
+}
+
+// 报价单默认付款条款：全款预付。曾经写死成 30% 定金 + 发货前付清，
+// 每次新建报价单都要手改，客户看到也会以为要压款。
+{
+  const start = apiLayer.indexOf('...(type === "QUOTATION" ? {');
+  const body = start > -1 ? apiLayer.slice(start, start + 600) : "";
+  assert.ok(body.length > 0, "找不到报价单默认值（defaultTradeDocument 里的 QUOTATION 分支），请同步本断言");
+  assert.ok(
+    /paymentTerm:\s*"T\/T 100% in advance"/.test(body),
+    "报价单默认付款条款必须是 T/T 100% in advance"
+  );
+  assert.ok(
+    !/30%\s*deposit/.test(body),
+    "报价单默认付款条款不能再带 30% 定金：报价阶段写分期会让客户以为要压款"
+  );
+}
+
+// CLI 获客「只要决策人/采购人邮箱」（2026-10-31 用户要求）：
+// 准入判定在后端（ai-engine-prompts 的 acquisitionContactRole + syncAcquisitionCandidates），
+// 前端只负责读取后端写进 extractedContacts[].reasonCodes 的角色、打徽章并允许收窄列表。
+// 这三处任一被移除，用户就会看到「没有邮箱的候选混进清单」或「没法按角色筛」。
+{
+  assert.ok(
+    prototype.includes('id="prospectBuyerOnlyToggle"') && prototype.includes("只看决策人/采购人邮箱"),
+    "搜客清单必须有「只看决策人/采购人邮箱」开关（否则 CLI 获客的准入口径在界面上无法验证）"
+  );
+  assert.ok(
+    /\.prospect-buyer-toggle\s*\{[^}]*margin-left:\s*auto/s.test(prototype),
+    "角色筛选开关必须靠右独立成 pill，不能塞进 .prospect-tabs（那条规则会把按钮压成无边框页签）"
+  );
+  assert.ok(
+    /function\s+prospectBuyerContacts\(/.test(apiLayer)
+      && /function\s+prospectBuyerRoleBadge\(/.test(apiLayer),
+    "候选清单必须按 reasonCodes 识别决策人/采购人并给出角色徽章"
+  );
+  assert.ok(
+    /state\.prospectBuyerOnly\s*&&\s*!prospectBuyerContacts\(item\)\.length/.test(apiLayer),
+    "「只看决策人/采购人邮箱」开关必须真的参与过滤，不能只是视觉状态"
+  );
+  assert.ok(
+    apiLayer.includes('"决策人邮箱"') && apiLayer.includes('"采购人邮箱"'),
+    "角色徽章要区分决策人与采购人，不能只写一个笼统的「有邮箱」"
+  );
+  assert.ok(
+    /openCliAcquireModal[\s\S]{0,1200}?决策人或采购人/.test(apiLayer),
+    "CLI 获客弹窗必须提前说明硬门槛（找不到决策人/采购人邮箱的公司不入池）"
+  );
+  assert.ok(
+    /stats\.rejected/.test(apiLayer),
+    "CLI 获客完成后必须回报「多少家因缺决策人/采购人邮箱未入池」，否则用户会以为漏数据"
+  );
+}
+
+// 供应商管理（仿「客户管理」：列表 + 筛选 + 分页 + 详情抽屉 + 新增/编辑/删除）
+{
+  assert.ok(/data-view="suppliers"/.test(prototype), "侧栏必须有「供应商管理」入口，否则视图进不去");
+  assert.ok(
+    /<details class="nav-section" aria-label="供应商管理"[\s\S]{0,700}data-view="suppliers"/.test(prototype),
+    "供应商必须是侧栏的独立分栏，不能塞在「客户管理」下面当一个二级按钮"
+  );
+  assert.ok(
+    /<div class="view" id="suppliers">[\s\S]{0,1200}customer-filter-row customer-view-filter[\s\S]{0,900}customer-list-workspace/.test(prototype),
+    "供应商列表要复用客户管理的骨架（筛选行 + 列表工作区），另起一套样式就和客户管理长得不一样了"
+  );
+  assert.ok(/<div class="view" id="suppliers">/.test(prototype), "供应商视图容器必须存在");
+  assert.ok(
+    prototype.includes('id="suppliersTableBody"') && prototype.includes('id="supplierDrawer"'),
+    "供应商列表与详情抽屉的挂载点必须存在"
+  );
+  assert.ok(
+    /suppliers:\s*"supplier\.read"/.test(apiLayer),
+    "供应商视图必须挂 supplier.read 权限，不能裸奔给所有账号"
+  );
+  assert.ok(
+    /async function loadSuppliers[\s\S]{0,200}?api<\{ suppliers: Supplier\[\] \}>\("\/api\/suppliers"\)/.test(apiLayer),
+    "供应商列表必须来自 /api/suppliers，不能在本地造假数据"
+  );
+  assert.ok(
+    /async function saveSupplier[\s\S]{0,2600}?\/api\/suppliers/.test(apiLayer),
+    "保存供应商必须走后端接口（新增 POST / 编辑 PATCH），不能只改内存"
+  );
+  assert.ok(
+    apiLayer.includes('"/api/suppliers/bulk-delete"'),
+    "删除供应商务必走确认后的批量删除接口（单条与多条同一条链路）"
+  );
+  assert.ok(
+    /if \(view !== "suppliers"\) closeSupplierDrawer\(\)/.test(apiLayer),
+    "离开供应商页必须收起详情抽屉，否则回到该页会自己弹开"
+  );
+  assert.ok(
+    /"supplier-editor-modal"/.test(apiLayer) && /supplier-editor-modal/.test(prototype),
+    "供应商编辑弹窗的专属宽度类必须在两处都声明，否则字段会被 520px 的基础弹窗挤成一团"
+  );
+  assert.ok(
+    /function renderSupplierBulkToolbar[\s\S]{0,900}?data-supplier-bulk-delete/.test(apiLayer),
+    "供应商列表要有和客户管理同一条批量工具条（全选 / 已选计数 / 批量删除 / 导出）"
+  );
+  assert.ok(
+    /function exportSuppliers[\s\S]{0,1600}?text\/csv/.test(apiLayer),
+    "批量导出必须真出文件（CSV + BOM），不能挂一个没实现的按钮"
+  );
+  assert.ok(
+    /function syncSupplierStatusNav\(\)[\s\S]{0,700}?\[data-view="suppliers"\]/.test(apiLayer),
+    "侧栏「全部/合作中/考察中/已停用」与页内状态筛选必须共享同一份状态，否则两边会各说各话"
+  );
+  assert.ok(
+    /setButtonPending\(saveButton, true/.test(apiLayer),
+    "保存供应商要有防重复提交（按钮进入 pending），否则连点会重复建档"
+  );
+  // —— 颜值对齐：结构抄对了但皮肤没抄，是供应商列表比客户列表「廉价」的真正原因 ——
+  assert.ok(
+    /#suppliers \.table-wrap \{[^}]*border-radius: 14px[^}]*box-shadow/.test(prototype)
+      && /#suppliers \.panel\.section \{ padding: 18px; \}/.test(prototype)
+      && /#suppliers tbody tr \{ height: 73px/.test(prototype),
+    "供应商表格必须套用客户管理那套皮肤（18px 内边距 / 14px 圆角 + 投影 / 73px 行高），只继承全局 table 样式会比客户表矮一档"
+  );
+  assert.ok(
+    /#suppliers table \{ min-width: 0; \}/.test(prototype),
+    "供应商表格要放开全局 min-width:900px，否则窄栏里会横向滚动"
+  );
+  assert.ok(
+    /<th>供应商名称<\/th><th>供应品类<\/th><th>供应等级<\/th><th>联系方式<\/th>/.test(prototype),
+    "供应商表格必须是 8 列（与客户管理同列数）：分级与状态合并成「供应等级」，多一列会把名称列压到 241px"
+  );
+  assert.ok(
+    /function supplierGradeChip[\s\S]{0,600}?customer-grade customer-grade-/.test(apiLayer),
+    "供应分级必须复用客户管理「客户价值」的字母方块（customer-grade），用 badge 会变成一颗横躺的大药丸"
+  );
+  // 正则不跨函数体扫：先切出 supplierContactCell 的函数体，再在体内断言两行结构
+  const supplierContactBody = (() => {
+    const start = apiLayer.indexOf("function supplierContactCell");
+    if (start < 0) return "";
+    const end = apiLayer.indexOf("function supplierUpdatedCell", start);
+    return apiLayer.slice(start, end > start ? end : start + 2000);
+  })();
+  assert.ok(
+    /sup-contact-primary/.test(supplierContactBody) && /sup-contact-secondary/.test(supplierContactBody),
+    "联系方式必须拆成固定两行（邮箱 / 电话·官网），一串链接用 · 连接会在窄列折成三行、行高参差"
+  );
+  assert.ok(
+    /#suppliers \.customer-mobile-meta \{ display: flex/.test(prototype),
+    "供应商移动卡片的元信息 chip 样式要单独声明：#customers 作用域里的那批选择器管不到供应商"
+  );
+  assert.ok(
+    !/sup-mobile-meta|sup-badge-cell/.test(prototype + apiLayer),
+    "旧的供应商专用小类（sup-mobile-meta / sup-badge-cell）已并入客户管理同款，不能残留"
+  );
+
+  // —— 供应商编码：类型 / 表单 / 列表 / 导出四段都要通，只在后端加列等于没做 ——
+  assert.ok(
+    /interface Supplier \{[\s\S]{0,300}?code: string;/.test(apiLayer),
+    "前端 Supplier 类型必须带 code，否则编码拿不到，列表和导出这一列永远是空的"
+  );
+  assert.ok(
+    /id="supplierCodeInput"/.test(apiLayer) && /code: qs<HTMLInputElement>\("#supplierCodeInput"\)/.test(apiLayer),
+    "供应商弹窗要有编码输入，且保存时真的提交 code（只有输入框不提交等于没做）"
+  );
+  assert.ok(
+    /supplier\.code \? `<b class="sup-code">/.test(apiLayer),
+    "列表必须显示供应商编码（等宽小字），否则同名供应商对不上号"
+  );
+  assert.ok(
+    /\["供应商编码", "供应商名称"/.test(apiLayer) && /item\.code, item\.company/.test(apiLayer),
+    "导出 CSV 必须带编码列，且列头与数据同序"
+  );
+  assert.ok(
+    /#suppliers \.sup-code, #supplierDrawer \.sup-code \{/.test(prototype),
+    "编码要有独立样式（等宽字体），混在正文里看不出这是编号"
+  );
+
+  // —— 供应商文件：走文件中心的 file_references，不另造一套附件表 ——
+  assert.ok(
+    /id="supplierFileList"/.test(apiLayer) && /id="supplierFileUploadButton"/.test(apiLayer),
+    "供应商抽屉必须有文件列表与上传入口"
+  );
+  assert.ok(
+    /\/api\/files\?entityType=supplier&entityId=/.test(apiLayer),
+    "供应商文件必须按 file_references 查询，不能另造一套附件存储"
+  );
+  assert.ok(
+    /contextType=supplier&contextId=/.test(apiLayer) && /contextType: "supplier"/.test(apiLayer),
+    "上传必须带 contextType=supplier：直传与分片两条路都要，漏一条大文件就传不进去"
+  );
+  assert.ok(
+    /\/recycle`,/.test(apiLayer) && /reason: "供应商附件移除"/.test(apiLayer),
+    "移除附件必须走回收站（可恢复），不能物理删除"
+  );
+  assert.ok(
+    /#supplierDrawer \.sup-file-row \{ display: grid/.test(prototype),
+    "抽屉里的文件行要有自己的布局样式，否则文件名与三个按钮会挤成一行"
+  );
+  assert.ok(
+    /#supplierDrawer \.sup-file-ops \{ grid-column: 1 \/ -1;/.test(prototype),
+    "手机抽屉必须把文件操作按钮换到第二行，否则 420px 下文件名只剩几个字"
+  );
+}
+
+// ---- 自动流：必须是真实链路，不许退回计时器动画（2026-11-03） ----
+assert.equal(apiLayer.includes("autoFlowStartTicking"), false, "自动流不得残留旧的计时器模拟引擎");
+assert.match(apiLayer, /gj\.autoflow\.v2/u, "自动流状态键升到 v2，避免读到旧版预演状态");
+assert.match(apiLayer, /autoFlowRunProspect\(token: number\)[\s\S]{0,3000}\/api\/lead-finder\/parse-goal"/u, "获客节点必须先用 AI 解析自然语言目标");
+assert.match(apiLayer, /autoFlowRunProspect\(token: number\)[\s\S]{0,5000}\/api\/lead-finder\/lfind-tasks"/u, "获客节点必须提交 Lfind 任务（本地 Runner → 本机 CLI）");
+assert.match(apiLayer, /autoFlowRunResearch\(token: number\)[\s\S]{0,2500}\/api\/ai-background-research"/u, "背调节点必须调真实背调接口");
+assert.match(apiLayer, /autoFlowRunCompose\(token: number\)[\s\S]{0,2500}\/api\/development-email\/draft"/u, "写信节点必须调真实草稿接口");
+assert.match(apiLayer, /autoFlowRunSend\(token: number\)[\s\S]{0,2500}\/api\/development-email\/send"/u, "发送节点必须走真实发送接口");
+assert.match(apiLayer, /if \(!artifacts\.sendConfirmed\) \{[\s\S]{0,600}autoFlowSendPending = true;/u, "发送节点必须在拿到人工确认前暂停，不得自动外发");
+assert.match(apiLayer, /data-af-action="send-confirm"[\s\S]{0,400}data-af-action="send-skip"/u, "发送确认区必须同时提供确认与跳过两个动作");
+assert.match(apiLayer, /autoFlowConfirmSend\(action\.dataset\.afAction === "send-confirm"\)/u, "确认/跳过必须经事件委托接到 autoFlowConfirmSend");
+assert.match(apiLayer, /autoFlowPausePoint\(key: string\)[\s\S]{0,800}autoFlowPauseRequested/u, "暂停必须是协作式检查点，不打断真实任务");
+assert.match(apiLayer, /function autoFlowStart\(\) \{[\s\S]{0,400}autoFlowSyncCommandFromDom\(state\);/u, "启动/继续前必须以输入框为准回写目标，否则重置后会出现「输入框有字却报先用一句话描述」");
+assert.match(apiLayer, /function autoFlowRenderCommand\(\)[\s\S]{0,500}if \(state\.command\) input\.value = state\.command;/u, "状态为空时不得清空输入框：界面有字、状态为空是最难查的错位");
+assert.match(apiLayer, /artifacts\.lfindTaskId = undefined;[\s\S]{0,200}throw new Error\(`没有候选入池/u, "终态失败的 Lfind 任务必须清掉任务号，否则重试永远卡在同一个坏任务上");
+
+// —— 客户成交状态：弹窗可编辑、默认未成交、保存必须真的提交 lifecycleStatus（2026-11-05） ——
+assert.match(
+  apiLayer,
+  /<label class="form-field"><span>成交状态<\/span><select id="customerLifecycleInput"><option value="open" \$\{customerLifecycle !== "won" \? "selected" : ""\}>未成交<\/option>/u,
+  "客户弹窗必须有成交状态下拉：未成交在前且为默认选中（open），已成交第二项"
+);
+assert.match(
+  apiLayer,
+  /const customerLifecycle = customer\?\.lifecycleStatus === "won" \? "won" : "open";/u,
+  "编辑客户时按当前状态回显，没有值的旧客户一律当未成交"
+);
+assert.match(
+  apiLayer,
+  /lifecycleStatus: \(qs<HTMLSelectElement>\("#customerLifecycleInput"\)\?\.value === "won" \? "won" : "open"\)/u,
+  "保存客户必须真的提交 lifecycleStatus，只有下拉框不提交等于没做"
+);
+assert.match(
+  apiLayer,
+  /商机阶段确认为「成交」时这里会自动变为已成交/u,
+  "成交状态要带一句来源提示：商机确认成交会自动改写，避免误以为只能手动改"
+);
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

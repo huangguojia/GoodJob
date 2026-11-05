@@ -1044,12 +1044,12 @@ function buildQuote(files: Record<string, Uint8Array>, document: TradeDocument) 
 }
 
 const ALL_TRADE_DOCUMENT_TYPES: TradeDocument["type"][] = [
-  "PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"
+  "PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"
 ];
 
 function advancedDocumentTypeLabel(type: TradeDocument["type"]) {
   return ({
-    PI: "Proforma Invoice", CI: "Commercial Invoice", CUSTOMS: "Customs Clearance Document",
+    PI: "Proforma Invoice", CI: "Commercial Invoice", PO: "Purchase Order", CUSTOMS: "Customs Clearance Document",
     PL: "Packing List", CONTRACT: "Sales Contract", QUOTATION: "Quotation",
     COO: "Certificate of Origin", SHIPPING: "Shipping Advice"
   } as Record<TradeDocument["type"], string>)[type];

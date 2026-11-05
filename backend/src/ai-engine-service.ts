@@ -1,6 +1,7 @@
 import { getLocalRunnerService } from "./integrations/integration-runtime.js";
 import type { AiEngineAdapter, TeamAiEngineSettings } from "./ai-engine-settings.js";
-import { aiEngineAdapterLabel } from "./ai-engine-settings.js";
+import { aiEngineAdapterLabel, otherAiEngineAdapter } from "./ai-engine-settings.js";
+import { adaptEngineCliPromptForAdapter } from "./ai-engine-prompts.js";
 import type { SessionUser } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -66,33 +67,55 @@ export async function pickEngineRunner(
   if (!service) {
     throw new EngineUnavailableError("AI_ENGINE_RUNNER_UNAVAILABLE", "本地 Runner 需要 MySQL 持久化后才能使用 CLI 执行", 503);
   }
-  const adapter = settings.cliAdapter;
-  const label = aiEngineAdapterLabel(adapter);
   const runners = await service.runners(actor);
+  return chooseEngineRunner(runners, actor, settings);
+}
+
+/**
+ * 选机器 + 选 CLI（纯函数，便于测试）。
+ *
+ * 2026-11-05：WorkBuddy CLI 与 Codex CLI 并存。团队在「AI 执行设置」里选一个首选 CLI；
+ * 执行机上首选的 CLI 不可用、但另一个可用时自动改用另一个（用户只装了一种也能直接用），
+ * 返回值里的 adapter 是**实际**派给的 CLI，模型 / 档位 / 提示词都按它来定。
+ * 指定了 runnerId 时仍然只在那台机器上找，不静默换机器。
+ */
+export function chooseEngineRunner(
+  runners: Array<{ id: string; ownerId: string; displayName: string; online: boolean; capabilities: string[]; workspaces: string[]; workbuddyVersion: string; codexVersion: string; lastError: string }>,
+  actor: SessionUser,
+  settings: TeamAiEngineSettings
+): EngineRunnerChoice {
+  const preferredAdapter = settings.cliAdapter;
+  const adapters: AiEngineAdapter[] = [preferredAdapter, otherAiEngineAdapter(preferredAdapter)];
+  const label = aiEngineAdapterLabel(preferredAdapter);
   const online = runners.filter((runner) => runner.online);
-  const usable = online.filter((runner) => runner.capabilities.includes(adapter));
+  const usableFor = (adapter: AiEngineAdapter) => online.filter((runner) => runner.capabilities.includes(adapter));
   if (settings.runnerId) {
-    const pinnedUsable = usable.find((runner) => runner.id === settings.runnerId);
-    if (pinnedUsable) return runnerChoice(pinnedUsable, actor, adapter, settings);
     const pinnedOnline = online.find((runner) => runner.id === settings.runnerId);
-    if (pinnedOnline) throw engineCliMissingError(pinnedOnline, adapter);
+    if (pinnedOnline) {
+      const adapter = adapters.find((item) => pinnedOnline.capabilities.includes(item));
+      if (adapter) return runnerChoice(pinnedOnline, actor, adapter, settings);
+      throw engineCliMissingError(pinnedOnline, preferredAdapter);
+    }
     // 指定的 Runner 离线：不静默换机器（把客户资料发到另一台机器是用户的决定），
     // 但要在报错里说清"还有哪台能用"，否则用户只会看到"不可用"。
-    const alternative = usable[0];
+    const alternative = adapters.map(usableFor).find((list) => list.length)?.[0];
     throw new EngineUnavailableError(
       "AI_ENGINE_RUNNER_OFFLINE",
       `设置里指定的 Runner 当前不可用，${alternative
         ? `另有在线可用的 Runner：${alternative.displayName || alternative.id}（可在「AI 引擎设置」里改用它）`
-        : `且没有其它在线的 Runner 提供 ${label}`}`
+        : "且没有其它在线的 Runner 提供 WorkBuddy CLI 或 Codex CLI"}`
     );
   }
-  const preferred = usable.find((runner) => runner.ownerId === actor.id) || usable[0];
-  if (preferred) return runnerChoice(preferred, actor, adapter, settings);
+  for (const adapter of adapters) {
+    const usable = usableFor(adapter);
+    const preferred = usable.find((runner) => runner.ownerId === actor.id) || usable[0];
+    if (preferred) return runnerChoice(preferred, actor, adapter, settings);
+  }
   const broken = online[0];
-  if (broken) throw engineCliMissingError(broken, adapter);
+  if (broken) throw engineCliMissingError(broken, preferredAdapter);
   throw new EngineUnavailableError(
     "AI_ENGINE_RUNNER_MISSING",
-    `没有在线的本地 Runner 提供 ${label}；请先在「集成中心 · 本地 Runner」完成配对`
+    `没有在线的本地 Runner 提供 ${label}（也没有可替代的 ${aiEngineAdapterLabel(otherAiEngineAdapter(preferredAdapter))}）；请先在「集成中心 · 本地 Runner」完成配对`
   );
 }
 
@@ -206,8 +229,9 @@ const CLI_AUTH_SIGNATURE = /authentication required|unauthorized|\/login|not log
 const CLI_NETWORK_SIGNATURE = /fetch failed|enotfound|econnrefused|econnreset|etimedout|socket hang up|network error|无法联网|网络|代理/iu;
 const CLI_TIMEOUT_SIGNATURE = /执行超过|已停止|超时|timed out|timeout/iu;
 
-export function classifyEngineCliIssue(message: string): EngineCliIssue {
+export function classifyEngineCliIssue(message: string, adapter: AiEngineAdapter = "workbuddy"): EngineCliIssue {
   const text = String(message || "").trim();
+  if (adapter === "codex") return classifyCodexCliIssue(text);
   if (CLI_AUTH_SIGNATURE.test(text)) {
     return {
       code: "cli_auth_required",
@@ -240,6 +264,48 @@ export function classifyEngineCliIssue(message: string): EngineCliIssue {
   };
 }
 
+/** Codex CLI 版的故障话术：凭据在 ~/.codex，登录用 `codex login`，模型在 ~/.codex/config.toml */
+function classifyCodexCliIssue(text: string): EngineCliIssue {
+  if (CLI_AUTH_SIGNATURE.test(text)) {
+    return {
+      code: "cli_auth_required",
+      title: "本机 Codex CLI 当前登录态不可用",
+      detail: `Codex CLI 报「${text.slice(0, 160)}」。Codex 的凭据在 ~/.codex；CRM 只要求这台机器的 Codex CLI 能用，不绑定具体账号。`,
+      command: "① 终端执行 codex --version 确认 CLI 本身可用　② 需要登录时执行 codex login　③ 登录后稍等十几秒再重试（Runner 会自动重新探测）"
+    };
+  }
+  if (CLI_NETWORK_SIGNATURE.test(text)) {
+    return {
+      code: "cli_network",
+      title: "本机 Codex CLI 联网失败",
+      detail: `Codex CLI 连不上云端（${text.slice(0, 160)}）。最常见原因是系统代理指向了已经退出的 VPN 端口。`,
+      command: "检查系统代理：scutil --proxy；确认代理工具是否在运行，或在系统设置里关掉失效代理"
+    };
+  }
+  if (CLI_TIMEOUT_SIGNATURE.test(text)) {
+    return {
+      code: "cli_timeout",
+      title: "Codex CLI 执行超时",
+      detail: `${text.slice(0, 160)}。文件过大或模型排队时会出现。`,
+      command: "在「AI 引擎设置」里调大 CLI 超时秒数，或换更小的文件重试"
+    };
+  }
+  if (/model/iu.test(text) && /not (found|supported|available)|unknown|invalid|does not exist|不存在|不支持/iu.test(text)) {
+    return {
+      code: "cli_failed",
+      title: "Codex CLI 不认识所选模型",
+      detail: `Codex 报「${text.slice(0, 160)}」。当前账号可能没有这个模型的权限，或模型名写错了。`,
+      command: "在「AI 引擎设置」里把 Codex 模型改成账号可用的模型，或清空以跟随本机 ~/.codex/config.toml 的默认模型"
+    };
+  }
+  return {
+    code: "cli_failed",
+    title: "本机 Codex CLI 执行失败",
+    detail: text ? text.slice(0, 200) : "Codex CLI 没有返回可用的错误信息。",
+    command: "可先在终端单独运行 codex --version 和 codex exec \"hello\" 确认 CLI 本身可用，再重试"
+  };
+}
+
 /** Runner 不在线 / 未配对时给用户的动作（比「没有在线的本地 Runner」有用得多） */
 export function engineRunnerOfflineIssue(hint: string, code = ""): EngineCliIssue {
   if (code === "AI_ENGINE_CLI_MISSING") {
@@ -247,7 +313,7 @@ export function engineRunnerOfflineIssue(hint: string, code = ""): EngineCliIssu
       code: "cli_failed",
       title: "这台 Runner 上暂时用不了本机 CLI",
       detail: hint || "Runner 在线，但当前探测不到可用的本机 CLI。",
-      command: "① 终端执行 /opt/homebrew/bin/codebuddy --version 确认 CLI 可用（用哪个账号都行）　② 刚切换过 CLI 账号就等十几秒，Runner 会自动重新探测并恢复　③ 仍不行则重启 Runner：launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner"
+      command: "① 终端执行 /opt/homebrew/bin/codebuddy --version（WorkBuddy CLI）或 codex --version（Codex CLI）确认 CLI 可用，用哪个账号都行　② 刚切换过 CLI 账号就等十几秒，Runner 会自动重新探测并恢复　③ 仍不行则重启 Runner：launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner"
     };
   }
   const title = code === "AI_ENGINE_RUNNER_OFFLINE" ? "设置里指定的 Runner 当前不可用"
@@ -324,7 +390,8 @@ export async function enqueueEngineCliTask(
   /**
    * 任务级模型 / 思考档位。由调用方从团队 AI 引擎设置里取，统一在这里注入，
    * 避免每个调用点各自拼标记（漏一处就悄悄用回了 fast-model）。
-   * 只对 WorkBuddy CLI 生效：模型 ID 是 WorkBuddy 侧的命名，Codex 不认。
+   * 调用方用 engineCliProfile(settings, choice.adapter) 取：WorkBuddy 与 Codex 的模型命名不同，
+   * 必须按实际派给的 CLI 取值（Runner 两个适配器都解析同一行标记）。
    */
   profile: { model?: string; effort?: string } = {}
 ): Promise<RunnableEngineCliTask> {
@@ -335,7 +402,7 @@ export async function enqueueEngineCliTask(
   const task = await service.createTask(actor, {
     runnerId: choice.runnerId,
     adapter: choice.adapter,
-    prompt: applyCliProfileToPrompt(prompt, choice.adapter === "workbuddy" ? profile : {}),
+    prompt: applyCliProfileToPrompt(adaptEngineCliPromptForAdapter(prompt, choice.adapter), profile),
     workspace: choice.workspace,
     executionMode: "read_only",
     timeoutSeconds

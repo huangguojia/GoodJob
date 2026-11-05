@@ -279,6 +279,26 @@ column -t -s $'\t' /opt/goodjobcrm/shared/secrets/admin_credentials.tsv
 
 如果浏览器仍显示旧页面，Mac 使用 `Command + Shift + R`，Windows 使用 `Ctrl + F5`。
 
+### MySQL binlog 必须关闭
+
+本项目要求 MySQL 关闭 binlog。MySQL 8.0 起 binlog 默认开启，所以 `compose.yml` 给 mysql
+加了 `--disable-log-bin`，安装/升级脚本在迁移后会验收 `@@log_bin`，后端和迁移程序启动时也会检查，
+生产环境发现开启会拒绝启动。手动确认：
+
+```bash
+cd /opt/goodjobcrm/current/deploy/docker-compose
+docker compose --project-name goodjobcrm --env-file /opt/goodjobcrm/shared/deploy.env -f compose.yml \
+  exec -T mysql sh -c 'MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" mysql -uroot -e "SELECT @@log_bin"'
+```
+
+返回 `0` 表示已关闭。旧版本部署过的服务器，升级后数据卷里还会留下以前的 `binlog.0000xx` 文件，
+它们不再被使用，确认 `@@log_bin` 为 0 后可以删除以释放磁盘：
+
+```bash
+docker compose --project-name goodjobcrm --env-file /opt/goodjobcrm/shared/deploy.env -f compose.yml \
+  exec -T mysql sh -c 'ls -lh /var/lib/mysql/binlog.* 2>/dev/null; rm -f /var/lib/mysql/binlog.[0-9]* /var/lib/mysql/binlog.index'
+```
+
 ## 8. 日常管理
 
 ```bash

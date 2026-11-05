@@ -13,6 +13,8 @@ playwright-report/
 *.log
 backend/.wwebjs_auth/
 backend/uploads/
+# 文件中心本体字节（默认根目录 storage/，可由 GOODJOB_FILE_ROOT 改到外部磁盘/云盘）
+storage/
 dist-packages/
 
 # Local build/runtime artifacts and packaged binaries

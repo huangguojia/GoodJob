@@ -485,7 +485,3 @@ export function migrateProspectFollowUpTodos(
     todo.related = `${candidate.company} · 线索 ${leadId}`;
   });
 }
-
-export function prospectReplyLabel(value?: ProspectReplyClassification) {
-  return value ? replyLabels[value] : "";
-}

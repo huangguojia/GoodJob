@@ -91,6 +91,66 @@ function mcpStage(item: Record<string, unknown>) {
   return /goodjob_browser|playwright|browser|chrome|google|浏览器|网页|页面|搜索|标签页/iu.test(value) ? "browser" : "tool";
 }
 
+/**
+ * 执行档位标记（与 WorkBuddy 适配器同一协议，CRM 后端统一写在提示词首行）：
+ *   [[gj-cli-options {"model":"gpt-5.6-sol","effort":"high","maxTurns":6,"disallowedTools":[...]}]]
+ *
+ * Codex 只认其中的 model / effort：
+ *   - model  → `codex exec -m <model>`。Codex 的模型名随版本变化，不做固定白名单，
+ *              只按安全字符校验（字母数字与 . _ : -），防止把任意字符串拼进命令行。
+ *   - effort → `-c model_reasoning_effort="<level>"`。Codex 支持 minimal / low / medium / high；
+ *              CRM 侧更高的 xhigh / max 统一按 high 执行。
+ *   - maxTurns / disallowedTools 是 WorkBuddy 的参数，Codex 没有对应项，忽略即可：
+ *     Codex 任务本身就运行在 read-only 沙箱里。
+ * 标记行一定会从喂给 Codex 的提示词里剥掉（只剥标记本身，同一行的正文保留）。
+ */
+export interface CodexCliProfile {
+  model: string;
+  effort: string;
+}
+
+const CODEX_PROFILE_PREFIX = "[[gj-cli-options";
+const CODEX_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
+const CODEX_EFFORT_MAP: Record<string, string> = {
+  minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high"
+};
+
+export function parseCodexCliProfile(prompt: string): { prompt: string; profile: CodexCliProfile } {
+  const profile: CodexCliProfile = { model: "", effort: "" };
+  if (!prompt.startsWith(CODEX_PROFILE_PREFIX)) return { prompt, profile };
+  const lineEnd = prompt.indexOf("\n");
+  const header = lineEnd === -1 ? prompt : prompt.slice(0, lineEnd);
+  const rest = lineEnd === -1 ? "" : prompt.slice(lineEnd + 1);
+  let cut = header.indexOf("]]");
+  cut = cut === -1 ? header.lastIndexOf("}") + 1 : cut + 2;
+  const remainder = cut <= 0 ? "" : header.slice(cut).trim();
+  const body = [remainder, rest].filter(Boolean).join("\n");
+  const start = header.indexOf("{");
+  const end = header.lastIndexOf("}");
+  let payload: Record<string, unknown> = {};
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(header.slice(start, end + 1)) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
+  }
+  const model = String(payload.model || "").trim();
+  if (CODEX_MODEL_PATTERN.test(model)) profile.model = model;
+  const effort = CODEX_EFFORT_MAP[String(payload.effort || "").trim().toLowerCase()];
+  if (effort) profile.effort = effort;
+  return { prompt: body, profile };
+}
+
+/** `-c` 覆盖项（放在子命令之前）与 exec 子命令参数（放在 exec 之后） */
+export function codexProfileArgs(profile: CodexCliProfile): { config: string[]; exec: string[] } {
+  return {
+    config: profile.effort ? ["-c", `model_reasoning_effort=${JSON.stringify(profile.effort)}`] : [],
+    exec: profile.model ? ["-m", profile.model] : []
+  };
+}
+
 function taskPrompt(prompt: string, browserMcpUrl = "") {
   if (!browserMcpUrl) return prompt;
   return `本次任务已连接 GoodJob 独立受控浏览器 MCP，服务名为 goodjob_browser。
@@ -162,11 +222,15 @@ export async function executeCodexTask(task: ClaimedTask, options: CodexExecutio
   if (!allowed.includes(workspace)) throw new Error("任务工作目录不在本机 Runner 授权范围内");
 
   const binary = options.codexBinary || resolveCodexBinary();
+  // CRM 写在首行的模型 / 思考档位标记：翻译成 Codex 参数，并从提示词里剥掉
+  const { prompt: taskBody, profile } = parseCodexCliProfile(task.prompt);
+  const profileArgs = codexProfileArgs(profile);
   const args = [
     ...(options.codexArgumentPrefix || []),
     ...(options.browserMcpUrl ? ["-c", `mcp_servers.goodjob_browser.url=${JSON.stringify(options.browserMcpUrl)}`] : []),
+    ...profileArgs.config,
     "--approve-for-me",
-    "exec", "-C", workspace,
+    "exec", ...profileArgs.exec, "-C", workspace,
     "--sandbox", task.executionMode === "workspace_write" ? "workspace-write" : "read-only",
     "--skip-git-repo-check", "--json", "--color", "never", "--ephemeral", "-"
   ];
@@ -240,7 +304,14 @@ export async function executeCodexTask(task: ClaimedTask, options: CodexExecutio
   }, Math.max(30, task.timeoutSeconds) * 1000);
   timeout.unref();
 
-  child.stdin.end(taskPrompt(task.prompt, options.browserMcpUrl));
+  if (profile.model || profile.effort) {
+    send({
+      eventType: "status",
+      message: `Codex 执行档位：${[profile.model ? `模型 ${profile.model}` : "", profile.effort ? `思考档位 ${profile.effort}` : ""].filter(Boolean).join(" · ")}`,
+      payload: { stage: "profile", status: "running" }
+    });
+  }
+  child.stdin.end(taskPrompt(taskBody, options.browserMcpUrl));
   const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
     child.once("error", (error) => resolve({ code: null, signal: null, error }));
     child.once("close", (code, signal) => resolve({ code, signal }));

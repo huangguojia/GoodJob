@@ -13,6 +13,9 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --innodb-buffer-pool-size=384M
       - --max-connections=100
+      # 本项目要求关闭 binlog（MySQL 8.0 起默认开启）。后端与迁移启动时会校验 @@log_bin，
+      # 生产环境未关闭会拒绝启动；不要删除这一行。
+      - --disable-log-bin
     secrets:
       - mysql_password
       - mysql_root_password

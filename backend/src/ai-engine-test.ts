@@ -18,6 +18,8 @@ import {
   applyResearchEnginePatch,
   buildAcquisitionCliPrompt,
   buildEmailCliPrompt,
+  acquisitionExtractedContacts,
+  acquisitionPrimaryContact,
   buildResearchCliPrompt,
   buildTenderDailyCliPrompt,
   engineSkillDirective,
@@ -272,6 +274,15 @@ async function main() {
   check(acquisitionPrompt.includes("water treatment") && acquisitionPrompt.includes("Germany"),
     "搜索条件必须进提示词");
   check(acquisitionPrompt.includes('"requestedCount"'), "目标数量必须进提示词");
+  // 用户口径：CLI 获客只要决策人/采购人邮箱（2026-10-31）
+  check(acquisitionPrompt.includes("Contact requirement (hard gate"),
+    "获客提示词必须把「决策人/采购人邮箱」写成硬门槛，否则模型会退回只给公司名");
+  check(acquisitionPrompt.includes("Generic inboxes") && acquisitionPrompt.includes("info@"),
+    "获客提示词必须点名通用信箱（info@/sales@）不算，否则产出还是部门信箱");
+  check(acquisitionPrompt.includes("Never guess an email pattern"),
+    "获客提示词必须禁止猜邮箱格式（firstname.lastname@ 这类编造）");
+  check(acquisitionPrompt.includes('"contacts"') && acquisitionPrompt.includes("decision_maker"),
+    "获客提示词与增量协议都必须带 contacts（含 role）字段");
 
   const dirtyAcquisition = extractEngineJson('前缀说明\n```json\n{"companies":[{"company":" Acme GmbH ","website":"https://acme.example","country":"Germany","business":"water systems","description":"匹配","sourceUrl":"https://search.example/acme","confidence":88},{"company":"","website":"https://junk.example"},{"website":"https://noname.example"},{"company":"Bad Site","website":"ftp://nope.example"},{"company":"No Site"}]}\n```');
   const companies = normalizeAcquisitionCompanies(dirtyAcquisition);
@@ -287,6 +298,61 @@ async function main() {
     "空输入/缺 companies 时应返回空数组而不是抛错");
   check(normalizeAcquisitionCompanies({ companies: "oops" } as never).length === 0,
     "companies 不是数组时应返回空数组而不是抛错");
+
+  // ── 决策人 / 采购人邮箱准入（2026-10-31 用户要求）─────────────────────────
+  const contactCompanies = normalizeAcquisitionCompanies({ companies: [
+    { company: "DM Co", contacts: [{ name: "Anna Weber", title: "Managing Director", email: "anna.weber@dm.example", role: "decision_maker", sourceUrl: "https://dm.example/team" }] },
+    { company: "Buyer Co", contacts: [{ name: "Tomasz Nowak", title: "Purchasing Manager", email: "t.nowak@buyer.example" }] },
+    { company: "Generic Co", contacts: [{ name: "Info Desk", title: "Managing Director", email: "info@generic.example" }] },
+    { company: "SalesCo", contacts: [{ name: "Peter Lee", title: "Sales Director", email: "peter@sa.example" }] },
+    { company: "Flat Co", contactName: "Marie Dupont", contactTitle: "Directeur Général", contactEmail: "marie@flat.example" },
+    { company: "Mixed Co", contacts: [
+      { name: "Peter Lee", title: "Sales Director", email: "peter@mixed.example" },
+      { name: "Tomasz Nowak", title: "Purchasing Manager", email: "t.nowak@mixed.example" }
+    ] },
+    { company: "No Contact Co" }
+  ] });
+  const byName = (name: string) => contactCompanies.find((item) => item.company === name)!;
+  check(contactCompanies.length === 7, "缺联系人的公司仍要保留在解析结果里（否则统计不出「被挡掉多少家」）");
+  check(byName("DM Co").qualified && byName("DM Co").contacts[0]?.role === "decision_maker",
+    "Managing Director + 具名邮箱应判为决策人并准入");
+  check(byName("Buyer Co").qualified && byName("Buyer Co").contacts[0]?.role === "purchasing",
+    "Purchasing Manager 应判为采购人并准入");
+  check(!byName("Generic Co").qualified && byName("Generic Co").contacts.length === 0,
+    "info@ 是部门信箱，不是某个人的邮箱，必须挡掉");
+  check(!byName("SalesCo").qualified && byName("SalesCo").contacts[0]?.role === "other",
+    "Sales Director 是对外销售侧，不算决策人/采购人");
+  check(byName("Flat Co").qualified && byName("Flat Co").contacts[0]?.name === "Marie Dupont",
+    "模型只给扁平 contactName/contactEmail 时也要认，并识别本地语职位（Directeur Général）");
+  check(!byName("No Contact Co").qualified && byName("No Contact Co").contacts.length === 0,
+    "没有联系人的公司不入池（qualified=false）");
+
+  // 入库映射：候选池只有 contact / contactInfo 两个文本字段，角色另存 extractedContacts.reasonCodes。
+  // 这三处写错会让「角色徽章 / 只看决策人采购人 / 发信收件人」同时失效。
+  const dmPrimary = acquisitionPrimaryContact(byName("DM Co"));
+  check(dmPrimary.contact === "Anna Weber · Managing Director" && dmPrimary.contactInfo === "anna.weber@dm.example",
+    "主联系人要落成「姓名 · 职位」+ 邮箱，不能只写姓名让业务员看不出角色");
+  const dmExtracted = acquisitionExtractedContacts(byName("DM Co"), "2026-10-31T00:00:00.000Z");
+  check(dmExtracted.length === 1 && dmExtracted[0]?.kind === "person"
+    && dmExtracted[0]?.source === "cli_acquisition" && dmExtracted[0]?.verificationStatus === "source_confirmed",
+    "结构化联系人要标成人（person）+ CLI 来源 + 已核对来源，复用候选池既有字段");
+  check(dmExtracted[0]?.reasonCodes?.[0] === "decision_maker"
+    && dmExtracted[0]?.emails?.[0] === "anna.weber@dm.example"
+    && dmExtracted[0]?.evidenceUrl === "https://dm.example/team",
+    "角色写进 reasonCodes、邮箱写进 emails、证据链接保留（前端只认这三项）");
+  const emptyPrimary = acquisitionPrimaryContact(byName("No Contact Co"));
+  check(emptyPrimary.contact === "待维护" && emptyPrimary.contactInfo === ""
+    && acquisitionExtractedContacts(byName("No Contact Co"), "2026-10-31T00:00:00.000Z").length === 0,
+    "无联系人时回落「待维护」而不是 undefined/空对象");
+  // 同一家公司既有采购又有 Sales Director 时，落库只能留采购：否则主联系人会被挑成销售，
+  // 候选详情也会挂着不该发信的人（真实输出反例实验发现）。
+  const mixedPrimary = acquisitionPrimaryContact(byName("Mixed Co"));
+  const mixedExtracted = acquisitionExtractedContacts(byName("Mixed Co"), "2026-10-31T00:00:00.000Z");
+  check(mixedPrimary.contactInfo === "t.nowak@mixed.example",
+    "主联系人必须跳过 role=other（Sales Director），不能把它当成决策人/采购人写进 contactInfo");
+  check(mixedExtracted.length === 1 && mixedExtracted[0]?.email === undefined
+    && mixedExtracted[0]?.emails?.[0] === "t.nowak@mixed.example",
+    "结构化联系人只能落决策人/采购人，Sales Director 这类 role=other 不许进候选池");
 
   // ── 增量获客：@@FOUND@@ 标记行提取（CLI 边搜边回协议）───────────────────────
   check(acquisitionPrompt.includes("@@FOUND@@") && acquisitionPrompt.includes("IMMEDIATELY print a single line"),
@@ -359,6 +425,13 @@ async function main() {
     "第二家应保留（大小写/去重按 公司名|网址 签名）");
   check(extractAcquisitionFindings("").length === 0 && extractAcquisitionFindings("没有任何标记").length === 0,
     "无标记文本应返回空数组而不是抛错");
+
+  const streamWithContact = extractAcquisitionFindings('@@FOUND@@ {"company": "Gamma Metals", "website": "https://gamma.example", "contacts": [{"name": "Li Wei", "title": "Procurement Manager", "email": "li.wei@gamma.example"}]}');
+  check(streamWithContact.length === 1 && streamWithContact[0]?.qualified === true,
+    "增量 @@FOUND@@ 行带合格联系人时应判为可入池");
+  check(streamWithContact[0]?.contacts[0]?.email === "li.wei@gamma.example"
+    && streamWithContact[0]?.contacts[0]?.role === "purchasing",
+    "增量行不依赖最终汇总，也要解析出邮箱与采购角色");
 
   console.log(JSON.stringify({
     ok: true,

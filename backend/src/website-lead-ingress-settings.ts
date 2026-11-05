@@ -144,11 +144,6 @@ export function writeWebsiteLeadIngressSettings(value: unknown) {
   };
 }
 
-export function setWebsiteLeadIngressSettingsForTest(value: unknown) {
-  if (process.env.NODE_ENV !== "test") throw new Error("Test ingress settings are available only during tests.");
-  testSettings = normalizeSettings(value);
-}
-
 export function validateWebsiteLeadIngressSettings(required = process.env.NODE_ENV === "production") {
   const settings = readWebsiteLeadIngressSettings();
   if (required && !settings.enabled) throw new Error("Production website lead ingress must be enabled in the encrypted private settings store.");

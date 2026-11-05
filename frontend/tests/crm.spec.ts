@@ -591,19 +591,8 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leads")).toHaveClass(/active/);
     await expect(page.locator("#leadStageChips .lead-chip.active")).toContainText("新线索");
     await openView(page, "dashboard");
-    await expect(page.locator("#dashboard .section-title", { hasText: "管道健康度" })).toContainText("真实商机阶段");
-    await expect(page.locator("#dashboard .bars")).toContainText("单");
-    await expect(page.locator("#dashboard .bars")).toContainText("$");
-    const pipelineHealthRows = await page.locator("#dashboard .bars .bar-row").evaluateAll((rows) => rows.map((row) => {
-      const fill = row.querySelector<HTMLElement>(".fill");
-      return {
-        stage: row.querySelector("span")?.textContent || "",
-        count: Number(row.getAttribute("data-count") || 0),
-        fillWidth: fill ? Number.parseFloat(fill.style.width || "0") : 0
-      };
-    }));
-    expect(pipelineHealthRows.some((row) => row.stage === "丢单")).toBe(false);
-    expect(pipelineHealthRows.filter((row) => row.count === 0).every((row) => row.fillWidth === 0)).toBe(true);
+    await expect(page.locator("#dashboard .bars")).toHaveCount(0);
+    await expect(page.locator("#dashboard .dp-pipeline")).toHaveCount(0);
     await expect(page.locator("#dashboard .task-list .task").first()).toContainText("分");
     await expect(page.locator("#dashboard .task-list .task").first()).toContainText("金额权重");
     await expect(page.locator("#dashboardPeriodTabs")).toHaveCount(0);
@@ -2953,7 +2942,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     const company = `leadfinder-${runId}`;
     await expect(page.locator(".nav button[data-view='dashboard'] + button[data-view='lead-finder']")).toBeVisible();
     await openView(page, "lead-finder");
-    await expect(page.locator("#lead-finder .page-head")).toContainText("自动获客");
+    await expect(page.locator("#lead-finder .page-head")).toContainText("搜客");
     await expect(page.locator("#leadFinderSearchLinks a").first()).toContainText(/product supplier|OEM product/);
     await expect(page.locator(".lead-advanced-settings")).toHaveAttribute("open", "");
     await expect(page.locator(".lead-queue-panel")).toBeVisible();

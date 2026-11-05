@@ -305,10 +305,6 @@ async function resolveOfficePython(): Promise<OfficePythonCandidate | null> {
 }
 
 /** 仅供测试与诊断：重置解释器探测缓存 */
-export function resetOfficePythonCache() {
-  cachedPython = undefined;
-}
-
 export interface OfficeTextExtractResult {
   /** 抽出的文本 */
   text: string;

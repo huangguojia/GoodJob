@@ -45,14 +45,14 @@ async function main() {
   const derived = resolveSentFolderTarget({
     id: "u_admin",
     smtpHost: "smtp.exmail.qq.com",
-    smtpUser: "huangguojia@longtec.com",
+    smtpUser: "kevin@demo-supplier.com",
     smtpPassword: "authorization-code"
   });
   check(derived?.host === "imap.exmail.qq.com", "只配 SMTP 时应推导出 IMAP 主机");
   check(derived?.port === 993, "IMAP 端口默认 993");
   check(derived?.secure === true, "IMAP 默认走 SSL");
   check(derived?.derived === true, "推导所得要标记出来（便于排查）");
-  check(derived?.user === "huangguojia@longtec.com", "应复用 SMTP 账号");
+  check(derived?.user === "kevin@demo-supplier.com", "应复用 SMTP 账号");
   check(derived?.password === "authorization-code", "应复用 SMTP 授权码（实测同一串可同时登 SMTP 与 IMAP）");
 
   const explicit = resolveSentFolderTarget({
@@ -122,7 +122,7 @@ async function main() {
     host: "imap.exmail.qq.com",
     port: 993,
     secure: true,
-    user: "huangguojia@longtec.com",
+    user: "kevin@demo-supplier.com",
     password: "top-secret-pwd",
     derived: true
   });

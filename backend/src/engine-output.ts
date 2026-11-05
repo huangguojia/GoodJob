@@ -197,11 +197,6 @@ export function splitByLimit<T>(items: T[], limit: number): { primary: T[]; over
 }
 
 /** 枚举值收敛：不认的值一律回落到默认值，避免前端拿到未知状态渲染空白。 */
-export function readEnum<T extends string>(record: Record<string, unknown>, keys: readonly string[], allowed: readonly T[], fallback: T): T {
-  const raw = textFromUnknown(pickRaw(record, keys), 40).toLowerCase();
-  return (allowed as readonly string[]).includes(raw) ? raw as T : fallback;
-}
-
 /** 合法 http(s) 链接才算数；其余返回空串（前端拿空串会退化成纯文本，不会渲染成坏链接）。 */
 export function readUrl(record: Record<string, unknown>, keys: readonly string[], limit = 600): string {
   const value = textFromUnknown(pickRaw(record, keys), limit);

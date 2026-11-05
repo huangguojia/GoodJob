@@ -258,7 +258,7 @@ export interface FollowupSyncDeps {
   /** 线索创建（server.ts 注入 createLeadFromSource 的包装，保持幂等语义）。 */
   createLead: (user: SessionUser, input: Record<string, unknown>) => { lead: { id: string }; duplicate: boolean };
   /** 本机 CLI 调用（默认 cli-ai.ts::runCliSummary；回测注入假实现，可直接回字符串）。 */
-  cliRun?: (prompt: string) => Promise<string | { text: string }>;
+  cliRun?: (prompt: string) => Promise<string | { text: string; model?: string }>;
   /** CRM 配置模型调用（回测注入点）。 */
   aiCall?: typeof callAiModel;
   /** 后台补全调度（默认内存队列异步跑；回测传同步执行器以便断言终态）。 */
@@ -310,9 +310,11 @@ async function refineOnce(task: RefineTask, deps: FollowupSyncDeps): Promise<Ref
   });
   let cliFailure: unknown = null;
   try {
-    const output = await (deps.cliRun ?? runCliSummary)(prompt);
+    // 默认按团队「AI 执行设置」选 CLI（WorkBuddy / Codex，首选的没装就用另一个）
+    const output = deps.cliRun ? await deps.cliRun(prompt) : await runCliSummary(prompt, { teamId: task.user.teamId });
     const parsed = parseRefinement(typeof output === "string" ? output : output.text);
-    return parsed ? { ...parsed, engine: "cli", model: CLI_SUMMARY_MODEL } : null;
+    const cliModel = typeof output === "string" ? CLI_SUMMARY_MODEL : output.model || CLI_SUMMARY_MODEL;
+    return parsed ? { ...parsed, engine: "cli", model: cliModel } : null;
   } catch (error) {
     cliFailure = error;
   }

@@ -50,7 +50,7 @@ function baseInput(stageKey: OutreachJourneyStageKey) {
       name: "Kevin",
       company: "Zhuhai Changlu Industrial Automatic Control System Co., Ltd.",
       products: "industrial weighing and batching control systems",
-      website: "https://www.longtec.com",
+      website: "https://www.demo-supplier.com",
       signature: "Best regards,\nKevin"
     },
     recipient: {

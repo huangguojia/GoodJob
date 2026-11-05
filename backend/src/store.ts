@@ -175,6 +175,7 @@ import type { TradeDocumentRecognitionTemplate } from "./types.js";
 import type { AgentTriggerEventRecord, AgentTriggerRuleRecord } from "./types.js";
 import type { AgentEvaluationRunRecord, AgentModelCallRecord } from "./types.js";
 import type { AgentKnowledgeDocument } from "./types.js";
+import type { Order, OrderEvent, OrderFile, OrderItem } from "./types.js";
 import type {
   CompanyVerificationSnapshot,
   ProspectCandidateQualificationCheckpoint,
@@ -236,6 +237,10 @@ export interface CrmStore {
   examSnapshots: ExamSnapshot[];
   importExportJobs: ImportExportJob[];
   tradeDocuments: TradeDocument[];
+  orders: Order[];
+  orderItems: OrderItem[];
+  orderEvents: OrderEvent[];
+  orderFiles: OrderFile[];
   tradeDocumentImportAnalyses: TradeDocumentImportAnalysis[];
   tradeDocumentRecognitionTemplates: TradeDocumentRecognitionTemplate[];
   wecomMessages: WecomMessage[];
@@ -487,6 +492,10 @@ export const memoryStore: CrmStore = {
   agentRuns: [],
   products: [],
   shipments: [],
+  orders: [],
+  orderItems: [],
+  orderEvents: [],
+  orderFiles: [],
   logs: [],
   agentRunSteps: [],
   agentRunEvents: [],

@@ -3,6 +3,12 @@ import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { homedir, platform as osPlatform } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import {
+  AI_ENGINE_CODEX_MODEL_DEFAULT,
+  otherAiEngineAdapter,
+  readTeamAiEngineSettings,
+  type AiEngineAdapter
+} from "./ai-engine-settings.js";
 
 // ---------------------------------------------------------------------------
 // CRM 后端直连本机 CodeBuddy CLI 的轻量通道（只服务「WhatsApp 跟进 AI 补全」这一个场景）。
@@ -185,10 +191,183 @@ export interface CliSummaryResult {
   durationMs: number;
 }
 
+// ---------------------------------------------------------------------------
+// Codex CLI 直连（2026-11-05：WorkBuddy 能做的 CLI 任务，Codex 也要能做）
+//
+// 与 Runner 的 codex-adapter 同一种调用：`codex exec --json`，只读沙箱、在专属空目录里跑，
+// 提示词走 stdin（`-`）。事件流是 JSONL：最后一个 agent_message 是答案，
+// turn.failed / error 是失败。Codex 没有 --max-turns / --disallowedTools，
+// 只读沙箱 + 空工作目录已经保证它不会改文件、也没有代码可探索。
+// ---------------------------------------------------------------------------
+
+/** ChatGPT 桌面端自带的 Codex（与 Runner 的 CHATGPT_CODEX_BINARY 一致） */
+const CHATGPT_CODEX_BINARY = "/Applications/ChatGPT.app/Contents/Resources/codex";
+
+/** 解析 Codex 可执行文件：显式指定 > GOODJOB_CODEX_BIN > PATH 里的 codex > ChatGPT 桌面端自带 > 裸名字 */
+export function resolveCodexCliBinary(extraPath = ""): string {
+  const explicit = extraPath.trim() || String(process.env.GOODJOB_CODEX_BIN || "").trim();
+  if (explicit && existsSync(explicit)) return explicit;
+  for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, "codex");
+    if (existsSync(candidate)) return candidate;
+  }
+  if (osPlatform() === "darwin" && existsSync(CHATGPT_CODEX_BINARY)) return CHATGPT_CODEX_BINARY;
+  return "codex";
+}
+
+/** 这台机器上某个 CLI 是否装着（能解析到一个真实存在的可执行文件） */
+export function directCliAvailable(adapter: AiEngineAdapter): boolean {
+  const binary = adapter === "codex" ? resolveCodexCliBinary() : resolveCliBinary();
+  return binary.includes(path.sep) && existsSync(binary);
+}
+
+/**
+ * 直连通道用哪个 CLI：团队首选的装着就用它；没装但另一个装着就用另一个；
+ * 都没装按首选执行（随后会如实报「CLI 不存在」）。
+ */
+export function resolveDirectCliAdapter(
+  preferred: AiEngineAdapter,
+  available: (adapter: AiEngineAdapter) => boolean = directCliAvailable
+): AiEngineAdapter {
+  if (available(preferred)) return preferred;
+  const other = otherAiEngineAdapter(preferred);
+  return available(other) ? other : preferred;
+}
+
+/** 把 `codex exec --json` 的 JSONL 事件解析成终态 */
+export function parseCodexStream(lines: string[]): ParsedCliStream {
+  let text = "";
+  let failed = false;
+  let error = "";
+  let completed = false;
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const type = String(event.type || "");
+    const item = recordOf(event.item);
+    if (type === "item.completed" && item.type === "agent_message" && typeof item.text === "string") {
+      text = clip(item.text);
+      continue;
+    }
+    if (type === "turn.completed") {
+      completed = true;
+      continue;
+    }
+    if (type === "turn.failed" || type === "error") {
+      failed = true;
+      const detail = recordOf(event.error);
+      error = clip(detail.message || event.message || event.error || "Codex CLI 返回失败", 2_000);
+    }
+  }
+  // 有答案且回合正常结束时，以答案为准（中途的可恢复错误事件不算失败）
+  if (text && completed) failed = false;
+  return { text, model: "", failed, error };
+}
+
+async function runCodexSummary(
+  prompt: string,
+  options: { timeoutMs: number; binary?: string; model?: string; effort?: string }
+): Promise<CliSummaryResult> {
+  const binary = resolveCodexCliBinary(options.binary ?? "");
+  if (binary.includes("/") && !existsSync(binary)) {
+    throw new Error(`本机 Codex CLI 不存在（${binary}）`);
+  }
+  const model = String(options.model || "").trim();
+  const effortMap: Record<string, string> = { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" };
+  const effort = effortMap[String(options.effort || "").trim().toLowerCase()] || "";
+  const workspace = ensureWorkspace();
+  const args = [
+    ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
+    "exec",
+    ...(model && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u.test(model) ? ["-m", model] : []),
+    "-C", workspace,
+    "--sandbox", "read-only",
+    "--skip-git-repo-check", "--json", "--color", "never", "--ephemeral", "-"
+  ];
+  const started = Date.now();
+  const child = spawn(binary, args, {
+    cwd: workspace,
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, NO_COLOR: "1" }
+  });
+  const lines: string[] = [];
+  let stderr = "";
+  const output = readline.createInterface({ input: child.stdout });
+  output.on("line", (line) => {
+    if (lines.length < 5_000) lines.push(line);
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(0, 8_000);
+  });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    if (child.exitCode !== null) return;
+    child.kill("SIGTERM");
+    const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 3_000);
+    force.unref();
+  }, options.timeoutMs);
+  timeout.unref();
+  child.stdin.on("error", () => undefined);
+  child.stdin.end(prompt);
+  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
+    child.once("error", (error) => resolve({ code: null, signal: null, error }));
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  clearTimeout(timeout);
+  output.close();
+  if (timedOut) throw new Error(`本机 Codex CLI 执行超过 ${Math.round(options.timeoutMs / 1_000)} 秒，已停止`);
+  if (exit.error) {
+    if ((exit.error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`本机 Codex CLI 不存在（未找到可执行文件 ${binary}；请安装 Codex CLI，或用 GOODJOB_CODEX_BIN 指定路径）`);
+    }
+    throw new Error(`本机 Codex CLI 无法启动（${binary}）：${exit.error.message}`);
+  }
+  const parsed = parseCodexStream(lines);
+  if (parsed.failed) throw new Error(redact(parsed.error || stderr.trim() || `本机 Codex CLI 退出码 ${exit.code ?? exit.signal ?? "未知"}`));
+  if (!parsed.text.trim()) {
+    throw new Error(redact(stderr.trim() || "本机 Codex CLI 没有返回任何内容（常见原因：未登录，可执行 codex login）"));
+  }
+  return { text: parsed.text, model: model || "Codex 默认模型", durationMs: Date.now() - started };
+}
+
+export interface CliSummaryOptions {
+  timeoutMs?: number;
+  binary?: string;
+  /**
+   * 传团队 ID 时按团队「AI 执行设置」选 CLI（首选的没装就自动改用另一个），
+   * Codex 用团队配置的 codexModel / codexEffort。不传时保持原行为：WorkBuddy CLI。
+   */
+  teamId?: string;
+  /** 直接指定 CLI（优先于 teamId 的设置；测试与特殊场景用） */
+  adapter?: AiEngineAdapter;
+}
+
 /** 跑一次非交互 CLI 总结任务。失败抛错（含未登录这种「退出码 0」的隐性失败）。 */
-export async function runCliSummary(prompt: string, options: { timeoutMs?: number; binary?: string } = {}): Promise<CliSummaryResult> {
-  const binary = resolveCliBinary(options.binary ?? "");
+export async function runCliSummary(prompt: string, options: CliSummaryOptions = {}): Promise<CliSummaryResult> {
   const timeoutMs = Math.max(10_000, options.timeoutMs ?? 120_000);
+  let adapter: AiEngineAdapter = options.adapter ?? "workbuddy";
+  let codexModel = AI_ENGINE_CODEX_MODEL_DEFAULT;
+  let codexEffort = "";
+  if (!options.adapter && options.teamId) {
+    const settings = await readTeamAiEngineSettings(options.teamId);
+    adapter = resolveDirectCliAdapter(settings.cliAdapter);
+    codexModel = settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT;
+    codexEffort = settings.codexEffort ?? "";
+  }
+  if (adapter === "codex") {
+    // 总结类任务讲究快：没配思考档位时用 low
+    return runCodexSummary(prompt, { timeoutMs, binary: options.binary, model: codexModel, effort: codexEffort || "low" });
+  }
+  const binary = resolveCliBinary(options.binary ?? "");
   if (binary.includes("/") && !existsSync(binary)) {
     throw new Error(`本机 CLI 不存在（${binary}）`);
   }

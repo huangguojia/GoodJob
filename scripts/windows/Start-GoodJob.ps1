@@ -95,6 +95,7 @@ character-set-server=utf8mb4
 collation-server=utf8mb4_unicode_ci
 max-connections=60
 innodb-buffer-pool-size=256M
+skip-log-bin
 log-error=$((Join-Path $context.LogsRoot 'mariadb-error.log').Replace('\','/'))
 pid-file=$((Join-Path $context.StateRoot 'mariadb.pid').Replace('\','/'))
 "@

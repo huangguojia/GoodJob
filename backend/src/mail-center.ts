@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { Pool } from "mysql2/promise";
+import nodemailer from "nodemailer";
 import { decryptMailCredential } from "./credential-security.js";
 import type { SenderMailbox } from "./types.js";
 
@@ -278,6 +279,65 @@ export function deriveImapHost(smtpHost: string, smtpUser = ""): string {
   return "";
 }
 
+/** 「测试连接」弹窗里还没保存的配置 */
+export interface MailProbeInput {
+  email: string;
+  password?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  imapHost?: string;
+  imapPort?: number;
+}
+
+export interface MailProbeTarget {
+  email: string;
+  password: string;
+  smtp: { host: string; port: number; secure: boolean };
+  imap: { host: string; port: number; secure: boolean; user: string };
+}
+
+/**
+ * 把弹窗里的表单值收敛成「要连哪台机器、用哪个账号」。
+ * 纯函数、不碰网络：端口/主机/授权码的合法性在联网之前就要拦住，
+ * 否则用户要等十几秒超时才看到一句「连接失败」。
+ */
+export function mailProbeTarget(input: MailProbeInput): MailProbeTarget {
+  const email = normalizeAddress(String(input.email || ""));
+  if (!email || !email.includes("@")) throw new Error("请填写有效的邮箱地址");
+  const password = String(input.password || "");
+  if (!password) throw new Error("请填写授权码后再测试");
+  const smtpHost = String(input.smtpHost || "").trim();
+  if (!smtpHost) throw new Error("请填写 SMTP 主机");
+  const smtpPort = Number(input.smtpPort || 465);
+  if (!Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535) throw new Error("SMTP 端口不合法");
+  const imapHost = String(input.imapHost || "").trim() || deriveImapHost(smtpHost, email);
+  if (!imapHost) throw new Error("无法确定 IMAP 主机，请手动填写");
+  const imapPort = Number(input.imapPort || 993);
+  if (!Number.isInteger(imapPort) || imapPort < 1 || imapPort > 65535) throw new Error("IMAP 端口不合法");
+  return {
+    email,
+    password,
+    // 587 是 STARTTLS，其余按隐式 SSL 处理（与 sendOutboundEmail 的口径一致）
+    smtp: { host: smtpHost, port: smtpPort, secure: smtpPort !== 587 },
+    imap: { host: imapHost, port: imapPort, secure: imapPort !== 143, user: email }
+  };
+}
+
+/** 把底层报错翻成用户能照着改的一句话（原样抛 EAUTH/ENOTFOUND 等于没说） */
+export function mailProbeErrorMessage(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const code = String((error as { code?: string } | null)?.code || "");
+  const text = `${code} ${raw}`;
+  if (/EAUTH|Invalid login|authentication failed|535|LOGIN failed/i.test(text)) {
+    return "账号或授权码被拒绝（QQ / 腾讯企业邮要填客户端「授权码」，不是登录密码）";
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(text)) return "域名解析失败，主机名可能写错了";
+  if (/ETIMEDOUT|ETIMEOUT|timeout/i.test(text)) return "连接超时，检查端口是否被封或网络不通";
+  if (/ECONNREFUSED/i.test(text)) return "端口拒绝连接，换 465（SSL）或 587（STARTTLS）试试";
+  if (/self.signed|certificate|CERT_/i.test(text)) return "服务器证书校验失败，确认主机名与端口是否匹配";
+  return raw.trim() || "连接失败";
+}
+
 function htmlToText(html: unknown) {
   if (typeof html !== "string") return "";
   return html
@@ -456,6 +516,75 @@ export function isOwnMailboxAddress(ownAddresses: string[], ownDomains: string[]
   const domain = addressDomain(target);
   if (!domain) return false;
   return ownDomains.map((item) => item.trim().toLowerCase()).includes(domain);
+}
+
+/** 从任意文本里抽出邮箱地址：台账 to 字段可能是 `Name <a@b.com>, c@d.com` 这种形态 */
+export function mailAddressesIn(value: string) {
+  const list = String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return Array.from(new Set(list.map((item) => item.trim().toLowerCase()).filter(Boolean)));
+}
+
+/**
+ * 一封邮件的「对话对方」：来信取发件人，去信取第一个非我方收件人。
+ *
+ * 「选一封信生成旅程」靠它把往来邮件归到一起 —— 这跟按客户档案生成旅程是两条路：
+ * 没有归属客户、或客户换了个发信地址的来信，只有这封信自己知道该跟谁对话。
+ * 我方地址必须排除：去信时 to 里可能同时有客户和我方另一个邮箱。
+ */
+export function journeyCounterpartAddress(
+  message: { direction: string; fromAddress: string; toAddresses: string[]; ccAddresses?: string[] },
+  ownAddresses: string[] = []
+) {
+  const own = new Set(ownAddresses.map((item) => normalizeAddress(item)).filter(Boolean));
+  const usable = (value: string) => {
+    const address = normalizeAddress(value);
+    return !!address && address.includes("@") && !own.has(address);
+  };
+  const pick = (list: string[] = []) => list.map((item) => normalizeAddress(item)).find(usable) || "";
+  const from = normalizeAddress(message.fromAddress || "");
+  if (message.direction === "inbound" && usable(from)) return from;
+  return pick(message.toAddresses) || pick(message.ccAddresses || []);
+}
+
+/**
+ * 主题归一化：剥掉任意层 Re:/Fwd:/回复：/转发：、压平空白、统一小写。
+ *
+ * 现实里 IMAP 给来的客户来信经常没有 In-Reply-To（实测整条 AIR 线程全是空），
+ * 只靠回复头连不成线；主题是唯一还可靠的东西，所以「同一线程」必须同时认这两种证据。
+ */
+export function threadSubjectKey(subject: string) {
+  let value = String(subject || "").replace(/\s+/g, " ").trim();
+  const prefix = /^(?:re|fw|fwd|回复|答复|回覆|转发)\s*(?:\[\d+\])?\s*[:：]\s*/iu;
+  // 多层往返会叠成 "Re: Re: 回复："，逐层剥，但设上限防病态主题
+  for (let round = 0; round < 8 && prefix.test(value); round += 1) {
+    value = value.replace(prefix, "").trim();
+  }
+  return value.toLowerCase();
+}
+
+/**
+ * 主题指纹：归一化后去掉空白，只取前 18 个字。
+ *
+ * 同一件事的标题会一路被改：加公司全名、加 "//PVGAIR262349" 这样的单号，
+ * 逐字比主题会把一条线程拆成三段。前 18 个字足够认人，又短到能容忍后半段改写；
+ * 再配合「同一个人 / 同域」这道闸，不会把两个客户的 "Re: 询价" 并到一起。
+ */
+export function threadSubjectPrefix(subject: string) {
+  const key = threadSubjectKey(subject).replace(/\s+/gu, "");
+  // 太短的标题（"hi" / "答复"）没有区分度，宁可不合并
+  return key.length >= 6 ? key.slice(0, 18) : "";
+}
+
+/**
+ * 旅程抬头上的「对方」显示名：来信取发件人显示名；去信库里没存收件人姓名，只能留空。
+ * 没名字时前端回落到地址，绝不拿主题或公司名冒充一个人。
+ */
+export function journeyCounterpartName(message: { direction: string; fromName?: string }) {
+  if (message.direction !== "inbound") return "";
+  const name = String(message.fromName || "").trim();
+  // 不少邮箱把显示名直接填成地址：再当名字用，抬头就会出现「地址 + 同一个地址」两遍
+  if (!name || (!/\s/u.test(name) && name.includes("@"))) return "";
+  return name;
 }
 
 function pad(value: number) {
@@ -734,6 +863,89 @@ class MysqlMailCenterRepository {
       [ownerId, teamId, ...list, ...likeParams]
     );
     return (rows as Record<string, unknown>[]).map((row) => this.rowToMessage(row));
+  }
+
+  /**
+   * 同一线程的全部邮件：先从这封出发沿回复头向上/向下走，再按主题补齐。
+   *
+   * 两个证据缺一不可：
+   * - thread_key 存的是「直接父信」的 Message-ID，A→B→C 里 B、C 的 key 不同，按 key 分组会把线截断；
+   * - 客户来信常常根本没有 In-Reply-To（实测整条 AIR 线程全空），只走回复头只剩一封。
+   * 主题补齐时会同时要求「同主题 + 同一个人/同域」，避免把别的客户的 "Re: inquiry" 串进来。
+   */
+  async messagesForThread(
+    ownerId: string,
+    teamId: string,
+    seed: MailMessage,
+    options: { counterpart?: string; subjectPrefix?: string } = {},
+    limit = 200
+  ) {
+    const max = Math.min(Math.max(limit, 1), 500);
+    const seen = new Map<string, MailMessage>([[seed.id, seed]]);
+    const knownIds = new Set<string>();
+    const collect = (message: MailMessage) => {
+      for (const value of [message.messageId, message.inReplyTo]) {
+        const id = normalizeMessageId(value || "");
+        if (id) knownIds.add(id);
+      }
+    };
+    collect(seed);
+    let frontier = Array.from(knownIds);
+    // 表里存的是原始 Message-ID（可能带尖括号、大小写不一），比较前必须同口径归一
+    const colMessage = "LOWER(REPLACE(REPLACE(message_id, '<', ''), '>', ''))";
+    const colReply = "LOWER(REPLACE(REPLACE(in_reply_to, '<', ''), '>', ''))";
+    for (let round = 0; round < 8 && frontier.length && seen.size < max; round++) {
+      const placeholders = frontier.map(() => "?").join(",");
+      const [rows] = await this.pool.query(
+        `SELECT * FROM mail_center_messages
+         WHERE owner_id = ? AND team_id = ? AND folder_kind IN ('inbox', 'sent')
+           AND (${colMessage} IN (${placeholders}) OR ${colReply} IN (${placeholders}))
+         ORDER BY sent_at ASC LIMIT ${max}`,
+        [ownerId, teamId, ...frontier, ...frontier]
+      );
+      const next: string[] = [];
+      for (const row of rows as Record<string, unknown>[]) {
+        const message = this.rowToMessage(row);
+        if (seen.has(message.id)) continue;
+        seen.set(message.id, message);
+        for (const value of [message.messageId, message.inReplyTo]) {
+          const id = normalizeMessageId(value || "");
+          if (id && !knownIds.has(id)) {
+            knownIds.add(id);
+            next.push(id);
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    const counterpart = normalizeAddress(options.counterpart || "");
+    const subjectPrefix = String(options.subjectPrefix || "");
+    if (counterpart && subjectPrefix && seen.size < max) {
+      const domain = counterpart.split("@")[1] || "";
+      // SQL 只做粗筛（%主题指纹%），精确认定在下面按同一个指纹函数做
+      const core = subjectPrefix.slice(0, 18).replace(/[\\%_]/g, "\\$&");
+      const [rows] = await this.pool.query(
+        `SELECT * FROM mail_center_messages
+         WHERE owner_id = ? AND team_id = ? AND folder_kind IN ('inbox', 'sent')
+           AND LOWER(REPLACE(subject, ' ', '')) LIKE ?
+         ORDER BY sent_at ASC LIMIT ${max}`,
+        [ownerId, teamId, `%${core}%`]
+      );
+      for (const row of rows as Record<string, unknown>[]) {
+        const message = this.rowToMessage(row);
+        if (seen.has(message.id) || threadSubjectPrefix(message.subject) !== subjectPrefix) continue;
+        const participants = [message.fromAddress, ...message.toAddresses, ...message.ccAddresses]
+          .map((value) => normalizeAddress(value || ""));
+        const samePerson = participants.includes(counterpart);
+        const sameDomain = !!domain && participants.some((address) => address.endsWith(`@${domain}`));
+        if (!samePerson && !sameDomain) continue;
+        seen.set(message.id, message);
+      }
+    }
+
+    return Array.from(seen.values())
+      .sort((left, right) => String(left.sentAt || "").localeCompare(String(right.sentAt || "")));
   }
 
   async messagesForEntity(ownerId: string, teamId: string, entityType: string, entityId: string, limit = 200) {
@@ -1389,6 +1601,84 @@ export class MailCenterSyncService {
     } finally {
       await this.closeClient(client);
       if (clientError) throw new Error(clientError);
+    }
+  }
+
+  /**
+   * 弹窗里的「测试连接」：拿着还没保存的配置直接探一次。
+   * 只做登录探测 —— SMTP 走 transporter.verify()（**不发信**）、IMAP 只读打开 INBOX，
+   * 不写库、不推进游标、不动任何邮件。两个协议分开报结果：
+   * 腾讯企业邮经常 SMTP 通、IMAP 关着，合成一个「失败」用户不知道该改哪儿。
+   */
+  async probeAccount(input: MailProbeInput & { mailboxId?: string; teamId?: string }) {
+    let password = String(input.password || "");
+    if (!password && input.mailboxId && input.teamId) {
+      // 编辑态：授权码留空表示沿用库里那份
+      password = await this.resolvePassword(input.mailboxId, input.teamId);
+    }
+    const target = mailProbeTarget({ ...input, password });
+    const [smtp, imap] = await Promise.all([this.probeSmtp(target), this.probeImap(target)]);
+    return { ok: smtp.ok && imap.ok, email: target.email, smtp, imap };
+  }
+
+  private async probeSmtp(target: MailProbeTarget) {
+    const started = Date.now();
+    const base = { host: target.smtp.host, port: target.smtp.port, secure: target.smtp.secure };
+    let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
+    try {
+      transporter = nodemailer.createTransport({
+        host: target.smtp.host,
+        port: target.smtp.port,
+        secure: target.smtp.secure,
+        auth: { user: target.email, pass: target.password },
+        connectionTimeout: 15_000,
+        greetingTimeout: 15_000,
+        socketTimeout: 20_000
+      });
+      await transporter.verify();
+      return { ok: true, ...base, ms: Date.now() - started, message: "SMTP 登录通过（没有发信，只验证凭据）" };
+    } catch (error) {
+      return { ok: false, ...base, ms: Date.now() - started, message: mailProbeErrorMessage(error) };
+    } finally {
+      try { transporter?.close(); } catch { /* 关闭失败不影响结论 */ }
+    }
+  }
+
+  private async probeImap(target: MailProbeTarget) {
+    const started = Date.now();
+    const base = { host: target.imap.host, port: target.imap.port };
+    const client = new ImapFlow({
+      host: target.imap.host,
+      port: target.imap.port,
+      secure: target.imap.secure,
+      auth: { user: target.imap.user, pass: target.password },
+      logger: false,
+      emitLogs: false,
+      socketTimeout: 20_000,
+      greetingTimeout: 15_000
+    } as ConstructorParameters<typeof ImapFlow>[0]);
+    // imapflow 是 EventEmitter，漏挂 error 会让一次超时杀掉整个进程
+    let clientError = "";
+    let connected = false;
+    client.on("error", (error: Error) => { clientError = error?.message || "IMAP 连接异常"; });
+    try {
+      await client.connect();
+      connected = true;
+      const list = await client.list();
+      const lock = await client.getMailboxLock("INBOX", { readOnly: true });
+      const exists = Number((client.mailbox as unknown as { exists?: number })?.exists || 0);
+      lock.release();
+      return { ok: true, ...base, letters: exists, folders: list.length, ms: Date.now() - started, message: `IMAP 登录通过 · 收件箱 ${exists} 封 · 文件夹 ${list.length} 个` };
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error : (clientError || error);
+      return { ok: false, ...base, ms: Date.now() - started, message: mailProbeErrorMessage(reason) };
+    } finally {
+      // 没连上就别等 logout 的 5 秒超时，测试连接要尽量快给结论
+      if (connected) {
+        await this.closeClient(client);
+      } else {
+        try { client.close(); } catch { /* 已关闭 */ }
+      }
     }
   }
 }

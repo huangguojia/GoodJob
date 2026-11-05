@@ -1,7 +1,14 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 
-const server = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+// server.ts 已按业务拆分为 server.ts（入口）+ server-core.ts（共享内核）+ routes/*.ts（各业务路由），
+// 契约检查覆盖全部后端 HTTP 源码。
+const serverSourceFiles = [
+  "./server.ts",
+  "./server-core.ts",
+  ...readdirSync(new URL("./routes/", import.meta.url)).filter((name) => name.endsWith(".ts")).sort().map((name) => `./routes/${name}`)
+];
+const server = serverSourceFiles.map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 
 assert.match(server, /const lfindResultSchema = z\.object/, "Lfind result schema must be validated before sync");
 assert.match(server, /Use \$lfind\./, "Runner prompt must explicitly invoke the Lfind skill");

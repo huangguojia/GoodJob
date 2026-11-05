@@ -1080,7 +1080,3 @@ export function listOwnerProspectCoverageEvents(
     && (!prospectId || item.prospectId === prospectId)
   ));
 }
-
-export function prospectCoverageSha256(value: unknown) {
-  return sha256(value);
-}

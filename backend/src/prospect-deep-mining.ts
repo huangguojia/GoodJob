@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import {
   buildProspectProviderResolvedQueries,
@@ -593,11 +593,3 @@ export function canQueueDeepMiningWebsiteProbe(state: ProspectDeepMiningState, c
     && !candidate.websiteProbeAttempts?.some((item) => ["queued", "running"].includes(item.status))
   );
 }
-
-export const prospectDeepMiningTestSupport = {
-  relationType,
-  evidenceForCandidate,
-  limits,
-  hash,
-  randomId: () => randomUUID()
-};

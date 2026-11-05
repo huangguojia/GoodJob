@@ -62,16 +62,3 @@ export async function assertPublicHttpUrl(rawUrl: string) {
   }
   return url;
 }
-
-export async function fetchPublicUrl(rawUrl: string, init: RequestInit = {}, maxRedirects = MAX_REDIRECTS) {
-  let current = (await assertPublicHttpUrl(rawUrl)).toString();
-  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    const response = await fetch(current, { ...init, redirect: "manual" });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirectCount === maxRedirects) throw new Error("外部地址重定向次数过多");
-    current = (await assertPublicHttpUrl(new URL(location, current).toString())).toString();
-  }
-  throw new Error("外部地址请求失败");
-}

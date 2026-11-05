@@ -556,6 +556,30 @@ export function normalizeDocumentAssetPlacement(value: unknown): DocumentAssetPl
   return { horizontal, vertical, offsetX, offsetY, scale };
 }
 
+/**
+ * 同一张 Logo 在不同单据模板里的位置与大小各存一套。
+ * 键是「模板风格:单据类型」（如 custom-b:PI / custom-b:PO），
+ * 没有单独调过的模板回落到 logoPlacement（Excel 导出用的通用值）。
+ */
+export type DocumentLogoPlacements = Record<string, DocumentAssetPlacement>;
+
+export const documentLogoPlacementKeyPattern = /^[a-z0-9-]{1,24}:[A-Z]{1,12}$/;
+
+export function normalizeDocumentLogoPlacements(value: unknown): DocumentLogoPlacements {
+  const parsed = typeof value === "string" ? (() => { try { return JSON.parse(value) as unknown; } catch { return {}; } })() : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const result: DocumentLogoPlacements = {};
+  let count = 0;
+  for (const [key, placement] of Object.entries(parsed as Record<string, unknown>)) {
+    if (count >= 16) break;
+    if (!documentLogoPlacementKeyPattern.test(key)) continue;
+    if (!placement || typeof placement !== "object") continue;
+    result[key] = normalizeDocumentAssetPlacement(placement);
+    count += 1;
+  }
+  return result;
+}
+
 export interface DocumentLetterhead {
   id: string;
   teamId: string;
@@ -570,6 +594,7 @@ export interface DocumentLetterhead {
   taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
+  logoPlacements?: DocumentLogoPlacements;
   matchCountries: string[];
   matchCurrencies: string[];
   matchDocumentTypes: TradeDocument["type"][];
@@ -619,6 +644,7 @@ export interface DocumentLetterheadSnapshot {
   taxNo: string;
   logoUrl: string;
   logoPlacement?: DocumentAssetPlacement;
+  logoPlacements?: DocumentLogoPlacements;
 }
 
 export interface DocumentStampSnapshot {
@@ -4074,6 +4100,8 @@ export type ShipmentStatus = "draft" | "shipped" | "in_transit" | "delivered" | 
 
 export interface ShipmentItem {
   id: string;
+  /** 关联订单明细行；有它就能精确回写 shipped_qty，无需靠品名猜。 */
+  orderItemId?: string;
   productName: string;
   model: string;
   hsCode: string;
@@ -4114,9 +4142,126 @@ export interface Shipment {
   estimatedArrival: string;
   note: string;
   items: ShipmentItem[];
+  /** 关联订单（可空：历史发货单只挂商机）。 */
+  orderId?: string;
   ownerId: string;
   teamId: string;
   updatedAt: string;
+}
+
+/* ---------------------------------------------------------------------------
+ * 订单（履约主档）
+ *
+ * 定位：商机成交之后，客户侧的履约视图。它不做库存、生产、成本、开票，
+ * 只归集「条款 / 状态 / 时间轴 / 文件」，并接收发货与单证的回写。
+ * ------------------------------------------------------------------------- */
+
+export type OrderStatus =
+  | "pending"
+  | "confirmed"
+  | "in_production"
+  | "ready_to_ship"
+  | "shipped"
+  | "delivered"
+  | "completed"
+  | "cancelled";
+
+export interface OrderItem {
+  id: string;
+  /** 扁平数组存储，必须自带归属；不靠外层 order 隐式绑定。 */
+  orderId: string;
+  lineNo: number;
+  product: string;
+  spec: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  amount: number;
+  /** 已发数量：由发货单回写，用于派生履约进度（不是状态）。 */
+  shippedQty: number;
+  remark: string;
+}
+
+export interface Order {
+  id: string;
+  /** CRM 系统编号（`GJ-SO-YYMM-NNNN`），自动生成、不可改，只用于系统内定位。 */
+  orderNo: string;
+  /**
+   * 公司自己的订单号（合同号 / 生产单号 / 财务单号一类），业务员手工录入。
+   * `orderNo` 是系统流水号，不等于公司对外用的真实单号 —— 两者必须分开存、分开显示。
+   * 可以为空：成交自动建单时还没拿到公司单号，后续补录。
+   */
+  companyOrderNo: string;
+  dealId: string;
+  /** 同一商机拆单时的序号；自动建单固定为 1。 */
+  splitSeq: number;
+  customerId: string;
+  /** 客户名快照：客户改名后订单仍显示签约时的抬头。 */
+  customerName: string;
+  status: OrderStatus;
+  currency: string;
+  amount: number;
+  incoterm: string;
+  paymentTerm: string;
+  portLoading: string;
+  portDischarge: string;
+  buyerPoNo: string;
+  productionRequired: boolean;
+  expectedShipAt: string;
+  confirmedAt: string;
+  shippedAt: string;
+  deliveredAt: string;
+  completedAt: string;
+  cancelledAt: string;
+  cancelReason: string;
+  erpOrderNo: string;
+  erpSyncStatus: "none" | "pending" | "synced" | "conflict";
+  source: "deal_auto" | "manual" | "backfill";
+  ownerId: string;
+  teamId: string;
+  remark: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type OrderEventType =
+  | "created"
+  | "status"
+  | "note"
+  | "file"
+  | "shipment"
+  | "document"
+  | "payment"
+  | "sync";
+
+export interface OrderEvent {
+  id: string;
+  orderId: string;
+  type: OrderEventType;
+  fromStatus?: OrderStatus;
+  toStatus?: OrderStatus;
+  content: string;
+  operatorId: string;
+  refType?: string;
+  refId?: string;
+  createdAt: string;
+}
+
+export interface OrderFile {
+  id: string;
+  orderId: string;
+  /** 指向文件中心 knowledge_assets.id；订单不存文件本体。 */
+  assetId: string;
+  kind: "contract" | "pi" | "ci" | "pl" | "inspection" | "other";
+  note: string;
+  createdBy: string;
+  createdAt: string;
+  /**
+   * M6 收编：这一行已经对应到文件中心的具体文件（files.id）。
+   * 非空时订单详情不再读这条旧记录，而是读 files 那条 —— 双读要能收敛成单读。
+   */
+  supersededByFileId?: string;
 }
 
 export interface TrackingEvent {
@@ -4177,6 +4322,8 @@ export interface Deal {
   lostReasonCategory?: string;
   revisitAt?: string;
   archivedAt?: string;
+  /** 成交后自动生成的订单 id（补偿锚点：为空即「成交未建单」）。 */
+  orderId?: string;
 }
 
 export type DealEventType = "created" | "updated" | "stage" | "follow_up" | "quote" | "sample" | "negotiation" | "payment" | "document" | "won" | "lost" | "archived" | "restored";
@@ -4486,10 +4633,12 @@ export interface TradeDocument {
   revision: number;
   derivedFromDocumentId?: string;
   derivedFromType?: TradeDocument["type"];
+  /** 关联订单（可空：历史单证只挂商机/客户）。 */
+  orderId?: string;
   importAnalysisId?: string;
   importSourceFileName?: string;
   importSourceSha256?: string;
-  type: "PI" | "CI" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
+  type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
   title: string;
   number: string;
   issueDate: string;
@@ -4514,7 +4663,7 @@ export interface TradeDocument {
   bankInfo: string;
   notes: string;
   language: "EN" | "ES" | "RU" | "AR" | "ZH";
-  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec" | "custom-b";
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;

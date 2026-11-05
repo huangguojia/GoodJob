@@ -4,8 +4,18 @@ ENV NODE_ENV=production \
     HOME=/home/node \
     PUPPETEER_SKIP_DOWNLOAD=true
 
+# 在线预览 Office/WPS 需要三样东西，缺一样就会「转换成功但内容不对」：
+#   1. LibreOffice 的 writer/impress/calc —— 只装 calc 的话 .docx/.pptx 直接转换失败
+#   2. 中文字体（Noto CJK + 文泉驿兜底）—— 否则中文整段消失
+#   3. Carlito/Caladea —— 分别等价于 Calibri/Cambria（Office 默认字体），决定版式保真度
+# poppler-utils 只为缩略图（pdftoppm）；不装也能预览正文，只是列表没有缩略图。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl dumb-init libreoffice-calc fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates curl dumb-init \
+      libreoffice-writer libreoffice-impress libreoffice-calc \
+      fonts-noto-cjk fonts-wqy-zenhei \
+      fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation \
+      poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -23,6 +33,9 @@ COPY backend/resources backend/resources
 COPY integration-sdk/dist integration-sdk/dist
 COPY agent-knowledge agent-knowledge
 COPY agent-skills agent-skills
+# 容器用 Linux 那份 fontconfig（中文别名映射：宋体→Noto Serif CJK、微软雅黑→Noto Sans CJK）。
+# 路径要与 backend/dist/file-derive.js 里 `../../deploy/fontconfig` 的解析结果一致。
+COPY deploy/fontconfig deploy/fontconfig
 COPY deploy/docker-compose/backend-entrypoint.sh /usr/local/bin/goodjob-backend-entrypoint
 RUN chmod 0755 /usr/local/bin/goodjob-backend-entrypoint \
     && install -d -o node -g node -m 0700 /app/uploads \
