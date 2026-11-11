@@ -698,15 +698,23 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     demoProviderEnabled,
     timestamp: new Date().toISOString()
   });
+  // 健康探针降频：Docker 每 15s 戳一次 /api/health/ready，没必要每次都真查库。
+  // 60s 内的成功结果直接复用；探活失败不缓存，下一轮（15s 后）立即重试。
+  const DATABASE_PROBE_TTL_MS = 60_000;
+  let lastDatabaseProbeAt = 0;
   const respondReady = async (response: Response, legacy = false): Promise<void> => {
     if (shuttingDown) {
       response.status(503).json({ status: "not_ready", ready: false, reason: "shutting_down", ...healthDetails() });
       return;
     }
     try {
-      await database.query("SELECT 1 AS ready");
+      if (Date.now() - lastDatabaseProbeAt >= DATABASE_PROBE_TTL_MS) {
+        await database.query("SELECT 1 AS ready");
+        lastDatabaseProbeAt = Date.now();
+      }
       response.json({ status: legacy ? "ok" : "ready", ready: true, ...healthDetails() });
     } catch (error) {
+      lastDatabaseProbeAt = 0;
       logger.warn(
         {
           requestId: response.locals.requestId,

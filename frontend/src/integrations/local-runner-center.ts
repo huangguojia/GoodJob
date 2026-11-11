@@ -128,10 +128,25 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
     const list = one<HTMLElement>("#localRunnerDeviceList");
     if (!list) return;
     if (!runners.length) {
-      list.innerHTML = `<div class="local-runner-empty"><b>还没有本地设备</b><span>创建配对码后，在需要执行 Codex / WorkBuddy CLI 的电脑上完成一次配对。</span></div>`;
+      list.innerHTML = `<div class="local-runner-empty local-runner-guide">
+        <b>三步把本机 CLI 接进来</b>
+        <ol class="local-runner-steps">
+          <li><span class="step-no">1</span><div><b>装 CLI 并登录</b>
+            <code>npm i -g @tencent-ai/codebuddy-code</code>
+            <code>codebuddy /login</code>
+            <small>在系统 Terminal 里执行；登录态只存本机，不经过 CRM。</small></div></li>
+          <li><span class="step-no">2</span><div><b>生成一次性配对码</b>
+            <button type="button" class="local-runner-link local-runner-guide-pair" data-runner-guide-pair>生成配对码</button></div></li>
+          <li><span class="step-no">3</span><div><b>在终端执行配对命令</b>
+            <small>执行成功后本页会自动出现这台设备，不用刷新。</small></div></li>
+        </ol>
+      </div>`;
       return;
     }
-    list.innerHTML = runners.map((runner) => `<button type="button" class="local-runner-device ${runner.id === selectedRunner()?.id ? "selected" : ""}" data-local-runner-select="${escapeHtml(runner.id)}">
+    const offlineHint = runners.some((runner) => runner.online)
+      ? ""
+      : `<div class="local-runner-offline-hint">设备离线：本机 Runner 进程没在跑。在终端执行 <b>goodjob-runner start</b>；已装 launchd 的话用 <b>launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner.prod</b>。</div>`;
+    list.innerHTML = offlineHint + runners.map((runner) => `<button type="button" class="local-runner-device ${runner.id === selectedRunner()?.id ? "selected" : ""}" data-local-runner-select="${escapeHtml(runner.id)}">
       <span class="local-runner-device-status ${runner.online ? "online" : ""}"></span>
       <span><b>${escapeHtml(runner.displayName)}</b><small>${escapeHtml(runner.online ? "在线" : runner.status === "revoked" ? "已解除" : `离线 · ${formatDate(runner.lastSeenAt)}`)}</small></span>
       <em>${escapeHtml(runnerCliSummary(runner))}</em>
@@ -277,8 +292,18 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
   };
 
   const openPairing = () => {
+    const beforeCount = runners.length;
     dependencies.openModal("配对本地 Runner", `<div class="form-grid local-runner-pair-form">
       <label>设备名称<input id="localRunnerPairName" maxlength="160" value="我的开发电脑" autocomplete="off"></label>
+      <div class="local-runner-precheck">
+        <b>生成前先确认这台电脑已就绪</b>
+        <ul>
+          <li><span>装好独立版 CLI</span><code>npm i -g @tencent-ai/codebuddy-code</code></li>
+          <li><span>CLI 已登录（没登录任务会全部失败）</span><code>codebuddy /login</code></li>
+          <li><span>装好 Runner（有源码时）</span><code>npm link --workspace @goodjob/local-runner</code></li>
+        </ul>
+        <small>登录和装包必须在系统 Terminal 里做，网页无法代劳——这是安全边界。</small>
+      </div>
       <p class="hint">配对码在页面显示的时间前有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口，并会自动探测 Codex CLI 与 WorkBuddy CLI。</p>
     </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="localRunnerPairCreate" type="button">生成配对码</button>`);
     document.querySelector<HTMLButtonElement>("#localRunnerPairCreate")?.addEventListener("click", async (event) => {
@@ -288,12 +313,28 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
         const result = await client.createLocalRunnerPairing(document.querySelector<HTMLInputElement>("#localRunnerPairName")?.value.trim() || "我的电脑");
         dependencies.openModal("在本机完成配对", `<div class="local-runner-pair-result">
           <span>一次性配对码</span><strong>${escapeHtml(result.pairingCode)}</strong><small>${escapeHtml(formatDate(result.expiresAt))} 前有效</small>
-          <label>在已安装 Runner 的终端执行</label><code>${escapeHtml(result.command)}</code>
-          <p>把命令中的 <b>/path/to/workspace</b> 替换为允许 Codex / WorkBuddy CLI 操作的本机项目绝对路径。</p>
-        </div>`, `<button class="btn" data-modal-close type="button">关闭</button><button class="btn primary" id="localRunnerCopyCommand" type="button">复制命令</button>`);
+          <label>① 在已装 Runner 的终端执行（把 /path/to/workspace 换成本机项目绝对路径）</label><code>${escapeHtml(result.command)}</code>
+          <p>② 执行成功后回到本页，设备会自动出现；30 秒内没出现就看终端报错。</p>
+          <p class="warn">配对只解决「谁来执行」，不解决「能不能执行」：本机 CLI 没登录时任务仍会 401 失败，务必先跑通 <b>codebuddy /login</b>。</p>
+        </div>`, `<button class="btn" data-modal-close type="button">关闭</button><button class="btn" id="localRunnerPairCheck" type="button">我已执行，检查设备</button><button class="btn primary" id="localRunnerCopyCommand" type="button">复制命令</button>`);
         document.querySelector<HTMLButtonElement>("#localRunnerCopyCommand")?.addEventListener("click", async () => {
           await navigator.clipboard.writeText(result.command);
           dependencies.toast("配对命令已复制", "success");
+        });
+        document.querySelector<HTMLButtonElement>("#localRunnerPairCheck")?.addEventListener("click", async (checkEvent) => {
+          const check = checkEvent.currentTarget as HTMLButtonElement;
+          check.disabled = true;
+          const original = check.textContent || "检查设备";
+          check.textContent = "检查中…";
+          await refresh(true);
+          if (runners.length > beforeCount) {
+            dependencies.closeModal();
+            dependencies.toast("配对成功，设备已上线", "success");
+          } else {
+            check.disabled = false;
+            check.textContent = original;
+            dependencies.toast("还没看到新设备：确认终端里命令执行成功、没有报错", "warn");
+          }
         });
       } catch (error) {
         button.disabled = false;
@@ -324,6 +365,10 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
   });
   panel.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    if (target.closest("[data-runner-guide-pair]")) {
+      openPairing();
+      return;
+    }
     const runnerButton = target.closest<HTMLButtonElement>("[data-local-runner-select]");
     if (runnerButton) {
       selectedRunnerId = runnerButton.dataset.localRunnerSelect || "";

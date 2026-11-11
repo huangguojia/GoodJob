@@ -965,6 +965,15 @@ export async function sendOutboundEmail(user: ReturnType<typeof getStore>["users
     headers: {
       "List-Unsubscribe": `<mailto:${user.outboundEmail}?subject=unsubscribe>`
     },
+    // DKIM 签名（可选）：在编译阶段由 nodemailer 生成 DKIM-Signature 头，
+    // streamTransport 编译出的原文与最终投递的 raw 逐字节一致，签名随之生效。
+    ...(user.dkimDomain && user.dkimSelector && user.dkimPrivateKey ? {
+      dkim: {
+        domainName: user.dkimDomain,
+        keySelector: user.dkimSelector,
+        privateKey: user.dkimPrivateKey
+      }
+    } : {}),
     ...(tracked ? { html: tracked.html } : {})
   };
   /**
@@ -994,7 +1003,9 @@ export async function sendOutboundEmail(user: ReturnType<typeof getStore>["users
       console.warn(`[outbound-email] 归档到已发送失败（不影响本次发送）：${archive.error || "未知原因"}`);
     }
   }
-  return { ...info, messageId: info?.messageId || messageId };
+  // 必须回我们自己写进邮件头的 messageId：raw 模式下 nodemailer 会按 transport 名另造一个
+  // info.messageId（如 <xxx@local.test>），与追踪像素里的 token 不是同一个 → 打开事件匹配不到台账。
+  return { ...info, messageId };
 }
 
 /** 用内存流 transport 把一封邮件编译成原始 MIME（不产生任何网络请求）。 */
@@ -1022,6 +1033,7 @@ export function recordOutboundEmailLog(
     payloadHash?: string;
     dispatchStatus?: OutboundEmailLog["dispatchStatus"];
     dispatchError?: string;
+    senderEmail?: string;
     sentAt: string;
   }
 ) {
@@ -1045,6 +1057,7 @@ export function recordOutboundEmailLog(
     payloadHash: input.payloadHash || undefined,
     dispatchStatus: input.dispatchStatus || "sent",
     dispatchError: input.dispatchError || "",
+    senderEmail: input.senderEmail || "",
     sentAt: input.sentAt,
     openCount: 0,
     clickCount: 0,
@@ -1214,6 +1227,7 @@ export async function dispatchOutboundEmail(
     requestId,
     payloadHash,
     dispatchStatus: "pending",
+    senderEmail: user.outboundEmail || "",
     sentAt: createdAt
   })!;
   await store.persist();
@@ -1541,11 +1555,14 @@ export function findWritableCustomer(
 // ---------------------------------------------------------------------------
 const leadSourceTypes = ["outbound", "inbound", "offline", "referral", "import"] as const;
 
-/** 归一化「公司名 + 国家」重复判定键：去首尾空格、压平空白、统一小写 */
-export function entityDuplicateKey(company: string, country: string) {
-  const normalize = (value: string) => value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
-  return `${normalize(company)}|${normalize(country)}`;
-}
+/**
+ * 归一化「公司名 + 国家」重复判定键：去首尾空格、压平空白、统一小写。
+ *
+ * 实现在 entity-duplicates.ts，与「仅本人」查重共用同一口径；这里保留 re-export，
+ * 是为了不打断既有 `from "../server-core.js"` 的引用。
+ */
+import { entityDuplicateKey } from "./entity-duplicates.js";
+export { entityDuplicateKey };
 
 export function findDuplicateLead(store: ReturnType<typeof getStore>, teamId: string, company: string, country: string, excludeId = "") {
   const key = entityDuplicateKey(company, country);
@@ -4046,7 +4063,8 @@ export async function getAgentProspectSearchProgress(actor: { id: string }, inpu
   const runId = agentInputText(input, "runId");
   if (!runId) throw new Error("缺少搜客任务 runId");
   const store = getStore();
-  await store.readBarrier();
+  // 进度轮询：1 秒内的重载结果可以直接复用，避免每次轮询都重读 30 张表
+  await store.readBarrier(1_000);
   const detail = getProspectRun(store, session, runId);
   const terminalStatuses = new Set(["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"]);
   const settledStatuses = new Set(["succeeded", "succeeded_empty", "partial_success", "failed", "cancelled"]);
@@ -4107,7 +4125,8 @@ export async function getAgentProspectSearchProgress(actor: { id: string }, inpu
 async function listAgentProspectCandidates(actor: { id: string }, input: Record<string, unknown>) {
   const { session } = agentSessionUser(actor);
   const store = getStore();
-  await store.readBarrier();
+  // 候选列表轮询：1 秒内的重载结果可以直接复用，避免每次轮询都重读 30 张表
+  await store.readBarrier(1_000);
   const runId = agentInputText(input, "runId");
   let candidateIds: string[] = [];
   if (runId) {
@@ -6900,13 +6919,39 @@ export async function startServer() {
       const repository = getSenderMailboxRepository();
       if (!repository) return owner;
       const mailboxes = await repository.list(owner.id, owner.teamId);
+      const enabled = mailboxes.filter((row) => row.enabled);
+      if (!enabled.length) return owner;
       const sentSteps = batch.items.reduce((sum, item) =>
         sum + item.steps.filter((step) => step.status === "sent").length, 0);
-      const mailbox = pickSenderMailbox(mailboxes, sentSteps, every);
+      // 单账号日限额：今日台账里该发件邮箱的投递量（uncertain 不计入）达到 dailyLimit 即跳过
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      const sentToday = new Map<string, number>();
+      const storeNow = getStore();
+      for (const log of storeNow.outboundEmailLogs) {
+        if (!log.senderEmail) continue;
+        const ts = Date.parse(log.sentAt);
+        if (!Number.isFinite(ts) || ts < dayStart.getTime()) continue;
+        if (log.dispatchStatus === "uncertain") continue;
+        const key = log.senderEmail.toLowerCase();
+        sentToday.set(key, (sentToday.get(key) || 0) + 1);
+      }
+      const exhausted = new Set(
+        enabled
+          .filter((row) => (sentToday.get(row.email.toLowerCase()) || 0) >= (row.dailyLimit || 50))
+          .map((row) => row.email.toLowerCase())
+      );
+      if (exhausted.size >= enabled.length) {
+        throw new Error(`发件邮箱池今日额度已用完（${enabled.length} 个邮箱全部达到单账号日限额），本批次暂停发送；明日自动恢复或到邮箱设置调高限额`);
+      }
+      const mailbox = pickSenderMailbox(mailboxes, sentSteps, every, exhausted);
       if (!mailbox) return owner;
       return { ...owner, ...senderMailboxOverrides(mailbox) };
     } catch (error) {
-      console.warn(`[outbound-email] 发件邮箱轮换失败，回落主发件邮箱：${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      // 日限额用尽是保护性拦截，必须向上抛而不是回落主邮箱（否则批次流量全压到主发件邮箱）
+      if (message.includes("发件邮箱池今日额度已用完")) throw error;
+      console.warn(`[outbound-email] 发件邮箱轮换失败，回落主发件邮箱：${message}`);
       return owner;
     }
   }

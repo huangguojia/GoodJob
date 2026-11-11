@@ -207,7 +207,7 @@ const required = [
 ];
 
 assert.match(apiLayer, /"email-return-flow": "开发信回流"/u, "开发信回流工作区标签必须使用中文名称");
-assert.match(apiLayer, /deckTicker\.innerHTML = logs\.length \? seq \+ seq : seq/u, "空回流状态不得重复渲染滚动提示");
+assert.match(apiLayer, /if \(!logs\.length\) \{\s*list\.innerHTML = `<div class="erf-empty">/u, "空回流状态渲染单个静态空态并提前返回，不再滚动提示");
 assert.match(apiLayer, /const captureHeight = Math\.max\(capture\.scrollHeight/u, "PDF 导出必须捕获完整预览高度");
 assert.match(apiLayer, /const captureWidth = 794[\s\S]*captureHost = document\.createElement\("div"\)/u, "PDF 导出必须使用独立的 A4 宽度画布");
 assert.match(apiLayer, /height: captureHeight/u, "PDF 导出必须把完整预览高度传给截图引擎");
@@ -2000,5 +2000,85 @@ assert.match(
   /商机阶段确认为「成交」时这里会自动变为已成交/u,
   "成交状态要带一句来源提示：商机确认成交会自动改写，避免误以为只能手动改"
 );
+
+// ---- 开发信三件套：打开/点击可见、DKIM 签名、发件邮箱池日限额（2026-11-09） ----
+{
+  const outreachSource = readFileSync(new URL("./modules/outreach.ts", import.meta.url), "utf8");
+  const profileSource = readFileSync(new URL("./modules/profile.ts", import.meta.url), "utf8");
+  const authSource = readFileSync(new URL("../../backend/src/auth.ts", import.meta.url), "utf8");
+  const mailboxSource = readFileSync(new URL("../../backend/src/sender-mailbox.ts", import.meta.url), "utf8");
+  const serverCoreSource = readFileSync(new URL("../../backend/src/server-core.ts", import.meta.url), "utf8");
+
+  // ① 打开/点击：像素与点击跳转在后端早已落地，前端不展示 = 用户仍然「不知道客户看没看」
+  assert.ok(
+    prototype.includes("<th>打开 / 点击</th>"),
+    "发信明细缺少「打开 / 点击」列：追踪数据存了却没人看得见"
+  );
+  assert.ok(
+    outreachSource.includes("<td>${outreachJourneyEngagementCell(item)}</td>"),
+    "发信明细行没有接入打开/点击单元格（只加表头不加单元格，整行会错位）"
+  );
+  assert.equal(
+    outreachSource.includes('colspan="7"'),
+    false,
+    "表头已扩到 8 列，任何残留的 colspan=7 都会让加载态/空态整行错位"
+  );
+  assert.ok(
+    outreachSource.includes("打开 ${item.openCount}"),
+    "手机卡片没有显示打开数：窄屏用户完全看不到追踪结果"
+  );
+
+  // ② DKIM：nodemailer 只在 mailOptions 带 dkim 时才签名；配了不注入 = 配了白配
+  assert.match(
+    serverCoreSource,
+    /\.\.\.\(user\.dkimDomain && user\.dkimSelector && user\.dkimPrivateKey \? \{\s*dkim: \{/u,
+    "发信没有注入 DKIM 选项：账号里配了域名/selector/私钥也不会真的签名"
+  );
+  assert.ok(
+    prototype.includes('id="profileDkimDomain"')
+      && prototype.includes('id="profileDkimSelector"')
+      && prototype.includes('id="profileDkimPrivateKey"'),
+    "个人资料页缺 DKIM 三个输入：用户没地方配域名/selector/私钥"
+  );
+  assert.ok(
+    authSource.includes("hasDkimPrivateKey: Boolean(user.dkimPrivateKey)"),
+    "接口必须只回 hasDkimPrivateKey，不能把 DKIM 私钥回显给前端"
+  );
+  assert.equal(
+    /dkimPrivateKey: user\.dkimPrivateKey/.test(authSource),
+    false,
+    "会话数据里回显了 DKIM 私钥（只允许回布尔 hasDkimPrivateKey）"
+  );
+  assert.ok(
+    /\.\.\.\(qs<HTMLTextAreaElement>\("#smbDkimPrivateKey"\)\?\.value \? \{ dkimPrivateKey:/.test(profileSource),
+    "池子邮箱编辑时私钥留空必须不提交该字段（否则保存一次就把已有私钥抹掉）"
+  );
+  assert.ok(
+    mailboxSource.includes('input.dkimPrivateKey !== undefined ? input.dkimPrivateKey : existing.dkimPrivateKey'),
+    "更新池子邮箱时留空必须沿用原私钥，不能写成空串"
+  );
+
+  // ③ 发件邮箱池日限额：轮换的意义是保护主邮箱，全部到限时必须暂停而不是回落主邮箱
+  assert.ok(
+    /dkimPrivateKey: mailbox\.dkimPrivateKey \|\| ""/.test(mailboxSource),
+    "池子邮箱覆盖发件身份时必须带 DKIM：换到池子邮箱后签名就丢了"
+  );
+  assert.ok(
+    mailboxSource.includes('ensureSenderMailboxColumn(pool, "daily_limit"'),
+    "sender_mailboxes 没有 daily_limit 列：老库升级后日限额无处存"
+  );
+  assert.ok(
+    /export function pickSenderMailbox\([\s\S]{0,200}skipEmails/u.test(mailboxSource),
+    "pickSenderMailbox 必须支持跳过已达日限额的邮箱"
+  );
+  assert.ok(
+    serverCoreSource.includes("发件邮箱池今日额度已用完"),
+    "全部邮箱到限额时必须暂停本批次，不能悄悄回落主发件邮箱（保护主邮箱才是本功能目的）"
+  );
+  assert.ok(
+    serverCoreSource.includes('senderEmail: user.outboundEmail || ""'),
+    "台账必须记录实际发件邮箱（senderEmail），否则日限额算不出来"
+  );
+}
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

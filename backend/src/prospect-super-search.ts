@@ -1300,6 +1300,11 @@ export class ProspectSuperSearchRunner {
 
   async tick() {
     if (this.ticking) return;
+    // 空转短路：没有进行中的任务时，readBarrier 会触发整库重载 + 全量深拷贝，
+    // 而循环体本身一行也不会执行。先看内存里的任务状态，没有活跃任务就直接返回。
+    // 单实例部署下任务只由本进程创建，内存状态即权威；有新任务时下一轮自动进入完整流程。
+    const hasActiveMission = this.store.prospectSuperSearchMissions.some((item) => activeMissionStatuses.has(item.status));
+    if (!hasActiveMission) return;
     this.ticking = true;
     try {
       await this.store.readBarrier();

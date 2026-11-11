@@ -9,6 +9,7 @@ import { type Request } from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canSeeOwner, requireAuth } from "../auth.js";
+import { aggregateReplyStats } from "../development-email-reply-stats.js";
 import { callAiModel, extractJsonObject } from "../ai-model-runtime.js";
 import { buildOutreachJourney, getBackgroundResearchRepository, type OutreachJourneyEntityType } from "../outreach-journey.js";
 import { assembleDevelopmentEmailBrief, buildDevelopmentEmailFallback, buildDevelopmentEmailPrompt, checkDevelopmentEmailDraft, developmentEmailMarketName, developmentEmailSignature, developmentEmailStagePlan, ensureDevelopmentEmailSignature, finalizePersonalization } from "../development-email-skill.js";
@@ -153,6 +154,69 @@ async function applyEmailEngagement(
   return Boolean(log || candidate);
 }
 
+// ── 单封邮件的打开 / 点击 / 回复口径（邮件阅读栏用）─────────────
+/**
+ * 邮件中心的 RFC Message-ID 与发信台账的 message_id 经常"看起来不一样"：
+ * ① 台账存的是我们自己生成的 `gj-…@domain`（已去尖括号、转小写）；
+ * ② 腾讯企业邮等会重写 Message-ID，形如 `<服务器token+gj-…@domain>`。
+ * 所以按「归一化后相等 / 以 +我们的 id 结尾 / 包含我们的 id」三档认，别只用 ===。
+ */
+function outboundLogForMailMessage(
+  store: ReturnType<typeof getStore>,
+  teamId: string,
+  rfcMessageId: string
+): OutboundEmailLog | undefined {
+  const target = normalizeMessageIdValue(rfcMessageId);
+  if (!target) return undefined;
+  const scoped = store.outboundEmailLogs.filter((item) => item.teamId === teamId);
+  const own = (item: OutboundEmailLog) => normalizeMessageIdValue(item.messageId);
+  const exact = scoped.find((item) => own(item) === target);
+  if (exact) return exact;
+  return scoped.find((item) => {
+    const id = own(item);
+    return Boolean(id) && (target.endsWith(`+${id}`) || target.includes(id));
+  });
+}
+
+export interface MailMessageEngagement {
+  logId: string;
+  source: string;
+  openCount: number;
+  clickCount: number;
+  firstOpenedAt: string;
+  lastOpenedAt: string;
+  lastClickedAt: string;
+  lastClickedUrl: string;
+  repliedAt: string;
+  bouncedAt: string;
+  entityType: string;
+  entityId: string;
+}
+
+/** 没进发信台账（不是系统发的、或历史邮件）返回 null —— 前端据此不显示统计条 */
+function outboundEngagementFor(
+  store: ReturnType<typeof getStore>,
+  teamId: string,
+  rfcMessageId: string
+): MailMessageEngagement | null {
+  const log = outboundLogForMailMessage(store, teamId, rfcMessageId);
+  if (!log) return null;
+  return {
+    logId: log.id,
+    source: log.source || "",
+    openCount: log.openCount || 0,
+    clickCount: log.clickCount || 0,
+    firstOpenedAt: log.firstOpenedAt || "",
+    lastOpenedAt: log.lastOpenedAt || "",
+    lastClickedAt: log.lastClickedAt || "",
+    lastClickedUrl: log.lastClickedUrl || "",
+    repliedAt: log.repliedAt || "",
+    bouncedAt: log.bouncedAt || "",
+    entityType: log.entityType || "",
+    entityId: log.entityId || ""
+  };
+}
+
 // ── 开发信回流：发送台账 + 触达时间线（当前登录用户私有）─────────────
 function enrichOutboundLogEntity(store: ReturnType<typeof getStore>, log: OutboundEmailLog): OutboundEmailLog & { entityName?: string } {
   const enriched = { ...log } as OutboundEmailLog & { entityName?: string };
@@ -210,6 +274,13 @@ const senderMailboxBaseSchema = {
   imapPort: z.coerce.number().int().min(1).max(65535).default(993),
   imapUser: z.string().trim().max(200).default(""),
   imapPassword: z.string().max(400).default(""),
+  // DKIM 签名（可选）：update 时不传 = 保留原值（与私钥/日限额同语义）。
+  // 不能给 default("")：PUT 只改日限额时会把 selector/域名清空，留下「有私钥无 selector」的半残配置，
+  // 表现就是签名静默失效。
+  dkimDomain: z.string().trim().max(180).optional(),
+  dkimSelector: z.string().trim().max(63).optional(),
+  dkimPrivateKey: z.string().max(12000).optional(),
+  dailyLimit: z.coerce.number().int().min(1).max(500).optional(),
   enabled: z.coerce.boolean().default(true)
 };
 
@@ -344,6 +415,23 @@ export function registerMailRoutes(app: Express) {
     res.json({ logs: page, total: logs.length, tracking: emailTrackingStatus() });
   }));
 
+  // ── 开发信回复统计：按日 / 按月 / 回复率 / 邮箱风险预警 ───────────────────────
+  // 口径与「开发信回流」页同源：本人发送台账。聚合逻辑在 development-email-reply-stats.ts
+  // （纯函数，可离线红绿自测），风险口径见该文件头注释。
+  app.get("/api/development-email/reply-stats", requireAuth, asyncRoute(async (req, res) => {
+    const store = getStore();
+    const ownerId = req.user!.id;
+    const days = Math.min(Math.max(Number(req.query.days) || 90, 7), 365);
+    const fromMs = Date.now() - days * 86_400_000;
+    const logs = store.outboundEmailLogs.filter((item) => {
+      if (item.ownerId !== ownerId) return false;
+      if ((item.dispatchStatus || "sent") !== "sent") return false;
+      const time = new Date(item.sentAt || "").getTime();
+      return Number.isFinite(time) && time >= fromMs;
+    });
+    res.json(aggregateReplyStats(logs, days));
+  }));
+
   app.get("/api/email-tracking/config", requireAuth, asyncRoute(async (_req, res) => {
     res.json({ config: emailTrackingConfigView() });
   }));
@@ -428,6 +516,10 @@ export function registerMailRoutes(app: Express) {
       imapUser: z.string().max(180).default(""),
       imapPassword: z.string().max(300).optional().default(""),
       clearImapPassword: z.boolean().optional().default(false),
+      dkimDomain: z.string().trim().max(180).optional().default(""),
+      dkimSelector: z.string().trim().max(63).optional().default(""),
+      dkimPrivateKey: z.string().max(12000).optional(),
+      clearDkimPrivateKey: z.boolean().optional().default(false),
       inboundSyncEnabled: z.boolean().optional().default(false)
     });
     const body = schema.parse(req.body);
@@ -457,6 +549,13 @@ export function registerMailRoutes(app: Express) {
       user.imapPassword = "";
     } else if (body.imapPassword) {
       user.imapPassword = body.imapPassword;
+    }
+    user.dkimDomain = body.dkimDomain || "";
+    user.dkimSelector = body.dkimSelector || "";
+    if (body.clearDkimPrivateKey) {
+      user.dkimPrivateKey = "";
+    } else if (body.dkimPrivateKey) {
+      user.dkimPrivateKey = body.dkimPrivateKey;
     }
     user.inboundSyncEnabled = body.inboundSyncEnabled;
     await store.persist();
@@ -721,7 +820,15 @@ export function registerMailRoutes(app: Express) {
       offset: Number(req.query.offset || 0),
       focusId: String(req.query.focusId || "")
     });
-    res.json(result);
+    // 列表里也带上打开 / 回复口径：一眼能看出哪封被读了（收件箱里自己发的信同样适用）
+    const store = getStore();
+    res.json({
+      ...result,
+      messages: (result.messages || []).map((message) => ({
+        ...message,
+        engagement: outboundEngagementFor(store, user.teamId, String((message as { messageId?: string }).messageId || ""))
+      }))
+    });
   }));
 
   app.get("/api/mail-center/messages/:id", requireAuth, asyncRoute(async (req, res) => {
@@ -731,7 +838,7 @@ export function registerMailRoutes(app: Express) {
     if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
     const message = await repository.getMessage(user.id, user.teamId, req.params.id);
     if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
-    res.json({ message });
+    res.json({ message: { ...message, engagement: outboundEngagementFor(getStore(), user.teamId, message.messageId) } });
   }));
 
   app.post("/api/mail-center/messages/:id/read", requireAuth, asyncRoute(async (req, res) => {

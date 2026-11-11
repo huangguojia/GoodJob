@@ -11,6 +11,9 @@ const serverSourceFiles = [
 const server = serverSourceFiles.map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 
 assert.match(server, /const lfindResultSchema = z\.object/, "Lfind result schema must be validated before sync");
+// CLI 经常把 summary.skipped 写成数字（顶层 skipped 也照抄）。以前严格要求数组 → 422 把整份结果判死，
+// 自动流每次重试都失败、永远停在几%（2026-11-09 事故）。必须容忍数字并合成占位条目。
+assert.match(server, /skipped: z\.preprocess\(/, "Lfind skipped must tolerate a numeric count from the CLI instead of 422-ing the whole result");
 assert.match(server, /Use \$lfind\./, "Runner prompt must explicitly invoke the Lfind skill");
 assert.match(server, /\/api\/lead-finder\/lfind-tasks/, "Backend must expose Lfind task launch and status endpoints");
 assert.match(server, /filterExistingCrmOpportunities\(rawOpportunities, store, user\.teamId\)/, "Lfind results must be filtered against existing CRM records");

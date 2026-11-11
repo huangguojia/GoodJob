@@ -26,7 +26,14 @@ import { api, toast } from "./ui";
 // - 状态与产物写 localStorage（键 gj.autoflow.v2），刷新后能接着跑。
 // ===========================================================================
 
-type AutoFlowStatus = "idle" | "running" | "paused" | "done";
+/**
+ * failed 与 paused 必须分开：
+ * - paused = 用户主动暂停 / 发送节点等人工确认，随时能原样接着跑；
+ * - failed  = 这一步报错中止，没有在跑的任务，进度不保留。
+ * 以前失败一律写成 paused，界面显示「已暂停 4%」，看起来像"跑到 4% 卡住了"，
+ * 实际一个请求都没派出去（2026-11-09 用户报「在运行的没有啊」）。
+ */
+type AutoFlowStatus = "idle" | "running" | "paused" | "failed" | "done";
 type AutoFlowLogKind = "start" | "done" | "warn";
 
 interface AutoFlowStep {
@@ -250,7 +257,10 @@ function autoFlowEnsure(): AutoFlowState {
           logs: Array.isArray(parsed.logs) ? parsed.logs.slice(-AUTO_FLOW_MAX_LOGS) : [],
           activeKey: typeof parsed.activeKey === "string" ? parsed.activeKey : null,
           command: typeof parsed.command === "string" ? parsed.command : "",
-          artifacts: { ...autoFlowFreshArtifacts(), ...(parsed.artifacts && typeof parsed.artifacts === "object" ? parsed.artifacts : {}) }
+          artifacts: { ...autoFlowFreshArtifacts(), ...(parsed.artifacts && typeof parsed.artifacts === "object" ? parsed.artifacts : {}) },
+          // 步进模式必须一起恢复：漏了它，刷新页面后「步进运行」按钮会变回未激活，
+          // 但日志里还写着"步进运行：…已完成并停下"，界面自相矛盾。
+          stepMode: Boolean(parsed.stepMode)
         };
       }
     }
@@ -258,7 +268,41 @@ function autoFlowEnsure(): AutoFlowState {
     restored = null;
   }
   autoFlowState = restored ?? autoFlowInitialState();
+  autoFlowHealLegacyFailure(autoFlowState);
   return autoFlowState;
+}
+
+/**
+ * 自愈历史残留状态。
+ *
+ * 旧版本把「节点执行失败」记成 paused，同时保留任务号和假进度（典型是 4%），于是界面显示
+ * 「已暂停 4%」——看起来像跑到 4% 卡住了，实际后端一条任务都没有。这里把这种残缺状态纠正成
+ * failed，并丢弃那个查一次报一次的坏任务号。
+ *
+ * 只处理「最后一条 warn 是失败」的 paused 节点：用户主动暂停写的是
+ * 「…已暂停，点「继续运行」从断点接着跑」，不会被误伤。
+ */
+function autoFlowHealLegacyFailure(state: AutoFlowState) {
+  let changed = false;
+  for (const step of AUTO_FLOW_STEPS) {
+    if (state.status[step.key] !== "paused" || state.activeKey) continue;
+    const lastWarn = [...state.logs].reverse().find((entry) => entry.kind === "warn");
+    if (!lastWarn || !lastWarn.text.includes("失败")) continue;
+    state.status[step.key] = "failed";
+    state.progress[step.key] = 0;
+    changed = true;
+  }
+  if (!changed) return;
+  const artifacts = state.artifacts!;
+  // 失败残留的任务号一律丢弃：它多半就是那个"查询一次报一次"的坏结果
+  artifacts.lfindTaskId = undefined;
+  artifacts.opportunities = [];
+  state.logs.push({
+    at: Date.now(),
+    kind: "warn",
+    text: "已清理上次失败留下的残留状态（原来显示「已暂停 N%」，实际没有任务在跑）。点「重试」会重新派单。"
+  });
+  autoFlowWrite();
 }
 
 function autoFlowWrite() {
@@ -404,6 +448,8 @@ function autoFlowStageLabel(status: AutoFlowStatus, progress: number) {
   if (status === "done") return "已完成";
   if (status === "running") return `进行中 ${value}`;
   if (status === "paused") return `已暂停 ${value}`;
+  // 失败不写百分比：失败时进度没有意义，写出来会被读成"跑到这里卡住了"
+  if (status === "failed") return "失败 · 未在运行";
   return "待执行";
 }
 
@@ -415,6 +461,9 @@ function autoFlowFocusStep() {
   if (running) return running;
   const paused = AUTO_FLOW_STEPS.find((item) => state.status[item.key] === "paused");
   if (paused) return paused;
+  // 失败节点优先于"下一个待执行"：详情区要停在出事的那一步，而不是跳到后面
+  const failed = AUTO_FLOW_STEPS.find((item) => state.status[item.key] === "failed");
+  if (failed) return failed;
   const next = AUTO_FLOW_STEPS.find((item) => state.status[item.key] !== "done");
   return next || AUTO_FLOW_STEPS[0];
 }
@@ -678,7 +727,9 @@ function autoFlowSync() {
           ? `进行中 ${Math.round(progress)}%`
           : status === "paused"
             ? `已暂停 ${Math.round(progress)}%`
-            : "待执行";
+            : status === "failed"
+              ? "失败"
+              : "待执行";
     }
     node.style.setProperty("--af-progress", `${status === "done" ? 100 : Math.round(progress)}%`);
   }
@@ -699,16 +750,19 @@ function autoFlowSync() {
   if (currentText) {
     const active = autoFlowStepOf(state.activeKey);
     const pausedStep = AUTO_FLOW_STEPS.find((step) => state.status[step.key] === "paused");
+    const failedStep = AUTO_FLOW_STEPS.find((step) => state.status[step.key] === "failed");
     const lastDone = [...AUTO_FLOW_STEPS].reverse().find((step) => state.status[step.key] === "done");
     currentText.textContent = active
       ? `${active.title}${state.stepMode ? "（步进）" : ""}`
       : pausedStep
         ? `${pausedStep.title}（已暂停）`
-        : doneCount === AUTO_FLOW_STEPS.length
-          ? "全部完成"
-          : state.stepMode && lastDone
-            ? `${lastDone.title} 已完成 · 步进等待继续`
-            : "未开始";
+        : failedStep
+          ? `${failedStep.title}（失败 · 未在运行）`
+          : doneCount === AUTO_FLOW_STEPS.length
+            ? "全部完成"
+            : state.stepMode && lastDone
+              ? `${lastDone.title} 已完成 · 步进等待继续`
+              : "未开始";
   }
   const fill = qs<HTMLElement>("#afProgressFill");
   if (fill) fill.style.width = `${overall}%`;
@@ -718,13 +772,16 @@ function autoFlowSync() {
   if (runButton) {
     const running = Boolean(state.activeKey);
     const paused = AUTO_FLOW_STEPS.some((step) => state.status[step.key] === "paused");
+    const failed = AUTO_FLOW_STEPS.some((step) => state.status[step.key] === "failed");
     runButton.textContent = running
       ? "暂停"
-      : paused || doneCount > 0 && doneCount < AUTO_FLOW_STEPS.length
-        ? "继续运行"
-        : doneCount === AUTO_FLOW_STEPS.length
-          ? "重新运行"
-          : "开始运行";
+      : failed
+        ? "重试"
+        : paused || doneCount > 0 && doneCount < AUTO_FLOW_STEPS.length
+          ? "继续运行"
+          : doneCount === AUTO_FLOW_STEPS.length
+            ? "重新运行"
+            : "开始运行";
   }
   const stepButton = qs<HTMLButtonElement>("#afStepButton");
   if (stepButton) {
@@ -913,13 +970,41 @@ function autoFlowPausePoint(key: string) {
   return true;
 }
 
+/**
+ * 把后端的 zod issues / 网络错误翻成人话。
+ * 以前直接把 `[{"code":"invalid_type","expected":"array",...}]` 原样写进流程事件，
+ * 用户只看到一大段机器话，既读不懂也不知道该做什么。
+ */
+function autoFlowFriendlyError(message: string) {
+  const raw = String(message || "").trim();
+  if (!raw) return "未知错误";
+  if (/"code"\s*:\s*"(invalid_type|invalid_enum_value|invalid_union|invalid_date|too_small|too_big|not_multiple_of)"/.test(raw)) {
+    const path = /"path"\s*:\s*\[\s*"([^"]+)"/.exec(raw)?.[1] || /"path"\s*:\s*"([^"]+)"/.exec(raw)?.[1] || "";
+    const expected = /"expected"\s*:\s*"([^"]+)"/.exec(raw)?.[1] || "";
+    const received = /"received"\s*:\s*"([^"]+)"/.exec(raw)?.[1] || "";
+    const zh = (value: string) =>
+      value === "array" ? "列表" : value === "number" ? "数字" : value === "string" ? "文本" : value === "object" ? "对象" : value;
+    if (path) {
+      return `CLI 返回的结果格式不对：「${path}」应该是${zh(expected) || "约定的类型"}，实际是${zh(received) || "别的类型"}。这一步没有产出，点「重试」会重新派单。`;
+    }
+    return "CLI 返回的结果格式不符合约定，这一步没有产出，点「重试」会重新派单。";
+  }
+  if (/failed to fetch|fetch failed|networkerror|load failed|econnrefused|bad port/i.test(raw)) {
+    return `连不上后端或网络中断（${raw.slice(0, 60)}）。确认本地服务在跑，再点「重试」。`;
+  }
+  return raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
+}
+
 function autoFlowFailStep(key: string, message: string) {
   const state = autoFlowEnsure();
   const step = autoFlowStepOf(key);
-  state.status[key] = "paused";
+  // 失败不是暂停：没有在跑的任务，也不该保留进度百分数
+  state.status[key] = "failed";
+  state.progress[key] = 0;
   if (state.activeKey === key) state.activeKey = null;
-  if (step) autoFlowLog("warn", `${step.title} 失败：${message}（点「继续运行」重试）`);
-  else autoFlowLog("warn", message);
+  const reason = autoFlowFriendlyError(message);
+  if (step) autoFlowLog("warn", `${step.title} 失败：${reason}（点「重试」重新开始这一步）`);
+  else autoFlowLog("warn", reason);
   autoFlowWrite();
   autoFlowSync();
 }
@@ -1061,45 +1146,58 @@ async function autoFlowRunProspect(token: number) {
   // 轮询任务到终态（刷新/重试后带着 lfindTaskId 直接回到这里）
   const taskId = artifacts.lfindTaskId!;
   let seenEvents = 0;
-  for (;;) {
-    if (token !== autoFlowRunToken) return;
-    if (autoFlowPausePoint("prospect")) return;
-    const response = await api<LfindTaskResponse>(`/api/lead-finder/lfind-tasks/${encodeURIComponent(taskId)}`);
-    if (token !== autoFlowRunToken) return;
-    const task = response.task;
-    const events = response.events || [];
-    for (; seenEvents < events.length; seenEvents += 1) {
-      const message = events[seenEvents]?.message;
-      if (message) autoFlowLog("start", message);
-    }
-    if (response.opportunities?.length) {
-      artifacts.opportunities = response.opportunities.map((item) => ({
-        id: item.id,
-        company: item.company,
-        email: item.emailEligibility?.recipient
-          || item.extractedContacts?.find((contact) => contact.emails?.length)?.emails[0]
-          || ""
-      }));
-    }
-    autoFlowSetProgress("prospect", Math.min(92, 14 + events.length * 6));
-    if (["succeeded", "failed", "cancelled"].includes(task.status)) {
-      const skipped = (response.skipped || []).length;
-      if (task.status !== "succeeded" || !artifacts.opportunities.length) {
-        const reason = response.lfind?.summary?.noResultReason || task.errorMessage || `任务 ${task.status}`;
-        // 终态任务不能复用：清掉任务号与候选，下一次「继续运行」会重新提交。
-        // 否则瞬时故障（429 额度、超时）会把这个坏任务号永久钉在状态里，重试永远卡在同一处。
-        artifacts.lfindTaskId = undefined;
-        artifacts.opportunities = [];
-        autoFlowWrite();
-        throw new Error(`没有候选入池（原始 ${response.lfind?.summary?.rawFound ?? 0} 条）：${reason}`);
+  try {
+    for (;;) {
+      if (token !== autoFlowRunToken) return;
+      if (autoFlowPausePoint("prospect")) return;
+      const response = await api<LfindTaskResponse>(`/api/lead-finder/lfind-tasks/${encodeURIComponent(taskId)}`);
+      if (token !== autoFlowRunToken) return;
+      const task = response.task;
+      const events = response.events || [];
+      for (; seenEvents < events.length; seenEvents += 1) {
+        const message = events[seenEvents]?.message;
+        if (message) autoFlowLog("start", message);
       }
-      autoFlowSetProgress("prospect", 100);
-      autoFlowLog("done", `候选入池 ${artifacts.opportunities.length} 家${skipped ? ` · 过滤掉 ${skipped} 条` : ""}（引擎：本机 CLI）`);
-      autoFlowResults = {};
-      autoFlowCompleteStep("prospect");
-      return;
+      if (response.opportunities?.length) {
+        artifacts.opportunities = response.opportunities.map((item) => ({
+          id: item.id,
+          company: item.company,
+          email: item.emailEligibility?.recipient
+            || item.extractedContacts?.find((contact) => contact.emails?.length)?.emails[0]
+            || ""
+        }));
+      }
+      autoFlowSetProgress("prospect", Math.min(92, 14 + events.length * 6));
+      if (["succeeded", "failed", "cancelled"].includes(task.status)) {
+        const skipped = Array.isArray(response.skipped) ? response.skipped.length : Number(response.skipped) || 0;
+        if (task.status !== "succeeded" || !artifacts.opportunities.length) {
+          const reason = response.lfind?.summary?.noResultReason || task.errorMessage || `任务 ${task.status}`;
+          // 终态任务不能复用：清掉任务号与候选，下一次「重试」会重新提交。
+          // 否则瞬时故障（429 额度、超时）会把这个坏任务号永久钉在状态里，重试永远卡在同一处。
+          artifacts.lfindTaskId = undefined;
+          artifacts.opportunities = [];
+          autoFlowWrite();
+          throw new Error(`没有候选入池（原始 ${response.lfind?.summary?.rawFound ?? 0} 条）：${reason}`);
+        }
+        autoFlowSetProgress("prospect", 100);
+        autoFlowLog("done", `候选入池 ${artifacts.opportunities.length} 家${skipped ? ` · 过滤掉 ${skipped} 条` : ""}（引擎：本机 CLI）`);
+        autoFlowResults = {};
+        autoFlowCompleteStep("prospect");
+        return;
+      }
+      await autoFlowSleep(AUTO_FLOW_POLL_MS);
     }
-    await autoFlowSleep(AUTO_FLOW_POLL_MS);
+  } catch (error) {
+    // 🔴 关键：查询本身就抛错时（典型是结果字段不合 schema 的 422），原来只有"终态分支"会清任务号，
+    // 抛错路径走不到那里 → lfindTaskId 被永久钉住 → 每点一次「继续运行」都拿同一个坏任务去查、
+    // 每次都秒失败，界面永远停在 4%，后端一条新任务都不会派。这就是"运行不起来"的根因。
+    if (artifacts.lfindTaskId === taskId) {
+      artifacts.lfindTaskId = undefined;
+      artifacts.opportunities = [];
+      autoFlowWrite();
+      autoFlowLog("warn", "已丢弃这个任务号：下次重试会重新派单，不会卡在同一处");
+    }
+    throw error;
   }
 }
 
@@ -1377,6 +1475,12 @@ function autoFlowStart() {
   const paused = AUTO_FLOW_STEPS.find((item) => state.status[item.key] === "paused");
   if (paused) {
     autoFlowBeginStep(paused.key, true);
+    return;
+  }
+  // 失败节点的「重试」= 从这一步开头重跑（任务号已在失败时清掉，不会复用坏任务）
+  const failed = AUTO_FLOW_STEPS.find((item) => state.status[item.key] === "failed");
+  if (failed) {
+    autoFlowBeginStep(failed.key);
     return;
   }
   const next = AUTO_FLOW_STEPS.find((item) => state.status[item.key] !== "done");

@@ -315,7 +315,7 @@ const lfindSearchReportSchema = z.object({
   nextAction: z.string().trim().max(1000).default("")
 }).passthrough();
 
-const lfindResultSchema = z.object({
+export const lfindResultSchema = z.object({
   version: z.literal("goodjob-lfind-v1").default("goodjob-lfind-v1"),
   summary: z.object({
     target: z.string().trim().max(500).default(""),
@@ -341,12 +341,27 @@ const lfindResultSchema = z.object({
     searchReport: lfindSearchReportSchema.optional(),
     sources: z.array(lfindSourceSchema).max(20).default([])
   }).passthrough()).max(100).default([]),
-  skipped: z.array(z.object({
+  // ⚠️ CLI 经常把「被跳过条数」直接写成数字（summary.skipped 就是数字），这里必须容忍：
+  // 以前严格要求数组，模型一写数字就 422 把整份已跑出来的结果全判死，
+  // 自动流于是每点一次「继续运行」就失败一次（2026-11-09 卡死事故的根因）。
+  skipped: z.preprocess((value) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const count = Math.max(0, Math.min(200, Math.trunc(value)));
+      return Array.from({ length: count }, () => ({
+        company: "",
+        reason: "other",
+        detail: "CLI 只返回了跳过数量，未给出逐条明细",
+        sourceUrl: ""
+      }));
+    }
+    if (value == null) return [];
+    return value;
+  }, z.array(z.object({
     company: z.string().trim().max(240).default(""),
     reason: z.string().trim().max(80).default("other"),
     detail: z.string().trim().max(1000).default(""),
     sourceUrl: z.string().trim().max(1200).default("")
-  }).passthrough()).max(200).default([]),
+  }).passthrough()).max(200).default([])),
   failures: z.array(z.object({
     stage: z.string().trim().max(80).default("verification"),
     reason: z.string().trim().max(1000).default(""),
@@ -504,19 +519,34 @@ function lfindEvidenceSnapshot(
   };
 }
 
+/**
+ * sources[].fields 里哪些标记算「这条来源承载了联系方式」。
+ *
+ * 🔴 CLI 很少写 "contact"，实际给的是 email / phone / whatsapp。2026-11-09 巴西那次：
+ * 12 家候选全带 vendas@xxx.com.br + 电话，fields 写的是 ['company','address','phone','email','website']，
+ * 旧逻辑只认 "contact" → 12 家全被判「没有来源支持的联系方式」→ 获客节点失败、入池 0 条。
+ * 这是「明明搜到了却运行不起来」的第二个根因。
+ */
+const LFIND_CONTACT_FIELDS = new Set(["contact", "email", "phone", "tel", "telephone", "whatsapp"]);
+
+function lfindSourceCarriesContact(
+  source: { fields: string[]; evidence: string },
+  contactInfo: string
+) {
+  if ((source.fields || []).some((field) => LFIND_CONTACT_FIELDS.has(String(field).toLowerCase()))) return true;
+  const info = String(contactInfo || "").trim();
+  if (!info) return false;
+  return String(source.evidence || "").toLocaleLowerCase("en-US").includes(info.toLocaleLowerCase("en-US"));
+}
+
 function lfindContactEvidence(
   opportunity: LfindResult["opportunities"][number],
   sourceLabel: string
 ): ExtractedWebsiteContact[] {
-  if (!opportunity.contactInfo || !opportunity.sources.some((source) =>
-    source.fields.includes("contact") || source.evidence.toLocaleLowerCase("en-US").includes(opportunity.contactInfo.toLocaleLowerCase("en-US"))
-  )) return [];
+  if (!opportunity.contactInfo) return [];
   const channels = contactChannelsFromText(opportunity.contactInfo);
   if (!channels.emails.length && !channels.phones.length) return [];
-  const contactSource = opportunity.sources.find((source) =>
-    source.fields.includes("contact")
-    || source.evidence.toLocaleLowerCase("en-US").includes(opportunity.contactInfo.toLocaleLowerCase("en-US"))
-  );
+  const contactSource = opportunity.sources.find((source) => lfindSourceCarriesContact(source, opportunity.contactInfo));
   if (!contactSource?.url) return [];
   return [{
     kind: opportunity.contact ? "person" : "company",

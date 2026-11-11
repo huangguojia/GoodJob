@@ -5,6 +5,8 @@
  * 加载期执行的代码（顶层语句与依赖其他变量的初始化）都留在入口 prototype-api.ts，按原顺序执行。
  */
 import { activateNavView, openModal, state } from "../prototype-api";
+import { renderMailSectionNav } from "./mail-center";
+import { ecLineChart, ecNiceMax, ecPct, ecShortLabel } from "./ec-charts";
 import { type User } from "./models";
 import { formatTime } from "./dashboard";
 import { escapeHtml, qs, qsa } from "./shared";
@@ -13,6 +15,117 @@ import { updateStoredUser } from "./profile";
 import { EMAIL_RETURN_EVENT_META, type EmailReturnFlowLog, type EmailReturnFlowTouchpoint, emailReturnFlowStatusBadges } from "./container-load";
 
 let emailReturnFlowFilter = "all";
+// 回复查询的分析口径：按日 / 按月、统计范围。换页重绘后保留用户上次的选择。
+let emailReturnStatsMode: "day" | "month" = "day";
+let emailReturnStatsDays = 90;
+
+interface ReplyStatsRow {
+  key: string;
+  sent: number;
+  replied: number;
+  bounced: number;
+  opened: number;
+  clicked: number;
+  replyRate: number;
+  bounceRate: number;
+  openRate: number;
+}
+
+interface ReplyStatsMailbox extends ReplyStatsRow {
+  lastSentAt: string;
+  peakDay: string;
+  peakDaySent: number;
+  risk: "low" | "watch" | "high";
+  riskReasons: string[];
+}
+
+interface ReplyStats {
+  range: { days: number };
+  totals: ReplyStatsRow;
+  daily: ReplyStatsRow[];
+  monthly: ReplyStatsRow[];
+  mailboxes: ReplyStatsMailbox[];
+}
+
+function renderEmailReturnAnalytics(data: ReplyStats, mode: "day" | "month") {
+  const rows = mode === "day" ? data.daily : data.monthly;
+  // 晨白图表令牌：网格与轴标用浅色，主色在白底上取饱和度更高的同族色
+  const light = { gridColor: "#e4eaf3", labelColor: "#94a3b8" };
+  // 发送=靛蓝底、打开=琥珀主角（用户主要靠打开趋势判断邮箱健康）、回复=绿
+  const trend = ecLineChart({
+    points: rows.map((row) => ({
+      label: ecShortLabel(row.key, mode),
+      values: [row.sent, row.opened, row.replied],
+      tips: [`${row.key} · 发送 ${row.sent} 封`, `${row.key} · 打开 ${row.opened} 封（打开率 ${ecPct(row.openRate)}）`, `${row.key} · 回复 ${row.replied} 封`]
+    })),
+    series: [{ color: "#6366f1", area: true }, { color: "#f59e0b" }, { color: "#10b981" }],
+    ...light
+  });
+  // 打开率/回复率通常是个位数百分比：量程压到「有形状」的量程，不随发送封数量级走
+  const rateYMax = ecNiceMax(Math.max(5, ...rows.map((row) => Math.max(row.openRate, row.replyRate) * 100)) * 1.2);
+  const rate = ecLineChart({
+    points: rows.map((row) => ({
+      label: ecShortLabel(row.key, mode),
+      values: [Math.round(row.openRate * 1000) / 10, Math.round(row.replyRate * 1000) / 10],
+      tips: [`${row.key} · 打开率 ${ecPct(row.openRate)}`, `${row.key} · 回复率 ${ecPct(row.replyRate)}`]
+    })),
+    series: [{ color: "#f59e0b", area: true }, { color: "#10b981" }],
+    yMaxOverride: rateYMax,
+    ...light
+  });
+  const riskItems = data.mailboxes.slice(0, 8).map((mailbox) => {
+    const badgeCls = mailbox.risk === "high" ? "is-high" : mailbox.risk === "watch" ? "is-watch" : "is-low";
+    const badgeText = mailbox.risk === "high" ? "高危" : mailbox.risk === "watch" ? "关注" : "正常";
+    const reasons = mailbox.riskReasons.length ? `<ul class="ec-risk-reasons">${mailbox.riskReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>` : "";
+    return `
+      <div class="ec-risk-item">
+        <div class="ec-risk-top">
+          <span class="ec-risk-mail">${escapeHtml(mailbox.key)}</span>
+          <span class="ec-risk-badge ${badgeCls}">${badgeText}</span>
+        </div>
+        <div class="ec-risk-meta">发送 ${mailbox.sent} · 回复率 ${ecPct(mailbox.replyRate)} · 退信率 ${ecPct(mailbox.bounceRate)} · 打开率 ${ecPct(mailbox.openRate)}${mailbox.lastSentAt ? ` · 最近发送 ${escapeHtml(ecShortLabel(mailbox.lastSentAt.slice(0, 10), "day"))}` : ""}</div>
+        ${reasons}
+      </div>`;
+  }).join("");
+  const riskBlock = data.mailboxes.length
+    ? `<div class="ec-risk-list">${riskItems}</div>`
+    : `<div class="ec-risk-ok">✓ 统计范围内没有外发记录<small>去「自动发信」或「开发信」发信后，这里会按邮箱给出被标记成营销邮箱的风险预警</small></div>`;
+  const pct = (value: number) => ecPct(value);
+  // 打开数据全靠追踪像素回流：全 0 时讲清原因，别让人以为图坏了
+  const openHint = data.totals.opened === 0
+    ? `<div class="ec-hint">打开信号为 0：已读追踪未启用，或收件方屏蔽了图片。到 <a href="#" data-goto-tracking>邮件中心 → 邮箱设置</a> 填一个公网地址后，打开趋势才会开始累积。</div>`
+    : "";
+  return `
+    <div class="ec-head">
+      <div class="ec-title">回复查询 · 趋势与风险预警<small>发送/打开/回复趋势、打开率与回复率曲线；按邮箱预警「被标记成营销邮箱」的信号</small></div>
+      <div class="ec-controls">
+        <button type="button" data-erf-mode="day" class="${mode === "day" ? "is-active" : ""}">按日</button>
+        <button type="button" data-erf-mode="month" class="${mode === "month" ? "is-active" : ""}">按月</button>
+        <select data-erf-days aria-label="统计范围">
+          ${[30, 90, 180].map((d) => `<option value="${d}" ${d === emailReturnStatsDays ? "selected" : ""}>近 ${d} 天</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="ec-grid">
+      <div class="ec-card">
+        <div class="ec-card-title"><b>发送 / 打开 / 回复趋势（${mode === "day" ? "按日" : "按月"}）</b>
+          <span class="ec-legend"><span><i style="background:#6366f1"></i>发送</span><span><i style="background:#f59e0b"></i>打开</span><span><i style="background:#10b981"></i>回复</span></span>
+        </div>
+        <div class="ec-chart">${trend}</div>
+        ${openHint}
+      </div>
+      <div class="ec-card">
+        <div class="ec-card-title"><b>打开率 / 回复率（%）</b>
+          <span class="ec-legend"><span><i style="background:#f59e0b"></i>打开率</span><span><i style="background:#10b981"></i>回复率</span><span>区间均值 打开 ${pct(data.totals.openRate)} · 回复 ${pct(data.totals.replyRate)}</span></span>
+        </div>
+        <div class="ec-chart">${rate}</div>
+      </div>
+      <div class="ec-card" style="grid-column:1/-1">
+        <div class="ec-card-title"><b>邮箱风险预警（营销邮箱信号）</b><span>退信率 ≥5% 高危；≥2% / 大量低打开低回复 / 单日 ≥40 封 → 关注</span></div>
+        ${riskBlock}
+      </div>
+    </div>`;
+}
 
 export async function renderEmailReturnFlow() {
   const box = qs<HTMLElement>("#emailReturnFlowPage");
@@ -23,7 +136,8 @@ export async function renderEmailReturnFlow() {
   } catch {
     /* 发送台账仍可独立加载，资料状态沿用当前会话缓存。 */
   }
-  box.className = "deck";
+  box.className = "erf-page";
+  renderMailSectionNav();
   const user = state.user;
   const syncState = !user?.inboundSyncEnabled
     ? "off"
@@ -37,34 +151,57 @@ export async function renderEmailReturnFlow() {
       : syncState === "ok" ? `收信已同步 · ${formatTime(user!.lastInboundSyncAt!)}`
       : syncState === "pending" ? "收信监听待首次同步"
       : "收信监听未开启";
-  const syncBadge = `<span class="deck-sync ${syncState === "ok" ? "is-ok" : syncState === "error" ? "is-error" : "is-warn"}"><span class="dot"></span>${syncText}</span>`;
+  const syncBadge = `<span class="erf-sync ${syncState === "ok" ? "is-ok" : syncState === "error" ? "is-error" : "is-warn"}"><span class="dot"></span>${syncText}</span>`;
   box.innerHTML = `
-    <div class="deck-top">
-      <div class="deck-crumb">Outbound Intelligence · <b>回流</b></div>
-      <div class="deck-live">● 收信监听 <b>${escapeHtml(syncState === "ok" ? "已同步" : syncState === "error" ? "异常" : syncState === "pending" ? "待首次同步" : "未开启")}</b></div>
-    </div>
-    <header class="deck-hero">
+    <div class="erf-head">
       <div>
-        <div class="deck-kicker">开发信 · 回流分析</div>
-        <h1>开发信<br/><em>回流</em></h1>
-        <div class="deck-sub">打开、点击、回信、退信——一封邮件的完整生命周期，压进一屏。</div>
+        <h1>开发信回流</h1>
+        <p class="ms-sub">打开、点击、回信、退信——一封开发信的完整生命周期</p>
       </div>
-      <div class="deck-actions">${syncBadge}${user?.inboundSyncEnabled ? `<button class="deck-btn" id="emailReturnSync">立即同步</button>` : ""}<button class="deck-btn" id="emailReturnRefresh">↻ 刷新</button></div>
-    </header>
-    <div class="deck-ticker"><div class="deck-run" id="deckTicker"></div></div>
-    <div id="emailReturnTrackBanner" style="padding:0 var(--pad-x,24px)"></div>
-    <section class="deck-kpis" id="emailReturnStats"><div class="deck-loading"><i></i>加载中…</div></section>
-    <div class="deck-toolbar">
+      <div class="erf-actions">
+        ${syncBadge}
+        ${user?.inboundSyncEnabled ? `<button class="btn" id="emailReturnSync">立即同步</button>` : ""}
+        <button class="btn" id="emailReturnRefresh">↻ 刷新</button>
+      </div>
+    </div>
+    <div id="emailReturnTrackBanner"></div>
+    <div class="erf-kpis" id="emailReturnStats"><div class="erf-loading"><i></i>加载中…</div></div>
+    <section class="ec-deck" id="emailReturnAnalytics"><div class="erf-loading"><i></i>正在统计回复数据…</div></section>
+    <div class="erf-toolbar">
       <select id="emailReturnFilter" aria-label="按业务对象筛选">
         <option value="all">全部对象</option>
         <option value="prospect_candidate">搜客候选</option>
         <option value="lead">线索</option>
         <option value="customer">客户</option>
       </select>
-      <span class="deck-count" id="emailReturnCount"></span>
+      <span class="erf-count" id="emailReturnCount"></span>
     </div>
-    <div class="deck-list" id="emailReturnList"><div class="deck-loading"><i></i>正在加载发送记录…</div></div>
+    <div class="erf-list" id="emailReturnList"><div class="erf-loading"><i></i>正在加载发送记录…</div></div>
   `;
+  // 回复查询：按日 / 按月切换与统计范围
+  const analytics = qs<HTMLElement>("#emailReturnAnalytics", box);
+  if (analytics) {
+    analytics.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement | null;
+      // 打开信号为 0 时的「去配置」链接（deck 内不复用顶部状态条的监听）
+      if (target?.closest("[data-goto-tracking]")) {
+        event.preventDefault();
+        activateNavView("mail-settings");
+        return;
+      }
+      const button = target?.closest<HTMLButtonElement>("[data-erf-mode]");
+      if (!button) return;
+      emailReturnStatsMode = button.dataset.erfMode === "month" ? "month" : "day";
+      void loadEmailReturnAnalytics(analytics);
+    });
+    analytics.addEventListener("change", (event) => {
+      const select = (event.target as HTMLElement | null)?.closest<HTMLSelectElement>("[data-erf-days]");
+      if (!select) return;
+      emailReturnStatsDays = Number(select.value) || 90;
+      void loadEmailReturnAnalytics(analytics);
+    });
+    void loadEmailReturnAnalytics(analytics);
+  }
   qs<HTMLButtonElement>("#emailReturnRefresh", box)?.addEventListener("click", () => void renderEmailReturnFlow());
   // 已读追踪状态条：未启用时提醒，启用时显示域名（best-effort，接口失败不影响页面）
   void api<{ config: { enabled: boolean; baseUrl: string; messageIdDomain: string } }>("/api/email-tracking/config").then(({ config }) => {
@@ -102,6 +239,17 @@ export async function renderEmailReturnFlow() {
   await loadEmailReturnLogs(box);
 }
 
+/** 回复查询分析卡：拉 /api/development-email/reply-stats 并渲染晨白风格折线与预警 */
+async function loadEmailReturnAnalytics(anchor: HTMLElement) {
+  anchor.innerHTML = `<div class="erf-loading"><i></i>正在统计回复数据…</div>`;
+  try {
+    const data = await api<ReplyStats>(`/api/development-email/reply-stats?days=${emailReturnStatsDays}`);
+    anchor.innerHTML = renderEmailReturnAnalytics(data, emailReturnStatsMode);
+  } catch (error) {
+    anchor.innerHTML = `<div class="erf-loading">统计加载失败：${escapeHtml(error instanceof Error ? error.message : "未知错误")}</div>`;
+  }
+}
+
 async function loadEmailReturnLogs(box: HTMLElement) {
   const list = qs<HTMLElement>("#emailReturnList", box);
   const stats = qs<HTMLElement>("#emailReturnStats", box);
@@ -117,26 +265,15 @@ async function loadEmailReturnLogs(box: HTMLElement) {
     const bounced = logs.filter((l) => l.bouncedAt).length;
     if (stats) {
       stats.innerHTML = `
-        <div class="deck-kpi"><div class="lab">已发送</div><div class="v">${logs.length}</div></div>
-        <div class="deck-kpi"><div class="lab">打开信号</div><div class="v open">${opened}</div></div>
-        <div class="deck-kpi"><div class="lab">点击信号</div><div class="v click">${clicked}</div></div>
-        <div class="deck-kpi"><div class="lab">回复</div><div class="v reply">${replied}</div></div>
-        <div class="deck-kpi"><div class="lab">退信</div><div class="v bounce">${bounced}</div></div>`;
-      const deckTicker = qs<HTMLElement>("#deckTicker", box);
-      if (deckTicker) {
-        const labelOf = (l: EmailReturnFlowLog) =>
-          l.bouncedAt ? "退信" : l.repliedAt ? "已回信" : (l.openCount || 0) > 0 ? "已打开" : (l.clickCount || 0) > 0 ? "已点击" : "已发送";
-        const items = logs.length
-          ? logs.map((l) => `<span><b>${escapeHtml(l.entityName || l.to || "—")}</b> ${labelOf(l)}</span>`)
-          : Array.from({ length: 4 }, () => `<span>等待数据 · 去「开发信」发一封，这里会出现回流状态</span>`);
-        const seq = items.join("");
-        deckTicker.classList.toggle("is-static", !logs.length);
-        deckTicker.innerHTML = logs.length ? seq + seq : seq;
-      }
+        <div class="erf-kpi"><div class="lab">已发送</div><div class="v">${logs.length}</div></div>
+        <div class="erf-kpi"><div class="lab">打开信号</div><div class="v open">${opened}</div></div>
+        <div class="erf-kpi"><div class="lab">点击信号</div><div class="v click">${clicked}</div></div>
+        <div class="erf-kpi"><div class="lab">回复</div><div class="v reply">${replied}</div></div>
+        <div class="erf-kpi"><div class="lab">退信</div><div class="v bounce">${bounced}</div></div>`;
     }
     if (count) count.textContent = `共 ${result.total} 条记录`;
     if (!logs.length) {
-      list.innerHTML = `<div class="deck-empty"><b>还没有开发信回流数据</b>去「搜客清单」或「开发信」给客户发一封，这里就会出现它的打开 / 点击 / 回信 / 退信状态。</div>`;
+      list.innerHTML = `<div class="erf-empty"><b>还没有开发信回流数据</b>去「搜客清单」或「开发信」给客户发一封，这里就会出现它的打开 / 点击 / 回信 / 退信状态。</div>`;
       return;
     }
       list.innerHTML = `
@@ -147,11 +284,11 @@ async function loadEmailReturnLogs(box: HTMLElement) {
             const ini = escapeHtml((log.entityName || log.to || "?").trim().slice(0, 2));
             return `
             <tr data-message-id="${escapeHtml(log.messageId)}" class="email-return-row">
-              <td><span class="deck-avatar">${ini}</span><span class="deck-name">${escapeHtml(log.entityName || log.to || "—")}</span>${log.entityName && log.to ? `<span class="deck-email">${escapeHtml(log.to)}</span>` : ""}</td>
-              <td><span class="deck-subject">${escapeHtml(log.subject || "（无主题）")}</span></td>
-              <td><span class="deck-time">${escapeHtml(formatTime(log.sentAt))}</span></td>
-              <td>${emailReturnFlowStatusBadges(log).replace(/rf-pill/g, "deck-pill")}</td>
-              <td><button class="deck-detail" data-detail="${escapeHtml(log.messageId)}">时间线</button></td>
+              <td><span class="erf-who"><span class="erf-avatar">${ini}</span><span>${escapeHtml(log.entityName || log.to || "—")}${log.entityName && log.to ? `<span class="erf-email">${escapeHtml(log.to)}</span>` : ""}</span></span></td>
+              <td><span class="erf-subject">${escapeHtml(log.subject || "（无主题）")}</span></td>
+              <td><span class="erf-time">${escapeHtml(formatTime(log.sentAt))}</span></td>
+              <td>${emailReturnFlowStatusBadges(log)}</td>
+              <td><button class="erf-detail" data-detail="${escapeHtml(log.messageId)}">时间线</button></td>
             </tr>`;
           }).join("")}
         </tbody>
@@ -262,6 +399,23 @@ export interface MailCenterMessage {
   /** 真实 Message-ID 与被回复的 Message-ID（回复/转发线程头用） */
   messageId?: string;
   inReplyTo?: string;
+  /** 发信台账口径的打开/点击/回复/退信；不是系统发出、或历史邮件没有台账时缺省 */
+  engagement?: MailCenterMessageEngagement | null;
+}
+
+export interface MailCenterMessageEngagement {
+  logId: string;
+  source: string;
+  openCount: number;
+  clickCount: number;
+  firstOpenedAt: string;
+  lastOpenedAt: string;
+  lastClickedAt: string;
+  lastClickedUrl: string;
+  repliedAt: string;
+  bouncedAt: string;
+  entityType: string;
+  entityId: string;
 }
 
 export interface MailCenterCustomerItem {

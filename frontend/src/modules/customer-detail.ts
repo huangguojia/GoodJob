@@ -457,8 +457,8 @@ function renderCustomerDevEmailHistory(box: HTMLElement, customer: Customer, vie
     <div class="customer-page-section-head"><div><h2>开发信历史</h2><p>${escapeHtml(stats.outboundCount ? `已发 ${stats.outboundCount} 封 · 最近 ${stats.lastSentAt ? formatDateTime(stats.lastSentAt) : "—"}` : "发出去的每一封开发信与客户的反馈记录")}</p></div><button class="btn" type="button" data-cust-email-journey>查看完整过程</button></div>
     <div class="cust-email-summary">
       <span><small>已发送</small><b>${stats.outboundCount} 封</b></span>
-      <span><small>回复</small><b class="${stats.replyCount ? "is-good" : ""}">${stats.replyCount} 条</b></span>
-      <span><small>打开</small><b>${stats.openCount} 次</b></span>
+      <span class="is-reply"><small>回复</small><b class="${stats.replyCount ? "is-good" : ""}">${stats.replyCount} 条</b></span>
+      <span class="is-open"><small>打开</small><b>${stats.openCount} 次${stats.outboundCount ? ` · ${Math.round((stats.openCount / stats.outboundCount) * 100)}%` : ""}</b>${stats.lastOpenedAt ? `<i>最近 ${escapeHtml(formatDateTime(stats.lastOpenedAt))}</i>` : ""}</span>
       <span><small>点击</small><b>${stats.clickCount} 次</b></span>
       <span><small>退信</small><b class="${stats.bounceCount ? "is-bad" : ""}">${stats.bounceCount} 封</b></span>
       <span class="cust-email-stage">${badge(stage.label, tone)}<small>${escapeHtml(stage.nextStepLabel || stage.description || "")}</small></span>

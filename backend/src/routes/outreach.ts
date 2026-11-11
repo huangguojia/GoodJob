@@ -24,6 +24,63 @@ function prospectBatchSummary(batch: ProspectOutreachBatch) {
   return { ...batch, letterProgress: batchLetterProgress(batch) };
 }
 
+/**
+ * 发信效果口径（打开 / 点击 / 回复 / 退信）。
+ *
+ * 归集靠台账的 request_id 前缀，这是唯一稳定的关联：人工批次写 `batch:<批次id>:<条目id>:<第几步>`，
+ * 自动发送方案写 `plan:<方案id>:<条目id>:<第几步>`（planAsBatch 把方案当批次跑）。
+ * 打开/点击来自像素与链接追踪，回复/退信来自回信监听 —— 四者都落在同一行台账上，不用再跨表拼。
+ */
+export interface OutreachEngagement {
+  sent: number;
+  opened: number;
+  clicked: number;
+  replied: number;
+  bounced: number;
+  /** 打开率（%，保留一位小数）：按"送达封数"算，未打开的也算分母 */
+  openRate: number;
+}
+
+const EMPTY_ENGAGEMENT: OutreachEngagement = { sent: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, openRate: 0 };
+
+function outreachEngagementFor(
+  store: ReturnType<typeof getStore>,
+  user: { id: string; role: string; teamId: string },
+  prefix: string
+): OutreachEngagement {
+  const result = { ...EMPTY_ENGAGEMENT };
+  for (const log of store.outboundEmailLogs) {
+    if (!log.requestId || !log.requestId.startsWith(prefix)) continue;
+    // 可见范围与「发信明细」同口径（outreachJourneyAccessible）：同团队 + 本人或管理岗。
+    // 这里直接展开判断，是因为拿到的是库里的 User（authVersion 可选），与 SessionUser 不是同一类型。
+    if (log.teamId !== user.teamId) continue;
+    const visible = log.ownerId === user.id || user.role === "admin" || user.role === "super_admin" || user.role === "manager";
+    if (!visible) continue;
+    // 只认真出去的：pending / uncertain / failed 不能算进"已发"，否则打开率会被拉低
+    if ((log.dispatchStatus || "sent") !== "sent") continue;
+    result.sent += 1;
+    if ((log.openCount || 0) > 0) result.opened += 1;
+    if ((log.clickCount || 0) > 0) result.clicked += 1;
+    if (log.repliedAt) result.replied += 1;
+    if (log.bouncedAt) result.bounced += 1;
+  }
+  result.openRate = result.sent ? Math.round((result.opened / result.sent) * 1000) / 10 : 0;
+  return result;
+}
+
+function sumEngagement(list: OutreachEngagement[]): OutreachEngagement {
+  const total = { ...EMPTY_ENGAGEMENT };
+  for (const item of list) {
+    total.sent += item.sent;
+    total.opened += item.opened;
+    total.clicked += item.clicked;
+    total.replied += item.replied;
+    total.bounced += item.bounced;
+  }
+  total.openRate = total.sent ? Math.round((total.opened / total.sent) * 1000) / 10 : 0;
+  return total;
+}
+
 // ---------------------------------------------------------------------------
 // 自动发送方案（后台任务）：配置目标与频率，线程持续取人投递，可启停可观察
 // ---------------------------------------------------------------------------
@@ -100,7 +157,14 @@ const outreachJourneySendSchema = z.object({
 export function registerOutreachRoutes(app: Express) {
   app.get("/api/outreach-plans", requireAuth, asyncRoute(async (req, res) => {
     const limit = Number(req.query.limit || 50);
-    res.json({ plans: listProspectOutreachPlans(getStore(), req.user!, limit).map(prospectPlanSummary) });
+    const store = getStore();
+    // 用库里的账号对象做可见范围判定：req.user 是会话快照，teamId 不一定在
+    const actor = store.users.find((item) => item.id === req.user!.id) || req.user!;
+    const plans = listProspectOutreachPlans(store, req.user!, limit).map((plan) => ({
+      ...prospectPlanSummary(plan),
+      engagement: outreachEngagementFor(store, actor, `plan:${plan.id}:`)
+    }));
+    res.json({ plans, summary: sumEngagement(plans.map((plan) => plan.engagement)) });
   }));
 
   app.post("/api/outreach-plans", requireAuth, asyncRoute(async (req, res) => {
@@ -197,7 +261,13 @@ export function registerOutreachRoutes(app: Express) {
 
   app.get("/api/prospect-outreach-batches", requireAuth, asyncRoute(async (req, res) => {
     const limit = Number(req.query.limit || 20);
-    res.json({ batches: listProspectOutreachBatches(getStore(), req.user!, limit).map(prospectBatchSummary) });
+    const store = getStore();
+    const actor = store.users.find((item) => item.id === req.user!.id) || req.user!;
+    const batches = listProspectOutreachBatches(store, req.user!, limit).map((batch) => ({
+      ...prospectBatchSummary(batch),
+      engagement: outreachEngagementFor(store, actor, `batch:${batch.id}:`)
+    }));
+    res.json({ batches, summary: sumEngagement(batches.map((batch) => batch.engagement)) });
   }));
 
   app.post("/api/prospect-outreach-batches/:id/approve", requireAuth, asyncRoute(async (req, res) => {

@@ -64,6 +64,9 @@ export function renderProfile(user = state.user) {
   setFieldValue("#profileImapPassword", "");
   const imapSecure = qs<HTMLSelectElement>("#profileImapSecure");
   if (imapSecure) imapSecure.value = String(user.imapSecure ?? true);
+  setFieldValue("#profileDkimDomain", user.dkimDomain || "");
+  setFieldValue("#profileDkimSelector", user.dkimSelector || "");
+  setFieldValue("#profileDkimPrivateKey", "");
   const imapSync = qs<HTMLElement>("#profileImapSyncStatus");
   if (imapSync) {
     if (user.lastInboundSyncAt) {
@@ -100,6 +103,10 @@ interface SenderMailboxView {
   enabled: boolean;
   hasSmtpPassword: boolean;
   hasImapPassword: boolean;
+  dkimDomain?: string;
+  dkimSelector?: string;
+  hasDkimPrivateKey?: boolean;
+  dailyLimit?: number;
 }
 
 // ── 已读追踪配置（个人设置 → 已读追踪）─────────────────────────────
@@ -174,10 +181,12 @@ function renderSenderMailboxList() {
       : mailbox.hasSmtpPassword ? `<span class="badge green">可用</span>`
       : `<span class="badge amber">缺授权码</span>`;
     const primary = mailbox.email === (state.user?.outboundEmail || "") ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8">同主邮箱</span>` : "";
+    const dkim = mailbox.dkimDomain && mailbox.dkimSelector ? `<span class="badge" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d">DKIM ${escapeHtml(mailbox.dkimSelector)}.${escapeHtml(mailbox.dkimDomain)}</span>` : "";
     return `<div class="mailbox-pool-row${mailbox.enabled ? "" : " is-off"}" style="--mb-i:${index}">
       <div class="mailbox-pool-main">
         <b>${escapeHtml(mailbox.label || mailbox.email)}${primary}</b>
-        <small>${escapeHtml(mailbox.email)} · ${escapeHtml(mailbox.smtpHost)}:${mailbox.smtpPort} ${mailbox.smtpSecure ? "SSL" : "STARTTLS"}${mailbox.fromName ? ` · 发件人 ${escapeHtml(mailbox.fromName)}` : ""}</small>
+        <small>${escapeHtml(mailbox.email)} · ${escapeHtml(mailbox.smtpHost)}:${mailbox.smtpPort} ${mailbox.smtpSecure ? "SSL" : "STARTTLS"}${mailbox.fromName ? ` · 发件人 ${escapeHtml(mailbox.fromName)}` : ""} · 日限额 ${mailbox.dailyLimit || 50}</small>
+        ${dkim ? `<small>${dkim}</small>` : ""}
       </div>
       <div class="mailbox-pool-side">${status}</div>
       <div class="mailbox-pool-actions">
@@ -210,6 +219,10 @@ export function openSenderMailboxModal(mailbox?: SenderMailboxView) {
       <div class="form-field"><label>IMAP服务器（可选）</label><input id="smbImapHost" placeholder="留空 = 按 SMTP 主机推导" value="${escapeHtml(mailbox?.imapHost || "")}"></div>
       <div class="form-field"><label>IMAP账号（可选）</label><input id="smbImapUser" placeholder="留空 = 同 SMTP 账号" value="${escapeHtml(mailbox?.imapUser || "")}"></div>
       <div class="form-field"><label>IMAP授权码（可选）</label><input id="smbImapPassword" type="password" placeholder="留空 = 同 SMTP 授权码"></div>
+      <div class="form-field"><label>DKIM 域名（可选）</label><input id="smbDkimDomain" placeholder="留空 = 不签名" value="${escapeHtml(mailbox?.dkimDomain || "")}"></div>
+      <div class="form-field"><label>DKIM Selector（可选）</label><input id="smbDkimSelector" placeholder="例如 s1" value="${escapeHtml(mailbox?.dkimSelector || "")}"></div>
+      <div class="form-field full"><label>DKIM 私钥 ${mailbox ? "（留空 = 保留原私钥）" : "（可选）"}</label><textarea id="smbDkimPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea><small>DNS 侧需同步添加 &lt;selector&gt;._domainkey 的 TXT 公钥记录；配置后该邮箱发出的开发信自动带 DKIM 签名。</small></div>
+      <div class="form-field"><label>单账号日限额</label><input id="smbDailyLimit" type="number" min="1" max="500" value="${mailbox?.dailyLimit || 50}"><small>轮换时该邮箱当日发到上限即自动跳过，防止单箱过量被封；全部邮箱到限则整批暂停。</small></div>
       <label class="form-field" style="display:flex;gap:8px;align-items:center"><input id="smbEnabled" type="checkbox"${!mailbox || mailbox.enabled ? " checked" : ""}>启用（参与轮换）</label>
     </div>`;
   const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="smbSaveButton">${mailbox ? "保存修改" : "登记"}</button>`;
@@ -232,6 +245,11 @@ async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
     imapHost: qs<HTMLInputElement>("#smbImapHost")?.value.trim() || "",
     imapUser: qs<HTMLInputElement>("#smbImapUser")?.value.trim() || "",
     imapPassword: qs<HTMLInputElement>("#smbImapPassword")?.value || "",
+    dkimDomain: qs<HTMLInputElement>("#smbDkimDomain")?.value.trim() || "",
+    dkimSelector: qs<HTMLInputElement>("#smbDkimSelector")?.value.trim() || "",
+    // 私钥只在填写时提交：不传 = 编辑时保留原私钥（后端 undefined 语义）
+    ...(qs<HTMLTextAreaElement>("#smbDkimPrivateKey")?.value ? { dkimPrivateKey: qs<HTMLTextAreaElement>("#smbDkimPrivateKey")!.value } : {}),
+    dailyLimit: Number(qs<HTMLInputElement>("#smbDailyLimit")?.value || 50),
     enabled: qs<HTMLInputElement>("#smbEnabled")?.checked ?? true
   };
   if (!payload.email || !payload.smtpHost || !payload.smtpUser || (!id && !payload.smtpPassword)) {
@@ -345,6 +363,9 @@ export async function saveProfileEmailBinding(button?: HTMLButtonElement, clearS
   const imapSecure = qs<HTMLSelectElement>("#profileImapSecure")?.value !== "false";
   const imapUser = qs<HTMLInputElement>("#profileImapUser")?.value.trim() || "";
   const imapPassword = qs<HTMLInputElement>("#profileImapPassword")?.value || "";
+  const dkimDomain = clearSmtpPassword ? "" : qs<HTMLInputElement>("#profileDkimDomain")?.value.trim() || "";
+  const dkimSelector = clearSmtpPassword ? "" : qs<HTMLInputElement>("#profileDkimSelector")?.value.trim() || "";
+  const dkimPrivateKey = clearSmtpPassword ? "" : qs<HTMLTextAreaElement>("#profileDkimPrivateKey")?.value || "";
   const idleText = clearSmtpPassword ? "清空邮箱绑定" : "保存个人资料";
   if (button) {
     button.disabled = true;
@@ -353,7 +374,7 @@ export async function saveProfileEmailBinding(button?: HTMLButtonElement, clearS
   try {
     const result = await api<{ user: User }>("/api/profile/email-binding", {
       method: "PATCH",
-      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword, imapHost, imapPort, imapSecure, imapUser, imapPassword, clearImapPassword, inboundSyncEnabled })
+      body: JSON.stringify({ outboundEmail, emailSenderName, emailSignature, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPassword, clearSmtpPassword, imapHost, imapPort, imapSecure, imapUser, imapPassword, clearImapPassword, dkimDomain, dkimSelector, dkimPrivateKey, clearDkimPrivateKey: Boolean(clearSmtpPassword), inboundSyncEnabled })
     });
     updateStoredUser(result.user);
     if (clearImapPassword && !clearSmtpPassword) toast("IMAP 密码已清除");

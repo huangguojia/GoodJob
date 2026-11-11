@@ -162,6 +162,13 @@ export class ProspectQueueCoordinator {
   }
 
   private async performSynchronization() {
+    // 空转短路：没有 queued/running 的搜索任务时，readBarrier 会把搜索执行状态整块重读
+    // （24 张表 + 整个 store 深拷贝），而下面的循环不会产出任何信号。
+    // 单实例部署下搜索任务只由本进程创建，内存状态即权威；有新任务时下一轮照常进入完整流程。
+    const hasActiveRun = this.store.prospectSearchRuns.some(
+      (item) => item.status === "queued" || item.status === "running"
+    );
+    if (!hasActiveRun) return;
     await this.store.readBarrier();
     this.statusValue.degraded = false;
     this.statusValue.lastErrorCode = "";

@@ -239,6 +239,15 @@ define("POST /api/customers/intake/analyze", objectSchema(["fileIds"], {
 }), "识别用户已暂存的客户资料文件并把字段回填到新增客户表单；只能引用用户刚上传、尚未过期的暂存文件，识别结果必须由人工核对后再保存客户。");
 
 define("POST /api/leads", objectSchema(["company"], leadFields), "创建线索。未知联系资料保持空值；响应 lead.id 或 duplicate 是完成证据。");
+define("POST /api/leads/{id}/assign", objectSchema(["toOwnerId"], {
+  toOwnerId: string({ minLength: 1, maxLength: 64 }),
+  note: string({ maxLength: 500, default: "" })
+}), "把进入当前账号的线索指派给同团队员工；改派走同一个接口。只能指派自己名下或自己指派出去的线索，接收人必须在职且同团队；响应 lead.ownerId 是完成证据。");
+define("POST /api/leads/bulk-assign", objectSchema(["ids", "toOwnerId"], {
+  ids: array(string({ minLength: 1, maxLength: 64 }), { minItems: 1, maxItems: 200 }),
+  toOwnerId: string({ minLength: 1, maxLength: 64 }),
+  note: string({ maxLength: 500, default: "" })
+}), "批量把线索指派给同一名员工。执行前必须向用户展示完整线索清单与接收人并取得确认；逐条失败原因在 skipped 中返回。");
 define("POST /api/leads/ingest", objectSchema(["company"], { ...leadFields, occurredAt: string({ format: "date-time" }), rawPayload: {} }), "从可信来源写入线索并保留来源事件；不得伪造来源载荷。");
 define("PATCH /api/leads/{id}", objectSchema([], { ...leadFields, status: oneOf("new", "following", "converted", "invalid") }), "更新当前账号可见线索，只提交需要变更的字段。");
 define("DELETE /api/leads/{id}", objectSchema([], { reason: string({ default: "" }) }), "把线索移入垃圾箱；已生成的客户和商机继续保留，已转客户线索不得永久删除。");
@@ -372,8 +381,12 @@ define("POST /api/sender-mailboxes", objectSchema(["email", "smtpHost", "smtpUse
   imapPort: integer({ minimum: 1, maximum: 65535 }),
   imapUser: string({ maxLength: 200 }),
   imapPassword: string({ maxLength: 400 }),
+  dkimDomain: string({ maxLength: 180 }),
+  dkimSelector: string({ maxLength: 63 }),
+  dkimPrivateKey: string({ maxLength: 12000 }),
+  dailyLimit: integer({ minimum: 1, maximum: 500 }),
   enabled: boolean()
-}), "向发件邮箱池登记一个 SMTP 发件邮箱（授权码加密落库，最多 10 个）；供自动发信方案按数量轮换发件身份。");
+}), "向发件邮箱池登记一个 SMTP 发件邮箱（授权码加密落库，最多 10 个）；供自动发信方案按数量轮换发件身份。dkimDomain/dkimSelector/dkimPrivateKey 可选，配置后该邮箱发出的邮件带 DKIM 签名；dailyLimit 为单账号每日外发上限（默认 50）。");
 define("PUT /api/sender-mailboxes/{id}", objectSchema(["email", "smtpHost", "smtpUser"], {
   label: string({ maxLength: 120 }),
   email: string({ format: "email", maxLength: 200 }),
@@ -387,8 +400,12 @@ define("PUT /api/sender-mailboxes/{id}", objectSchema(["email", "smtpHost", "smt
   imapPort: integer({ minimum: 1, maximum: 65535 }),
   imapUser: string({ maxLength: 200 }),
   imapPassword: string({ maxLength: 400 }),
+  dkimDomain: string({ maxLength: 180 }),
+  dkimSelector: string({ maxLength: 63 }),
+  dkimPrivateKey: string({ maxLength: 12000 }),
+  dailyLimit: integer({ minimum: 1, maximum: 500 }),
   enabled: boolean()
-}), "更新发件邮箱池里自己名下的一个发件邮箱；smtpPassword 留空表示保留原授权码。");
+}), "更新发件邮箱池里自己名下的一个发件邮箱；smtpPassword 留空表示保留原授权码，dkimPrivateKey 不传表示保留原私钥。");
 define("DELETE /api/sender-mailboxes/{id}", emptySchema, "从发件邮箱池删除自己名下的一个发件邮箱；删除不可撤销，需要明确确认。");
 define("POST /api/sender-mailboxes/{id}/test", objectSchema([], { to: string({ format: "email", maxLength: 255 }) }), "用发件邮箱池里的指定邮箱发一封测试邮件验证 SMTP 配置；默认发给该邮箱自己。");
 define("PATCH /api/mail-center/accounts/{id}/sync", objectSchema([], {

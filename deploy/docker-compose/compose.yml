@@ -11,8 +11,15 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-      - --innodb-buffer-pool-size=384M
-      - --max-connections=100
+      # 缓冲池务必 ≤128M：MySQL 按 innodb_buffer_pool_chunk_size(128M) 对齐，
+      # 192M 会被放大成 256M；640m 容器上限下曾因 384M 池触发 cgroup OOM 杀掉 mysqld。
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=60
+      # 以下三项针对 640m 容器上限瘦身（mysql:8.4 镜像默认 log buffer 就是 64M、
+      # performance_schema 默认开启约吃 127MB，对小型库纯属浪费；瘦身后 RSS 607M→200M）。
+      - --innodb-log-buffer-size=16M
+      - --table-open-cache=512
+      - --performance-schema=OFF
       # 本项目要求关闭 binlog（MySQL 8.0 起默认开启）。后端与迁移启动时会校验 @@log_bin，
       # 生产环境未关闭会拒绝启动；不要删除这一行。
       - --disable-log-bin
@@ -27,7 +34,7 @@ services:
       - "3306"
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=$$(cat /run/secrets/mysql_root_password) mysqladmin ping -h 127.0.0.1 -u root --silent"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 20
       start_period: 40s
@@ -61,7 +68,7 @@ services:
       - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 20
       start_period: 20s
@@ -199,7 +206,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4188/api/health"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
       retries: 12
       start_period: 40s
@@ -227,7 +234,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3100/api/health/ready"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
       retries: 12
       start_period: 30s
@@ -253,7 +260,7 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/container-health"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
       retries: 8
       start_period: 10s

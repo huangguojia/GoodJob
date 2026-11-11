@@ -6,9 +6,16 @@
  */
 import type { Express } from "express";
 import { type Request } from "express";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { canSeeOwner, hasIamPermission, publicUser, requireAuth } from "../auth.js";
+import {
+  applyLeadAssignment,
+  assignableMembersFor,
+  canAssignLead,
+  canAssignLeads,
+  leadAssignmentRows
+} from "../lead-assignment.js";
 import { type Customer, type Deal, type Lead, type SessionUser } from "../types.js";
 import { getStore } from "../store.js";
 import { readWebsiteLeadIngressSettings } from "../website-lead-ingress-settings.js";
@@ -145,6 +152,134 @@ export function registerLeadsRoutes(app: Express) {
     const scoped = leads.filter((lead) => canSeeOwner(req.user!, lead.ownerId, lead.teamId) && (trash ? Boolean(lead.deletedAt) : !lead.deletedAt));
     res.json({ leads: scoped });
   });
+
+  // ── 线索指派 ────────────────────────────────────────────────────────────
+  // ⚠️ 这三个 GET 必须放在 `/api/leads/:id` 之前，否则 "assignable-members" /
+  // "assignments" 会被当成线索 ID 匹配掉（Express 按注册顺序匹配）。
+  app.get("/api/leads/assignable-members", requireAuth, (req, res) => {
+    if (!canAssignLeads(req.user)) {
+      res.status(403).json({ message: "没有指派线索的权限", errorCode: "LEAD_ASSIGN_FORBIDDEN" });
+      return;
+    }
+    res.json({ members: assignableMembersFor(getStore().users, req.user!) });
+  });
+
+  app.get("/api/leads/assignments", requireAuth, (req, res) => {
+    if (!canAssignLeads(req.user)) {
+      res.status(403).json({ message: "没有查看线索指派的权限", errorCode: "LEAD_ASSIGN_FORBIDDEN" });
+      return;
+    }
+    const store = getStore();
+    res.json({ assignments: leadAssignmentRows(store.leads, store.users, req.user!) });
+  });
+
+  const leadAssignmentSchema = z.object({
+    toOwnerId: z.string().trim().min(1, "请选择接收人").max(64),
+    note: z.string().trim().max(500).optional().default("")
+  });
+
+  /** 指派/改派共用：校验 → 改归属 → 写一条线索活动留痕 */
+  function runLeadAssignment(
+    user: SessionUser,
+    lead: Lead,
+    toOwnerId: string,
+    note: string,
+    now: string
+  ) {
+    if (lead.deletedAt) {
+      return { ok: false as const, status: 400, message: "垃圾箱中的线索不能指派", code: "LEAD_ASSIGN_TRASHED" };
+    }
+    if (!canAssignLead(user, lead)) {
+      return { ok: false as const, status: 403, message: "只能指派进入自己账号的线索，或改派自己指派出去的线索", code: "LEAD_ASSIGN_FORBIDDEN" };
+    }
+    const store = getStore();
+    const target = store.users.find((item) =>
+      item.id === toOwnerId
+      && item.teamId === user.teamId
+      && item.status === "active"
+      && item.role !== "super_admin"
+    );
+    if (!target) {
+      return { ok: false as const, status: 400, message: "接收人不存在、已停用或不在本团队", code: "LEAD_ASSIGN_TARGET_INVALID" };
+    }
+    const previousName = store.users.find((item) => item.id === lead.ownerId)?.name || "未分配";
+    const result = applyLeadAssignment({ lead, toOwnerId, actorId: user.id, note, now });
+    if (!result.changed) {
+      return { ok: true as const, lead, changed: false, target };
+    }
+    store.leadActivities.unshift({
+      id: `la_${randomUUID()}`,
+      leadId: lead.id,
+      type: "system",
+      content: `线索负责人由 ${previousName} 指派给 ${target.name}${note ? `；备注：${note}` : ""}`,
+      operatorId: user.id,
+      nextFollowAt: lead.nextFollowAt || "",
+      createdAt: now
+    });
+    return { ok: true as const, lead, changed: true, target };
+  }
+
+  app.post("/api/leads/:id/assign", requireAuth, asyncRoute(async (req, res) => {
+    const user = req.user!;
+    if (!canAssignLeads(user)) {
+      res.status(403).json({ message: "没有指派线索的权限", errorCode: "LEAD_ASSIGN_FORBIDDEN" });
+      return;
+    }
+    const body = leadAssignmentSchema.parse(req.body);
+    const store = getStore();
+    const lead = store.leads.find((item) => item.id === req.params.id);
+    if (!lead || !canSeeOwner(user, lead.ownerId, lead.teamId)) {
+      res.status(404).json({ message: "线索不存在或无权访问" });
+      return;
+    }
+    const now = new Date().toISOString();
+    const result = runLeadAssignment(user, lead, body.toOwnerId, body.note, now);
+    if (!result.ok) {
+      res.status(result.status).json({ message: result.message, errorCode: result.code });
+      return;
+    }
+    if (result.changed) await store.persist();
+    res.json({
+      lead,
+      changed: result.changed,
+      message: result.changed ? `已指派给 ${result.target.name}` : `线索已在 ${result.target.name} 名下`
+    });
+  }));
+
+  app.post("/api/leads/bulk-assign", requireAuth, asyncRoute(async (req, res) => {
+    const user = req.user!;
+    if (!canAssignLeads(user)) {
+      res.status(403).json({ message: "没有指派线索的权限", errorCode: "LEAD_ASSIGN_FORBIDDEN" });
+      return;
+    }
+    const body = leadAssignmentSchema.extend({
+      ids: z.array(z.string().trim().min(1).max(64)).min(1, "请至少选择一条线索").max(200)
+    }).parse(req.body);
+    const store = getStore();
+    const now = new Date().toISOString();
+    const assigned: string[] = [];
+    const skipped: Array<{ leadId: string; reason: string }> = [];
+    for (const id of [...new Set(body.ids)]) {
+      const lead = store.leads.find((item) => item.id === id);
+      if (!lead || !canSeeOwner(user, lead.ownerId, lead.teamId)) {
+        skipped.push({ leadId: id, reason: "线索不存在或无权访问" });
+        continue;
+      }
+      const result = runLeadAssignment(user, lead, body.toOwnerId, body.note, now);
+      if (!result.ok) {
+        skipped.push({ leadId: id, reason: result.message });
+        continue;
+      }
+      if (result.changed) assigned.push(id);
+    }
+    if (assigned.length) await store.persist();
+    const target = store.users.find((item) => item.id === body.toOwnerId);
+    res.json({
+      assigned,
+      skipped,
+      message: `已指派 ${assigned.length} 条${skipped.length ? `，${skipped.length} 条未处理` : ""}${target ? `给 ${target.name}` : ""}`
+    });
+  }));
 
   app.get("/api/leads/:id", requireAuth, (req, res) => {
     const store = getStore();

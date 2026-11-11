@@ -38,6 +38,9 @@ export interface User {
   imapSecure?: boolean;
   imapUser?: string;
   hasImapPassword?: boolean;
+  dkimDomain?: string;
+  dkimSelector?: string;
+  hasDkimPrivateKey?: boolean;
   inboundSyncEnabled?: boolean;
   lastInboundSyncAt?: string;
   lastInboundSyncStatus?: "ok" | "error" | "";
@@ -3101,6 +3104,11 @@ export interface Lead {
   deletedBy?: string;
   purgeAt?: string;
   statusBeforeDelete?: "new" | "following" | "converted" | "invalid";
+  /** 最近一次线索指派：指派人、时间、改派前负责人、备注 */
+  assignedBy?: string;
+  assignedAt?: string;
+  assignmentFrom?: string;
+  assignmentNote?: string;
 }
 
 export interface LeadSourceEvent {

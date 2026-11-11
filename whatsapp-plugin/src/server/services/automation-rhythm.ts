@@ -1,5 +1,5 @@
 import type { AutomationRunResult, AutomationSettings } from "../../shared/types.js";
-import { Repository } from "../db/repository.js";
+import { Repository, getChannelAccountsEpoch } from "../db/repository.js";
 import { ConversationIntelligenceService } from "./conversation-intelligence.js";
 // 「替 owner 签一枚 CRM token」这件事全仓只有一份实现（crm-client.ts）。
 // 原先这里自带一份，与 crm-context.ts 各自签发时，issuer/audience/TTL 一漂移就是
@@ -24,6 +24,12 @@ export class AutomationRhythmService {
   private running = false;
   private ownerTick: ((ownerUserId: string) => Promise<void>) | null = null;
   private followupSync: ((ownerUserId: string) => Promise<void>) | null = null;
+  // owner 列表缓存：channel_accounts 的写路径（create/updateStatus/delete）都会
+  // bump 编号，编号没变就复用上一次结果，空闲时不再每分钟扫一遍账号表。
+  // 5 分钟 TTL 兜底理论上可能存在的跨进程写入。
+  private cachedOwners: string[] | null = null;
+  private cachedOwnersEpoch = -1;
+  private cachedOwnersAt = 0;
   constructor(
     private readonly repository: Repository,
     private readonly intelligence: ConversationIntelligenceService,
@@ -98,11 +104,28 @@ export class AutomationRhythmService {
     return this.runOwner(ownerUserId, true);
   }
 
+  private async ownersForTick(): Promise<string[]> {
+    const epoch = getChannelAccountsEpoch();
+    const expired = Date.now() - this.cachedOwnersAt > 300_000;
+    if (this.cachedOwners && !expired && epoch === this.cachedOwnersEpoch) {
+      return this.cachedOwners;
+    }
+    const owners = new Set(
+      (await this.repository.listAccounts())
+        .map((account) => account.ownerUserId)
+        .filter((id): id is string => Boolean(id))
+    );
+    this.cachedOwners = [...owners];
+    this.cachedOwnersEpoch = epoch;
+    this.cachedOwnersAt = Date.now();
+    return this.cachedOwners;
+  }
+
   private async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      const owners = new Set((await this.repository.listAccounts()).map((account) => account.ownerUserId).filter((id): id is string => Boolean(id)));
+      const owners = await this.ownersForTick();
       for (const owner of owners) {
         // 兜底钩子刻意排在 CRM 可达性检查之前：自动回复不依赖 CRM 是否在线。
         if (this.ownerTick) {

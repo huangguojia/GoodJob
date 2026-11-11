@@ -66,6 +66,8 @@ export interface OutreachBatchView {
   counts: { total: number; frozen: number; skipped: number };
   /** 后端算好的正文补写进度；缺省时前端按同一口径兜底计算 */
   letterProgress?: { total: number; pending: number; ready: number; failed: number; withResearch: number };
+  /** 本批次的打开 / 点击 / 回复 / 退信（后端按 `batch:<id>:` 聚合） */
+  engagement?: OutreachEngagementView;
   frozenHash: string;
   approvedAt: string;
   pauseReason: string;
@@ -179,10 +181,16 @@ interface OutreachPlanProgress {
   skipped: number; inProgress: number; converted: number; pendingSteps: number; targetCap: number;
   letters?: OutreachPlanLetterProgress;
 }
+/** 发信效果（后端按台账 request_id 前缀聚合）：已发 / 打开 / 点击 / 回复 / 退信 + 打开率 */
+interface OutreachEngagementView {
+  sent: number; opened: number; clicked: number; replied: number; bounced: number; openRate: number;
+}
+const EMPTY_ENGAGEMENT_VIEW: OutreachEngagementView = { sent: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, openRate: 0 };
 interface OutreachPlanView {
   id: string;
   name: string;
   status: "running" | "paused" | "stopped" | "completed";
+  engagement?: OutreachEngagementView;
   target: {
     countries: string[]; keyword: string; maxTargets: number;
     mode?: "rules" | "manual";
@@ -208,6 +216,9 @@ const OUTREACH_PLAN_STATUS_META: Record<string, { label: string; tone: string }>
 };
 
 let outreachPlans: OutreachPlanView[] = [];
+/** 本页「自动发送任务 + 手动批次」的效果合计，由两个列表接口各自的 summary 相加 */
+let outreachPlanEngagement: OutreachEngagementView = { ...EMPTY_ENGAGEMENT_VIEW };
+let outreachBatchEngagement: OutreachEngagementView = { ...EMPTY_ENGAGEMENT_VIEW };
 let outreachPlanPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 function stopOutreachPlanPolling() {
@@ -229,9 +240,12 @@ function scheduleOutreachPlanPolling() {
 
 export async function loadOutreachPlans() {
   try {
-    const result = await api<{ plans: OutreachPlanView[] }>("/api/outreach-plans?limit=50");
+    const result = await api<{ plans: OutreachPlanView[]; summary?: OutreachEngagementView }>("/api/outreach-plans?limit=50");
     outreachPlans = result.plans || [];
+    outreachPlanEngagement = result.summary || outreachPlans.reduce(
+      (total, plan) => sumEngagementViews(total, plan.engagement), { ...EMPTY_ENGAGEMENT_VIEW });
     renderOutreachPlans();
+    renderOutreachEngagementStrip();
   } catch {
     // 方案加载失败不阻塞批次区域
   } finally {
@@ -247,6 +261,54 @@ const outreachNumberMemory = new Map<string, number>();
     tag 默认 b（沿用卡片里原有的加粗），摘要这类纯文本容器传 span 以免改变排版。 */
 function outreachNumberHtml(key: string, value: number, tag = "b"): string {
   return `<${tag} data-ob-num="${escapeHtml(key)}" data-ob-val="${value}">${value}</${tag}>`;
+}
+
+function sumEngagementViews(
+  a: OutreachEngagementView | null | undefined,
+  b: OutreachEngagementView | null | undefined
+): OutreachEngagementView {
+  const left = a || EMPTY_ENGAGEMENT_VIEW;
+  const right = b || EMPTY_ENGAGEMENT_VIEW;
+  const sent = left.sent + right.sent;
+  const opened = left.opened + right.opened;
+  return {
+    sent,
+    opened,
+    clicked: left.clicked + right.clicked,
+    replied: left.replied + right.replied,
+    bounced: left.bounced + right.bounced,
+    openRate: sent ? Math.round((opened / sent) * 1000) / 10 : 0
+  };
+}
+
+/** 批次 / 方案卡片上的两枚效果徽标：一封都没发出去时不占位，避免整排 0 */
+function outreachEngagementBadges(engagement?: OutreachEngagementView | null): string {
+  if (!engagement || !engagement.sent) return "";
+  return `<span class="ob-engage-badges" title="已发 ${engagement.sent} 封 · 打开率 ${engagement.openRate}% · 点击 ${engagement.clicked} 封 · 退信 ${engagement.bounced} 封">`
+    + badge(`打开 ${engagement.opened}`, engagement.opened ? "blue" : "gray")
+    + badge(`回复 ${engagement.replied}`, engagement.replied ? "green" : "gray")
+    + `</span>`;
+}
+
+/** 页面顶部的发信效果总览：已发 / 打开（含打开率）/ 回复（含回复率）/ 点击 / 退信 */
+function renderOutreachEngagementStrip() {
+  const box = qs<HTMLElement>("#outreachEngageStrip");
+  if (!box) return;
+  const total = sumEngagementViews(outreachPlanEngagement, outreachBatchEngagement);
+  if (!total.sent) {
+    box.innerHTML = "";
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const replyRate = total.sent ? Math.round((total.replied / total.sent) * 1000) / 10 : 0;
+  box.innerHTML = `
+    <div class="ob-engage-metric"><small>已发</small>${outreachNumberHtml("engage:sent", total.sent)}<span>封</span></div>
+    <div class="ob-engage-metric is-open"><small>被打开</small>${outreachNumberHtml("engage:opened", total.opened)}<span>封 · ${total.openRate}%</span></div>
+    <div class="ob-engage-metric is-reply"><small>已回复</small>${outreachNumberHtml("engage:replied", total.replied)}<span>封 · ${replyRate}%</span></div>
+    ${total.clicked ? `<div class="ob-engage-metric"><small>被点击</small>${outreachNumberHtml("engage:clicked", total.clicked)}<span>封</span></div>` : ""}
+    ${total.bounced ? `<div class="ob-engage-metric is-bad"><small>退信</small>${outreachNumberHtml("engage:bounced", total.bounced)}<span>封</span></div>` : ""}`;
+  animateOutreachNumbers(box);
 }
 
 /** 驱动 root 内所有 [data-ob-num]：滚动到新值；数值有变化时额外闪一下（绿色渐隐） */
@@ -350,7 +412,7 @@ function renderOutreachPlans() {
       <div class="ob-plan-head">${badge(meta.label, meta.tone)}<b>${escapeHtml(plan.name)}</b>${nextRun}</div>
       <div class="ob-plan-meta"><span>${scope}</span><span>${rhythm}</span></div>
       ${outreachPlanProgressTrack(progress)}
-      <div class="ob-plan-meta"><span>${counts}</span></div>
+      <div class="ob-plan-meta"><span>${counts}</span>${outreachEngagementBadges(plan.engagement)}</div>
       <div class="ob-plan-status">${escapeHtml(plan.pauseReason || plan.lastMessage || "—")}</div>
       <footer style="display:flex;gap:6px;flex-wrap:wrap">${actions.join("")}</footer>
     </div>`;
@@ -874,6 +936,9 @@ interface OutreachJourneyEmailView {
   clickCount: number;
   repliedAt: string;
   bouncedAt: string;
+  /** 打开时刻（列表里用来算"最近打开"） */
+  firstOpenedAt?: string;
+  lastOpenedAt?: string;
 }
 
 interface OutreachJourneyReplyView {
@@ -954,6 +1019,8 @@ export interface OutreachJourneyView {
   stats: {
     outboundCount: number; replyCount: number; openCount: number; clickCount: number;
     bounceCount: number; firstSentAt: string; lastSentAt: string; lastEventAt: string;
+    /** 最近一次被打开的时刻；一次没打开为空 */
+    lastOpenedAt?: string;
   };
 }
 
@@ -976,6 +1043,7 @@ interface OutreachJourneyListItem {
   lastReplyLabel: string;
   bounceCount: number;
   openCount: number;
+  clickCount: number;
   converted: boolean;
   convertedTo: string;
   nextFollowAt: string;
@@ -1057,13 +1125,13 @@ export function bindOutreachJourneyToolbar() {
 
 export async function loadOutreachJourneyOverview() {
   const body = qs<HTMLElement>("#ojTableBody");
-  if (body) body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
+  if (body) body.innerHTML = `<tr><td colspan="8" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
   try {
     const result = await api<OutreachJourneyOverview>(`/api/outreach-journey/overview?scope=${encodeURIComponent(outreachJourneyScope)}`);
     outreachJourneyOverview = result;
     renderOutreachJourneyPage();
   } catch (error) {
-    if (body) body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:#b03a3a">${escapeHtml(error instanceof Error ? error.message : "发信明细加载失败")}</td></tr>`;
+    if (body) body.innerHTML = `<tr><td colspan="8" style="padding:22px;text-align:center;color:#b03a3a">${escapeHtml(error instanceof Error ? error.message : "发信明细加载失败")}</td></tr>`;
   }
 }
 
@@ -1092,6 +1160,15 @@ function outreachJourneyReplyCell(item: OutreachJourneyListItem) {
   return `${badge(meta.label, meta.tone)}<div style="margin-top:3px;color:var(--muted);font-size:10px">${escapeHtml(formatDateTime(item.lastReplyAt))}</div>`;
 }
 
+/** 打开/点击信号：像素属参考信号（部分客户端拦截远程图片），点击更可靠；都没有 = 未监测或未打开 */
+function outreachJourneyEngagementCell(item: OutreachJourneyListItem) {
+  if (!item.openCount && !item.clickCount) return `<span style="color:var(--muted)">—</span>`;
+  const parts: string[] = [];
+  if (item.openCount) parts.push(badge(`打开 ${item.openCount}`, "blue"));
+  if (item.clickCount) parts.push(badge(`点击 ${item.clickCount}`, "green"));
+  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${parts.join("")}</div>`;
+}
+
 function outreachJourneyResearchCell(item: OutreachJourneyListItem) {
   if (item.researchScore === null || item.researchScore === undefined) return `<span style="color:var(--muted)">未背调</span>`;
   const tone = item.researchScore >= 78 ? "green" : item.researchScore >= 60 ? "amber" : "red";
@@ -1115,7 +1192,7 @@ export function renderOutreachJourneyPage() {
 
   if (!overview) {
     summaryBox.innerHTML = "";
-    body.innerHTML = `<tr><td colspan="7" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" style="padding:22px;text-align:center;color:var(--muted)">正在汇总发信明细…</td></tr>`;
     mobile.innerHTML = "";
     return;
   }
@@ -1143,7 +1220,7 @@ export function renderOutreachJourneyPage() {
         : "先去「发信批次」建一个自动发送方案，或到「搜客清单 / 线索」勾选客户生成发信批次；发出的每一封都会在这里按客户归档。"}</span>
       <button class="btn primary" type="button" data-oj-goto-batches>去发信批次 →</button>
     </div>`;
-    body.innerHTML = `<tr><td colspan="7" style="padding:0">${emptyHtml}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" style="padding:0">${emptyHtml}</td></tr>`;
     mobile.innerHTML = emptyHtml;
   } else {
     body.innerHTML = items.map((item, index) => {
@@ -1154,6 +1231,7 @@ export function renderOutreachJourneyPage() {
         <td>${outreachJourneyProgressDots(item)}</td>
         <td><div class="oj-company"><span>${escapeHtml(item.lastSentAt ? formatDateTime(item.lastSentAt) : "—")}</span><b style="font-size:11px;font-weight:500">${escapeHtml(item.lastSubject || "—")}</b></div></td>
         <td>${outreachJourneyReplyCell(item)}</td>
+        <td>${outreachJourneyEngagementCell(item)}</td>
         <td>${outreachJourneyResearchCell(item)}</td>
         <td style="text-align:right"><button class="btn tiny" type="button" data-oj-open="${escapeHtml(outreachJourneyKey(item))}" data-oj-company="${escapeHtml(item.company)}">查看过程</button></td>
       </tr>`;
@@ -1162,7 +1240,7 @@ export function renderOutreachJourneyPage() {
       const tone = outreachBadgeTone(item.stageTone);
       return `<div class="oj-card" style="--oj-i:${index}" data-oj-open="${escapeHtml(outreachJourneyKey(item))}" data-oj-company="${escapeHtml(item.company)}">
         <div class="oj-card-head"><b>${escapeHtml(item.company)}</b>${badge(item.stageLabel, tone)}</div>
-        <div class="oj-card-meta"><span>${escapeHtml(item.contact || "联系人待补充")}</span><span>${escapeHtml(item.email || "邮箱待补充")}</span><span>${item.outboundCount} 封</span>${item.lastReplyAt ? `<span>已回复</span>` : ""}</div>
+        <div class="oj-card-meta"><span>${escapeHtml(item.contact || "联系人待补充")}</span><span>${escapeHtml(item.email || "邮箱待补充")}</span><span>${item.outboundCount} 封</span>${item.openCount ? `<span>打开 ${item.openCount}</span>` : ""}${item.clickCount ? `<span>点击 ${item.clickCount}</span>` : ""}${item.lastReplyAt ? `<span>已回复</span>` : ""}</div>
         <div class="oj-card-meta"><span>最近：${escapeHtml(item.lastSentAt ? formatDateTime(item.lastSentAt) : "—")}</span></div>
       </div>`;
     }).join("");
@@ -1536,13 +1614,15 @@ async function openOutreachStageSendModal() {
 
 export async function loadOutreachBatches() {
   try {
-    const result = await api<{ batches: OutreachBatchView[] }>("/api/prospect-outreach-batches?limit=50");
+    const result = await api<{ batches: OutreachBatchView[]; summary?: OutreachEngagementView }>("/api/prospect-outreach-batches?limit=50");
     state.outreachBatches = result.batches || [];
+    outreachBatchEngagement = result.summary || outreachBatchEngagement;
     // 已消失的批次不该继续占着折叠状态，否则下次同名 id 复用时会被误判成收起
     for (const id of [...outreachBatchCollapsed]) {
       if (!state.outreachBatches.some((item) => item.id === id)) outreachBatchCollapsed.delete(id);
     }
     renderOutreachBatches();
+    renderOutreachEngagementStrip();
   } catch (error) {
     toast(error instanceof Error ? error.message : "发信批次加载失败", "error");
   }
@@ -1744,7 +1824,7 @@ function renderOutreachBatchCard(batch: OutreachBatchView, index: number): strin
       <span class="ob-batch-seq">${index + 1}</span>
       ${badge(meta.label, meta.tone)}
       <span class="ob-batch-title"><b>${batch.targetType === "lead" ? "线索" : "搜客候选"}批次</b><small>${escapeHtml(formatDateTime(batch.createdAt))}</small></span>
-      <span class="ob-batch-stat">${stat}${nextAt ? `<span class="ob-next-send">下一封 ${escapeHtml(formatDateTime(nextAt))}</span>` : ""}${converted ? badge(`已转线索 ${converted}`, "green") : ""}</span>
+      <span class="ob-batch-stat">${stat}${outreachEngagementBadges(batch.engagement)}${nextAt ? `<span class="ob-next-send">下一封 ${escapeHtml(formatDateTime(nextAt))}</span>` : ""}${converted ? badge(`已转线索 ${converted}`, "green") : ""}</span>
       ${outreachBatchActionButtons(batch)}
     </div>
     ${body}

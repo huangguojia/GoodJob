@@ -11655,6 +11655,11 @@
     .cust-email-summary b { color: #28354a; font-size: 13px; }
     .cust-email-summary b.is-good { color: #13704c; }
     .cust-email-summary b.is-bad { color: #b33d35; }
+    .cust-email-summary > span.is-open { border-color: #cfe0f7; background: #eff6ff; }
+    .cust-email-summary > span.is-open b { color: #2f6bc4; }
+    .cust-email-summary > span.is-reply { border-color: #cfe9df; background: #eef8f3; }
+    .cust-email-summary > span.is-reply b { color: #1d7a55; }
+    .cust-email-summary i { color: #8290a2; font-size: 10px; font-style: normal; }
     .cust-email-stage { margin-left: auto; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 0; }
     .cust-email-stage small { max-width: 230px; color: #8290a2; font-size: 9px; line-height: 1.4; text-align: right; }
     .cust-email-row { display: grid; grid-template-columns: 108px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 13px; border-bottom: 1px solid #edf1f5; }
@@ -25974,7 +25979,6 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <button class="nav-secondary-button" data-view="reports" title="报表"><span>报表</span></button>
             <button class="nav-secondary-button" data-view="shipments" title="发货跟踪"><span>发货跟踪</span></button>
             <button class="nav-secondary-button" data-view="global-map" title="全球航线"><span>全球航线</span></button>
-            <button class="nav-secondary-button" data-view="email-return-flow" title="开发信回流"><span>开发信回流</span></button>
             <button class="nav-secondary-button" data-view="tools" title="小工具"><span>小工具</span></button>
           </div>
         </details>
@@ -27493,6 +27497,28 @@ body.platform-mode .workspace-tabs { display:none !important; }
             .local-runner-pair-result > small { margin-bottom: 7px; color: #8a9793; font-size: 9px; }
             .local-runner-pair-result code { display: block; max-height: 150px; overflow: auto; border-radius: 6px; padding: 11px; color: #d8e5e1; background: #17231f; font-size: 9px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
             .local-runner-pair-result p { margin: 1px 0 0; color: #687873; font-size: 9px; }
+            .local-runner-pair-result p.warn { margin-top: 4px; padding: 8px 10px; border: 1px solid #f0e0bd; border-radius: 6px; background: #fdf6e9; color: #7a5a1a; line-height: 1.6; }
+            .local-runner-pair-form { display: grid; grid-template-columns: 1fr; gap: 10px; }
+            .local-runner-pair-form > * { grid-column: 1 / -1; }
+            .local-runner-precheck { display: grid; gap: 7px; padding: 11px 12px; border: 1px solid #e2eae7; border-radius: 7px; background: #f7faf9; }
+            .local-runner-precheck > b { color: #3a4a45; font-size: 10px; }
+            .local-runner-precheck ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+            .local-runner-precheck li { display: grid; gap: 3px; }
+            .local-runner-precheck li > span { color: #5c6b66; font-size: 9px; }
+            .local-runner-precheck code { padding: 4px 7px; border: 1px solid #e2eae7; border-radius: 5px; background: #fff; color: #2f4a42; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; overflow-wrap: anywhere; }
+            .local-runner-precheck > small { color: #85928e; font-size: 9px; line-height: 1.55; }
+            #integration-center .local-runner-guide { justify-items: stretch; padding: 18px 14px; text-align: left; gap: 11px; }
+            #integration-center .local-runner-guide > b { color: #2f3d39; font-size: 11px; }
+            #integration-center .local-runner-steps { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+            #integration-center .local-runner-steps li { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 9px; align-items: start; }
+            #integration-center .local-runner-steps .step-no { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #eef4f1; color: #2f6b58; font-size: 10px; font-weight: 700; }
+            #integration-center .local-runner-steps b { display: block; color: #3a4a45; font-size: 10px; }
+            #integration-center .local-runner-steps small { display: block; margin-top: 3px; color: #85928e; font-size: 9px; line-height: 1.5; }
+            #integration-center .local-runner-steps code { display: block; margin-top: 4px; padding: 5px 7px; border: 1px solid #e2eae7; border-radius: 5px; background: #f4f7f6; color: #2f4a42; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8.5px; letter-spacing: -0.2px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+            #integration-center .local-runner-steps code::-webkit-scrollbar { display: none; }
+            #integration-center .local-runner-guide-pair { margin-top: 6px; justify-self: start; padding: 5px 12px; border: 1px solid #c9dbd5; border-radius: 6px; background: #eef6f3; color: #1c6b55; font-size: 9px; font-weight: 600; text-decoration: none; }
+            #integration-center .local-runner-guide-pair:hover { background: #e3f0ec; border-color: #aecfc4; }
+            #integration-center .local-runner-offline-hint { margin-bottom: 8px; padding: 8px 10px; border: 1px solid #f0e0bd; border-radius: 6px; background: #fdf6e9; color: #7a5a1a; font-size: 9px; line-height: 1.6; }
             @keyframes integration-skeleton { to { background-position: -220% 0; } }
             @keyframes local-runner-live-pulse { 70% { box-shadow: 0 0 0 7px rgba(27,154,115,0); } 100% { box-shadow: 0 0 0 0 rgba(27,154,115,0); } }
             @media (prefers-reduced-motion: reduce) { #integration-center .local-runner-live i { animation: none; } }
@@ -28011,6 +28037,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <button class="btn" id="outreachBatchRefreshButton" type="button"><svg class="ob-refresh-ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M13.1 8a5.1 5.1 0 1 1-1.5-3.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path><path d="M13.1 2.6v3.4H9.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>刷新</button>
             </div>
           </div>
+          <section class="ob-engage-strip" id="outreachEngageStrip" hidden></section>
           <section class="ob-block">
             <div class="ob-block-head"><div><h2>自动发送任务</h2></div></div>
             <div class="ob-channel-note" id="outreachSendChannelNote"></div>
@@ -28032,6 +28059,16 @@ body.platform-mode .workspace-tabs { display:none !important; }
             #outreach-batches .ob-block-head small { display:block; margin-top:4px; color:var(--ob-muted); font-size:10px; font-weight:400; }
             #outreach-batches .ob-head-count { margin-top:0; color:var(--ob-muted); font-size:11px; font-weight:500; }
             #outreach-batches .ob-batch-list { display:grid; gap:12px; padding:14px 16px; }
+            /* 发信效果总览：已发 / 打开 / 回复 / 点击 / 退信 —— 数字沿用页面里的滚动动画 */
+            #outreach-batches .ob-engage-strip { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px 32px; margin-bottom:14px; padding:12px 16px; border:1px solid var(--ob-line); border-radius:10px; background:linear-gradient(180deg,#f8fbfe,#f2f6fc); }
+            #outreach-batches .ob-engage-metric { display:flex; align-items:baseline; gap:5px; flex:0 1 auto; }
+            #outreach-batches .ob-engage-metric small { color:var(--ob-muted); font-size:11px; }
+            #outreach-batches .ob-engage-metric b { color:var(--ob-ink); font-size:19px; line-height:1; }
+            #outreach-batches .ob-engage-metric span { color:var(--ob-muted); font-size:11px; }
+            #outreach-batches .ob-engage-metric.is-open b { color:#2f6bc4; }
+            #outreach-batches .ob-engage-metric.is-reply b { color:#1d7a55; }
+            #outreach-batches .ob-engage-metric.is-bad b { color:#b03a3a; }
+            #outreach-batches .ob-engage-badges { display:inline-flex; gap:5px; margin-left:6px; }
             /* ——— 一级：批次 ——— */
             #outreach-batches .ob-batch { border:1px solid var(--ob-line); border-radius:11px; background:#fff; overflow:hidden; transition:border-color .18s var(--ease-out), box-shadow .18s var(--ease-out); }
             #outreach-batches .ob-batch.is-open { border-color:#cddaea; box-shadow:0 14px 28px -26px rgba(23,35,61,.7); }
@@ -28340,7 +28377,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           </div>
           <section class="oj-list">
             <table>
-              <thead><tr><th>客户 / 收件人</th><th>当前阶段</th><th>发送进度</th><th>最近一封</th><th>回复情况</th><th>背调</th><th style="text-align:right">操作</th></tr></thead>
+              <thead><tr><th>客户 / 收件人</th><th>当前阶段</th><th>发送进度</th><th>最近一封</th><th>回复情况</th><th>打开 / 点击</th><th>背调</th><th style="text-align:right">操作</th></tr></thead>
               <tbody id="ojTableBody"></tbody>
             </table>
             <div class="oj-mobile" id="ojMobileList"></div>
@@ -28715,6 +28752,14 @@ body.platform-mode .workspace-tabs { display:none !important; }
         <style>
           #leads .page-head { align-items: flex-start; }
           #leads .lead-page-actions { display: flex; align-items: center; gap: 10px; }
+          /* 指派一览是 7 列宽表，基础 .modal 的 520px 会挤成文字堆叠，单独放宽 */
+          .modal.lead-assignment-modal { width: min(880px, calc(100vw - 32px)); }
+          .modal.lead-assignment-modal #modalDescription { display: none; }
+          .modal.lead-assignment-modal .modal-body { padding: 16px 20px 18px; }
+          .lead-assignment-summary { margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+          .lead-assignment-table-wrap { overflow-x: auto; }
+          .lead-assignment-table-wrap th, .lead-assignment-table-wrap td { padding: 8px 10px; vertical-align: middle; }
+          .lead-assignment-table-wrap td small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
           #leads .lead-workspace-tabs { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
           #leads .lead-workspace-tabs button { height: 30px; border: 0; border-radius: 6px; padding: 0 11px; color: var(--muted); background: transparent; cursor: pointer; font-weight: 800; }
           #leads .lead-workspace-tabs button.active { color: var(--ink); background: var(--surface); box-shadow: 0 1px 4px rgba(22, 35, 64, .12); }
@@ -28787,6 +28832,19 @@ body.platform-mode .workspace-tabs { display:none !important; }
           #leads .lead-compose #leadNoteButton { grid-column: 1 / -1; }
           #leads .lead-detail-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
           #leads .lead-detail-section h3 { margin: 0 0 10px; color: var(--ink); font-size: 13px; }
+          #leads .lead-dev-email-summary { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid #dfe7f2; border-radius: 9px; background: linear-gradient(180deg, #f8fbfe, #f2f6fc); }
+          #leads .lead-dev-email-summary span { display: flex; align-items: baseline; gap: 5px; }
+          #leads .lead-dev-email-summary small { color: var(--muted); font-size: 11px; }
+          #leads .lead-dev-email-summary b { color: var(--ink); font-size: 14px; }
+          #leads .lead-dev-email-summary .is-open b { color: #2f6bc4; }
+          #leads .lead-dev-email-summary .is-reply b { color: #1d7a55; }
+          #leads .lead-dev-email-summary .is-bad b { color: #b03a3a; }
+          #leads .lead-dev-email-list { display: grid; gap: 7px; }
+          #leads .lead-dev-email-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+          #leads .lead-dev-email-row b { color: var(--ink); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          #leads .lead-dev-email-row small { color: var(--muted); font-size: 11px; text-align: right; }
+          #leads .lead-dev-email-row span { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+          #leads .lead-dev-email-empty, #leads .lead-dev-email-loading { padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; }
           #leads .lead-delete-audit { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border: 1px solid #f1cccc; border-radius: 8px; background: var(--rose-tint); }
           #leads .lead-delete-audit div, #leads .lead-dedupe { display: grid; gap: 3px; }
           #leads .lead-delete-audit span, #leads .lead-dedupe span { color: var(--muted); font-size: 11px; }
@@ -28885,22 +28943,22 @@ body.platform-mode .workspace-tabs { display:none !important; }
             font-size: 12px; padding: 8px 14px; margin-bottom: 4px;
             border-radius: 10px; border: 1px solid var(--line);
           }
-          #email-return-flow .rf-track.is-on { color: var(--green); background: var(--green-tint); border-color: rgba(34,160,94,.28); }
-          #email-return-flow .rf-track.is-off { color: var(--amber); background: var(--amber-tint); border-color: rgba(196,124,28,.25); }
+          #email-return-flow .rf-track.is-on { color: var(--ink); background: #fff; border-color: var(--line); }
+          #email-return-flow .rf-track.is-off { color: var(--amber); background: #fff; border-color: var(--line); }
           #email-return-flow .rf-track a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
           .rf-pill--click { color: var(--aqua); background: rgba(14,116,144,.10); }
           .rf-pill--reply { color: var(--amber); background: var(--amber-tint); }
           .rf-pill--bounce { color: var(--rose); background: var(--rose-tint); }
 
-          /* ===== Command Deck 暗夜（开发信回流视图）===== */
+          /* ===== 开发信回流视图外壳（晨白）===== */
           /* 仅本视图外扩盖住 workspace 白边，绝不动父容器（避免 :has 污染全局） */
-          /* 注意：不能写 display:block !important，否则会覆盖 .view 的隐藏规则，导致此黑底视图常驻显示、污染全局 */
+          /* 注意：不能写 display:block !important，否则会覆盖 .view 的隐藏规则，导致此视图常驻显示、污染全局 */
           #email-return-flow {
             width: 100%;
             max-width: none;
             margin: -8px -22px -24px;
             padding: 0;
-            background: #0a0c0f;
+            background: #ffffff;
             border-radius: 0;
             min-height: calc(100vh - 56px);
           }
@@ -29424,6 +29482,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <div class="lead-page-actions">
               <div class="lead-workspace-tabs"><button class="active" id="leadActiveTab">处理中 <b id="leadActiveCount">0</b></button><button id="leadTrashTab">垃圾箱 <b id="leadTrashCount">0</b></button></div>
               <button class="btn icon-only" id="leadRefreshButton" type="button" title="刷新线索" aria-label="刷新线索"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4L3 10"/><path d="M3 4v6h6"/><path d="M4 13a8 8 0 0 0 14.9 4L21 14"/><path d="M21 20v-6h-6"/></svg></button>
+              <button class="btn" id="leadAssignmentsButton" type="button" data-permission="lead.assign" title="查看已指派的线索并改派">指派一览</button>
               <button class="btn primary" id="leadNewButton" data-permission="lead.create">新增线索</button>
             </div>
           </div>
@@ -29461,6 +29520,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <select id="leadFollowFilter"><option value="all">全部跟进</option><option value="overdue">已逾期</option><option value="planned">已计划</option><option value="unset">待安排</option></select>
                 <button class="btn" id="leadReplyFilterButton" type="button" title="只看有客户回复的线索">✉ 有回复</button>
                 <button class="btn" id="leadFilterReset">重置</button>
+                <button class="btn" id="leadAssignButton" type="button" data-permission="lead.assign" title="勾选线索后指派给团队员工">⇄ 指派</button>
                 <button class="btn primary" id="leadCreateOutreachBatchButton" type="button" data-permission="lead.read" title="勾选线索后生成发信批次">✉ 生成发信批次</button>
               </div>
               <div class="table-wrap lead-desktop-table">
@@ -29647,8 +29707,118 @@ body.platform-mode .workspace-tabs { display:none !important; }
         </div>
 
         <div class="view" id="email-return-flow">
+          <!-- 开发信回流：已并入邮件中心二级导航（MAIL_SECTION_ITEMS），页面风格晨白 -->
+          <div class="mail-section-nav"></div>
           <div id="emailReturnFlowPage"></div>
         </div>
+
+        <style>
+          /* ===== 开发信回流（晨白）：与邮件中心同一套令牌 ===== */
+          #email-return-flow {
+            --mc-brand: #378ADD;
+            --mc-teal: #1f9d8f;
+            --mc-violet: #7c5cff;
+            --mc-amber: #cf8a1c;
+            --mc-rose: #d94a6a;
+            --mc-ink: #131c2e;
+            --mc-sub: #6b7d94;
+            --mc-line: #e4eaf3;
+            --mc-soft: #f6f9fd;
+            --mc-card: #ffffff;
+            --mc-shadow-sm: 0 1px 2px rgba(19, 28, 46, .05), 0 1px 3px rgba(19, 28, 46, .04);
+          }
+          .erf-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+          .erf-head h1 { margin:0; font-size:22px; color:var(--mc-ink); letter-spacing:.2px; }
+          .erf-head .ms-sub { margin:4px 0 0; color:var(--mc-sub); font-size:13px; }
+          .erf-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+          .erf-sync { display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--mc-sub); background:#fff; border:1px solid var(--mc-line); border-radius:999px; padding:5px 12px; }
+          .erf-sync .dot { width:7px; height:7px; border-radius:50%; background:var(--mc-sub); }
+          .erf-sync.is-ok .dot { background:#1f9d8f; box-shadow:0 0 0 3px rgba(31,157,143,.14); }
+          .erf-sync.is-error .dot { background:#d94a6a; box-shadow:0 0 0 3px rgba(217,74,106,.14); }
+          .erf-sync.is-warn .dot { background:#cf8a1c; box-shadow:0 0 0 3px rgba(207,138,28,.14); }
+          .erf-track { display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12px; border-radius:10px; padding:8px 12px; margin-bottom:12px; border:1px solid; }
+          .erf-track.is-on { color:var(--mc-ink); background:#fff; border-color:var(--mc-line); }
+          .erf-track.is-off { color:#8a4a12; background:#fff; border-color:var(--mc-line); }
+          .erf-track a { color:inherit; font-weight:600; }
+          .erf-kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:16px; }
+          @media (max-width:900px){ .erf-kpis { grid-template-columns:repeat(3,1fr); } }
+          .erf-kpi { background:var(--mc-card); border:1px solid var(--mc-line); border-radius:12px; padding:12px 14px; box-shadow:var(--mc-shadow-sm); }
+          .erf-kpi .lab { font-size:12px; color:var(--mc-sub); }
+          .erf-kpi .v { font-size:22px; font-weight:700; color:var(--mc-ink); margin-top:2px; }
+          .erf-kpi .v.open { color:var(--mc-brand); }
+          .erf-kpi .v.click { color:var(--mc-violet); }
+          .erf-kpi .v.reply { color:var(--mc-teal); }
+          .erf-kpi .v.bounce { color:var(--mc-rose); }
+          .erf-toolbar { display:flex; align-items:center; gap:12px; margin:0 0 10px; }
+          .erf-toolbar select { font-size:13px; padding:6px 10px; border:1px solid var(--mc-line); border-radius:8px; background:var(--mc-card); color:var(--mc-ink); }
+          .erf-count { font-size:12px; color:var(--mc-sub); }
+          .erf-list { background:var(--mc-card); border:1px solid var(--mc-line); border-radius:12px; overflow:hidden; box-shadow:var(--mc-shadow-sm); }
+          .erf-list table { width:100%; border-collapse:collapse; font-size:13px; }
+          .erf-list th { text-align:left; font-size:12px; color:var(--mc-sub); font-weight:600; padding:10px 14px; border-bottom:1px solid var(--mc-line); background:#fff; white-space:nowrap; }
+          .erf-list td { padding:10px 14px; border-bottom:1px solid var(--mc-line); vertical-align:middle; }
+          /* 列宽只走 nth-child：状态药丸和时间线按钮不许被挤断换行 */
+          .erf-list table { min-width:0; }
+          .erf-list th:nth-child(1), .erf-list td:nth-child(1) { width:286px; }
+          .erf-list th:nth-child(3), .erf-list td:nth-child(3) { width:118px; white-space:nowrap; }
+          .erf-list th:nth-child(4), .erf-list td:nth-child(4) { width:132px; white-space:nowrap; }
+          .erf-list th:nth-child(5), .erf-list td:nth-child(5) { width:84px; white-space:nowrap; }
+          .erf-list .erf-pill, .erf-list .erf-detail { white-space:nowrap; }
+          .erf-list tr:last-child td { border-bottom:none; }
+          .erf-list tbody tr { cursor:pointer; transition:background .12s; }
+          .erf-list tbody tr:hover { background:#f8fafc; }
+          .erf-who { display:flex; align-items:center; gap:10px; }
+          .erf-avatar { width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#4a8ef7,#7c5cff); color:#fff; font-size:12px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+          .erf-name { font-weight:600; color:var(--mc-ink); }
+          .erf-email { display:block; font-size:12px; color:var(--mc-sub); }
+          .erf-subject { color:var(--mc-ink); }
+          .erf-time { color:var(--mc-sub); font-size:12px; white-space:nowrap; }
+          .erf-pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:2px 9px; margin-right:4px; border:1px solid; }
+          .erf-pill.is-open { color:#2560a8; background:#fff; border-color:#c6dbf5; }
+          .erf-pill.is-click { color:#5b3ec9; background:#fff; border-color:#d8d0fa; }
+          .erf-pill.is-reply { color:#14634f; background:#fff; border-color:#bfe8dc; }
+          .erf-pill.is-bounce { color:#a4283f; background:#fff; border-color:#f2c3cd; }
+          .erf-pill.is-sent { color:var(--mc-sub); background:#fff; border-color:var(--mc-line); }
+          .erf-detail { font-size:12px; padding:5px 12px; border-radius:8px; border:1px solid var(--mc-line); background:var(--mc-card); color:var(--mc-brand); cursor:pointer; }
+          .erf-detail:hover { background:#f8fafc; }
+          .erf-empty { padding:36px 20px; text-align:center; color:var(--mc-sub); font-size:13px; }
+          .erf-empty b { display:block; color:var(--mc-ink); font-size:14px; margin-bottom:6px; }
+          .erf-loading { padding:28px; text-align:center; color:var(--mc-sub); font-size:13px; }
+          .erf-loading i { display:inline-block; width:12px; height:12px; margin-right:8px; border:2px solid var(--mc-line); border-top-color:var(--mc-brand); border-radius:50%; animation:erf-spin .8s linear infinite; vertical-align:-2px; }
+          @keyframes erf-spin { to { transform:rotate(360deg); } }
+
+          /* ===== 回复查询分析（晨白 deck，与邮件中心同一套盘） =====
+             白卡 + #e4eaf3 细线 + --mc-ink/--mc-sub 文字；图表主色：靛蓝·琥珀·绿 */
+          .ec-deck { background:#fff; border:1px solid var(--mc-line); border-radius:12px; padding:16px 18px 18px; margin-bottom:16px; color:var(--mc-ink); box-shadow:0 1px 2px rgba(19,28,46,.04); }
+          .ec-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+          .ec-title { font-size:14px; font-weight:700; letter-spacing:.2px; color:var(--mc-ink); }
+          .ec-title small { display:block; font-size:12px; font-weight:400; color:var(--mc-sub); margin-top:3px; }
+          .ec-controls { display:flex; align-items:center; gap:8px; }
+          .ec-controls button, .ec-controls select { font-size:12px; padding:5px 12px; border-radius:8px; border:1px solid var(--mc-line); background:#fff; color:var(--mc-sub); cursor:pointer; }
+          .ec-controls button:hover { border-color:#cfdcee; color:var(--mc-ink); }
+          .ec-controls button.is-active { background:#fff; color:var(--mc-brand); border-color:var(--mc-brand); font-weight:600; }
+          .ec-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:14px; }
+          @media (max-width:1000px){ .ec-grid { grid-template-columns:1fr; } }
+          .ec-card { background:#fff; border:1px solid var(--mc-line); border-radius:10px; padding:12px 14px 8px; }
+          .ec-card .ec-card-title { font-size:12px; color:var(--mc-sub); margin-bottom:6px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+          .ec-card .ec-card-title b { color:var(--mc-ink); font-weight:600; }
+          .ec-legend { display:flex; gap:14px; font-size:11px; color:var(--mc-sub); flex-wrap:wrap; }
+          .ec-legend i { display:inline-block; width:14px; height:2px; border-radius:2px; vertical-align:middle; margin-right:5px; }
+          .ec-chart svg { width:100%; height:auto; display:block; }
+          .ec-hint { font-size:11px; color:#a4690f; background:#fff; border:1px solid #f0dcb4; border-radius:8px; padding:7px 10px; margin:0 0 8px; line-height:1.6; }
+          .ec-hint a { color:#a4690f; text-decoration:underline; }
+          .ec-risk-list { display:flex; flex-direction:column; gap:8px; padding-bottom:8px; }
+          .ec-risk-item { border:1px solid var(--mc-line); border-radius:8px; padding:9px 12px; background:#fff; }
+          .ec-risk-item .ec-risk-top { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; }
+          .ec-risk-item .ec-risk-mail { color:var(--mc-ink); font-weight:600; word-break:break-all; }
+          .ec-risk-item .ec-risk-meta { color:var(--mc-sub); font-size:11px; margin-top:3px; }
+          .ec-risk-badge { font-size:10px; font-weight:700; border-radius:999px; padding:2px 9px; flex:none; letter-spacing:.5px; }
+          .ec-risk-badge.is-high { color:#c0392b; background:#fff; border:1px solid #f5c9c4; }
+          .ec-risk-badge.is-watch { color:#a4690f; background:#fff; border:1px solid #f0dcb4; }
+          .ec-risk-badge.is-low { color:#2b7f52; background:#fff; border:1px solid #c9e8d5; }
+          .ec-risk-reasons { margin:6px 0 0; padding-left:16px; color:var(--mc-sub); font-size:11px; line-height:1.7; }
+          .ec-risk-ok { color:#2b7f52; font-size:12px; padding:10px 4px; }
+          .ec-risk-ok small { display:block; color:var(--mc-sub); margin-top:4px; }
+        </style>
 
         <div class="view" id="mail-center">
           <!-- 二级导航：收件箱 / 自动发信 / 发信明细 / 客户速查 / 交互旅程 / 工具箱 / 邮箱设置
@@ -29693,6 +29863,9 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select><small id="profileSmtpConfigHint">465 通常选 SSL/TLS，587 通常选 STARTTLS/普通。</small></div>
                 <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给发件邮箱"></div>
                 <div class="form-field full"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea></div>
+                <div class="form-field"><label>DKIM 域名（可选）</label><input id="profileDkimDomain" placeholder="例如 mail.your-company.com，留空 = 不签名"></div>
+                <div class="form-field"><label>DKIM Selector（可选）</label><input id="profileDkimSelector" placeholder="例如 s1（与 DNS 的 s1._domainkey 记录对应）"></div>
+                <div class="form-field full"><label>DKIM 私钥（可选）</label><textarea id="profileDkimPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea><small id="profileDkimPrivateKeyHint">配置后该邮箱发出的开发信由系统自动完成 DKIM 签名，显著提升进箱率。私钥加密落库、不会明文回显；DNS 侧需同步添加 &lt;selector&gt;._domainkey 的 TXT 公钥记录。</small></div>
               </div>
             </section>
 
@@ -30104,6 +30277,15 @@ body.platform-mode .workspace-tabs { display:none !important; }
           #mail-center .mc-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
           #mail-center .mc-detail-actions .btn { height: 30px; padding: 0 14px; font-size: 12px; border-radius: 9px; flex: none; }
           #mail-center .mc-detail-actions .btn svg { width: 13px; height: 13px; flex: none; }
+          /* 单封邮件的打开 / 点击 / 回复统计：只对系统发出的信出现，压成一行药丸 */
+          #mail-center .mc-engage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+          #mail-center .mc-engage-chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid #dfe7f2; background: #f6f9fd; color: #4b5b73; }
+          #mail-center .mc-engage-chip.is-open { border-color: #cfe0f7; background: #eaf3ff; color: #2f6bc4; }
+          #mail-center .mc-engage-chip.is-click { border-color: #cfe9df; background: #eaf7f1; color: #227a58; }
+          #mail-center .mc-engage-chip.is-reply { border-color: #cfe9df; background: #e8f7f0; color: #1d7a55; }
+          #mail-center .mc-engage-chip.is-bounce { border-color: #f3d3d3; background: #fdeeee; color: #b03a3a; }
+          #mail-center .mc-engage-chip.is-zero { border-color: #e6ecf5; background: #f7f9fc; color: #8b98ab; font-weight: 500; }
+          #mail-center .mc-engage-note { color: #8b98ab; font-size: 11px; }
           #mail-center .mc-detail-empty { display: grid; place-items: center; min-height: 360px; padding: 20px; color: var(--mc-sub); font-size: 12.5px; text-align: center; }
 
           /* 客户速查 */
@@ -36150,6 +36332,16 @@ body.platform-mode .workspace-tabs { display:none !important; }
       color: #b45309;
     }
     .af-node[data-status="paused"] .af-node-progress > i { background: #b45309; box-shadow: 0 0 10px rgba(251, 191, 36, .6); }
+
+    /* 失败：这一步报错中止，没有在跑的任务；不显示进度百分数 */
+    .af-node[data-status="failed"] { border-color: rgba(190, 18, 60, .34); background: #fdf7f8; }
+    .af-node[data-status="failed"] .af-node-head h3 { color: #9f1239; }
+    .af-node[data-status="failed"] .af-chip {
+      background: rgba(190, 18, 60, .10);
+      border-color: transparent;
+      color: #9f1239;
+    }
+    .af-node[data-status="failed"] .af-node-progress > i { background: #be123c; opacity: .32; }
 
     .af-node:not([data-status="running"]):hover {
       transform: translateY(-3px);

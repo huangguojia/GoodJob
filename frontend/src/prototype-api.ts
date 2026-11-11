@@ -102,7 +102,7 @@ import {
   loadEmailTrackingConfig, loadSenderMailboxes, openSenderMailboxModal, renderProfile, saveEmailTrackingConfig,
   saveProfileEmailBinding, sendProfileTestEmail, testProfileImap, updateStoredUser
 } from "./modules/profile";
-import { closeLeadDrawer, createLead, openLead, reloadLeads, renderLeads } from "./modules/leads";
+import { closeLeadDrawer, createLead, openLead, openLeadAssignModal, openLeadAssignmentsModal, reloadLeads, renderLeads } from "./modules/leads";
 import {
   closeDealDrawer, formatDateTime, openDealModal, refreshClosedDeals, refreshDealArchive, refreshDealsData,
   renderPipeline
@@ -609,7 +609,7 @@ export function openModal(title: string, body: string, foot: string, options: Mo
   document.body.style.overflow = "hidden";
   modalRoot.setAttribute("role", "dialog");
   modalRoot.removeAttribute("aria-describedby");
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "document-asset-manager-modal", "deal-editor-modal", "ac-guide-modal", "outreach-policy-modal", "outreach-plan-detail-modal", "outreach-plan-create-modal", "sender-mailbox-modal", "customer-editor-modal", "supplier-editor-modal", "ord-edit-modal", "od-pick-modal");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "document-asset-manager-modal", "deal-editor-modal", "ac-guide-modal", "outreach-policy-modal", "outreach-plan-detail-modal", "outreach-plan-create-modal", "sender-mailbox-modal", "lead-assignment-modal", "customer-editor-modal", "supplier-editor-modal", "ord-edit-modal", "od-pick-modal");
   if (options.modalClass) qs<HTMLElement>("#appModal .modal")?.classList.add(options.modalClass);
   qs("#modalTitle")!.textContent = title;
   qs<HTMLElement>("#modalDescription")!.textContent = options.description
@@ -3411,6 +3411,14 @@ function installEvents() {
     renderLeads();
   });
   qs<HTMLButtonElement>("#leadCreateOutreachBatchButton")?.addEventListener("click", () => createLeadOutreachBatchFromSelection());
+  qs<HTMLButtonElement>("#leadAssignButton")?.addEventListener("click", () => {
+    if (!state.selectedLeadIds.length) {
+      toast("先勾选要指派的线索", "error");
+      return;
+    }
+    void openLeadAssignModal([...state.selectedLeadIds]);
+  });
+  qs<HTMLButtonElement>("#leadAssignmentsButton")?.addEventListener("click", () => void openLeadAssignmentsModal());
   qs("#leadDrawerBackdrop")?.addEventListener("click", closeLeadDrawer);
   ["#leadFinderGoalInput", "#leadProductKeywords", "#leadCountries", "#leadIndustryInput", "#leadCustomerTypes", "#leadExcludeKeywords"].forEach((selector) => {
     qs<HTMLElement>(selector)?.addEventListener("input", renderLeadFinderSearchLinks);

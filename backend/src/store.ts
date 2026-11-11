@@ -419,7 +419,14 @@ export interface CrmStore {
   readProspectRunFeed?(
     input: ProspectRunFeedReadInput
   ): Promise<ProspectRunFeedReadResult>;
-  readBarrier(): Promise<void>;
+  /**
+   * 把 MySQL 里的探索执行状态重新读进内存（30 张表）。
+   *
+   * maxAgeMs > 0 时允许「复用刚读过的结果」：距离上一次重载完成不足 maxAgeMs
+   * 就直接返回，不再重复读表。只给进度轮询这类「差 1 秒无所谓」的读接口用，
+   * 写路径与调度路径一律不传，保持每次都读。
+   */
+  readBarrier(maxAgeMs?: number): Promise<void>;
   getIamCapabilitySnapshot?(actor: SessionUser): Promise<IamCapabilitySnapshot>;
   validateIamSession?(actor: SessionUser): Promise<{ valid: boolean; message?: string }>;
   resolveIamDataScope?(actor: SessionUser, permissionCode: string): Promise<{ tenantWide: boolean; ownerIds: string[] }>;
@@ -647,7 +654,7 @@ export const memoryStore: CrmStore = {
   async readProspectRunFeed(input) {
     return readProspectRunFeedMemory(memoryStore, input);
   },
-  async readBarrier() {
+  async readBarrier(_maxAgeMs?: number) {
     // Memory mode has no asynchronous persistence queue.
   },
   async close() {

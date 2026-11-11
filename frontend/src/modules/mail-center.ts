@@ -44,6 +44,7 @@ export const MAIL_SECTION_ITEMS: MailSectionItem[] = [
   { key: "inbox", label: "收件箱", icon: "inbox", view: "mail-center", tab: "inbox" },
   { key: "outreach-batches", label: "自动发信", icon: "send", view: "outreach-batches" },
   { key: "outreach-journey", label: "发信明细", icon: "chart", view: "outreach-journey" },
+  { key: "email-return-flow", label: "回流分析", icon: "reply", view: "email-return-flow" },
   { key: "lookup", label: "客户速查", icon: "user", view: "mail-center", tab: "lookup" },
   { key: "journey", label: "交互旅程", icon: "route", view: "mail-center", tab: "journey" },
   { key: "toolbox", label: "工具箱", icon: "grid", view: "mail-center", tab: "toolbox" },
@@ -560,6 +561,26 @@ function renderMailCenterMessageDetail() {
   const recipientPills = shownRecipients.map((addr) => `<span class="mc-meta-pill">${escapeHtml(addr)}</span>`).join("")
     + (hiddenCount > 0 ? `<button type="button" class="mc-meta-pill mc-meta-more" data-mc-expand-to title="展开全部收件人">+${hiddenCount}</button>` : "")
     + recipients.slice(3).map((addr) => `<span class="mc-meta-pill" data-mc-hidden-to hidden>${escapeHtml(addr)}</span>`).join("");
+  // 这封邮件自己的打开/点击/回复：只要台账里认得出这封（engagement 非空）就显示。
+  // 不按 direction 过滤 —— 自己发的信在「已发送」和对方「收件箱」各有一份，
+  // 用户点开哪一份都该看到同一组数字（对外收到的新信没有台账，自然是空）。
+  const engagement = message.engagement;
+  const engagementStrip = engagement ? (() => {
+    const opened = Number(engagement.openCount || 0);
+    const clicked = Number(engagement.clickCount || 0);
+    const lastOpen = engagement.lastOpenedAt || engagement.firstOpenedAt;
+    return `<div class="mc-engage" aria-label="这封邮件的打开与回复统计">
+        <span class="mc-engage-chip is-open${opened ? "" : " is-zero"}">打开 ${opened} 次</span>
+        ${clicked ? `<span class="mc-engage-chip is-click">点击 ${clicked} 次</span>` : ""}
+        ${engagement.repliedAt
+          ? `<span class="mc-engage-chip is-reply">已回复 ${escapeHtml(mcDateTime(engagement.repliedAt))}</span>`
+          : `<span class="mc-engage-chip is-zero">尚未回复</span>`}
+        ${engagement.bouncedAt ? `<span class="mc-engage-chip is-bounce">退信</span>` : ""}
+        <small class="mc-engage-note">${lastOpen
+          ? `最近打开 ${escapeHtml(mcDateTime(lastOpen))}`
+          : "还没有打开信号（对方客户端可能拦截了远程图片）"}</small>
+      </div>`;
+  })() : "";
   detail.innerHTML = `
     <div class="mc-detail-scroll">
     <div class="mc-detail-head">
@@ -583,6 +604,7 @@ function renderMailCenterMessageDetail() {
         <button type="button" class="btn mc-btn-journey ${mailCenterState.journeyMenuOpen ? "is-open" : ""}" data-mc-journey-toggle aria-expanded="${mailCenterState.journeyMenuOpen ? "true" : "false"}" title="按${message.direction === "inbound" ? "发信人" : "收件人"}或按这封邮件的线程看往来">${mcIcon("route")}旅程</button>
         <button type="button" class="btn mc-btn-ghost" data-mc-mark-unread title="列表里重新显示为未读">标记为未读</button>
       </div>
+      ${engagementStrip}
       ${mailCenterState.journeyMenuOpen ? `<div class="mc-journey-entry">
         <button type="button" data-mc-mail-journey="${escapeHtml(message.id)}" data-mc-journey-scope="person">
           <b>与${message.direction === "inbound" ? "发信人" : "收件人"}的全部往来</b>

@@ -30,6 +30,10 @@ export function renderLeads() {
   const cards = qs<HTMLElement>("#leadMobileList");
   if (!tbody || !cards) return;
   const chipsWrap = qs<HTMLElement>("#leadStageChips");
+  const canAssign = canAssignLeads();
+  const canAssignAny = canAssignAnyTeamLead();
+  const userId = state.user?.id || "";
+  const assignableLead = (lead: Lead) => canAssign && (canAssignAny || lead.ownerId === userId || lead.assignedBy === userId);
   const activeLeads = state.leadView === "trash" ? state.leadTrash : state.leads;
   const q = state.leadSearch.trim().toLowerCase();
   const sourceOptions = [...new Set(activeLeads.map(leadSourceLabel))].sort((a, b) => a.localeCompare(b, "zh-CN"));
@@ -79,7 +83,7 @@ export function renderLeads() {
     <td>${badge(state.leadView === "trash" ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), state.leadView === "trash" ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}</td>
     <td><div class="lead-row-actions">${state.leadView === "trash"
       ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
-      : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</div></td>
+      : `${assignableLead(lead) ? `<button class="btn tiny" type="button" data-lead-row-action="assign" data-lead-row-id="${lead.id}">指派</button>` : ""}<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</div></td>
   </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
 
   cards.innerHTML = pageRows.length ? pageRows.map((lead) => `
@@ -89,7 +93,7 @@ export function renderLeads() {
       <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i><i>${escapeHtml(formatLeadDate(lead.createdAt))}</i></span>
       <span class="lead-mobile-actions">${state.leadView === "trash"
         ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
-        : `<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</span>
+        : `${assignableLead(lead) ? `<button class="btn tiny" type="button" data-lead-row-action="assign" data-lead-row-id="${lead.id}">指派</button>` : ""}<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</span>
     </article>`).join("") : `<div class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</div>`;
 
   qsa<HTMLButtonElement>("[data-open-lead]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
@@ -119,6 +123,7 @@ export function renderLeads() {
     if (!lead) return;
     const action = button.dataset.leadRowAction;
     if (action === "trash") openLeadTrashModal(lead);
+    if (action === "assign") void openLeadAssignModal([lead.id]);
     if (action === "restore") void restoreLead(lead.id);
     if (action === "permanent") openLeadPermanentModal(lead);
   }));
@@ -259,6 +264,10 @@ function renderLeadDrawer(
       <div class="lead-dedupe"><span>去重依据</span><b>${escapeHtml(dedupeBasis)}</b><small>同一业务员、同一平台渠道和同一外部编号会复用原线索；不同业务员数据相互隔离。</small></div>
       ${sourceEvent?.rawPayload ? `<details class="lead-raw-payload"><summary>查看平台原始载荷</summary><pre>${escapeHtml(sourceEvent.rawPayload)}</pre></details>` : ""}
     </section>
+    <section class="lead-detail-section" id="leadDevEmailSection">
+      <div class="lead-section-head"><h3>开发信历史</h3><span>发出去的每一封、打开与回复</span></div>
+      <div class="lead-dev-email-loading">正在读取开发信记录…</div>
+    </section>
     <section class="lead-detail-section"><h3>跟进记录</h3>
     <div class="timeline">
       ${activities.length ? activities.map((activity) => `<div class="timeline-item"><b>${LEAD_ACTIVITY_LABEL[activity.type] || activity.type}</b><span>${escapeHtml(activity.content)}</span><small>${new Date(activity.createdAt).toLocaleString("zh-CN")}${activity.nextFollowAt ? " · 下次：" + escapeHtml(activity.nextFollowAt) : ""}</small></div>`).join("") : `<div class="timeline-item"><span>暂无跟进记录</span></div>`}
@@ -290,6 +299,68 @@ function renderLeadDrawer(
   if (sourceProspect) {
     bindProcurementContextActions(drawer, sourceProspect, procurement);
   }
+  void loadLeadDevEmailHistory(lead);
+}
+
+// ── 线索抽屉里的「开发信历史」：与客户详情同一口径（/api/outreach-journey）──
+interface LeadDevEmailLite {
+  subject: string;
+  sentAt: string;
+  openCount: number;
+  clickCount: number;
+  repliedAt: string;
+  bouncedAt: string;
+  dispatchStatus: string;
+}
+interface LeadDevEmailView {
+  emails: LeadDevEmailLite[];
+  stats: { outboundCount: number; replyCount: number; openCount: number; clickCount: number; bounceCount: number };
+}
+
+async function loadLeadDevEmailHistory(lead: Lead) {
+  const box = qs<HTMLElement>("#leadDevEmailSection");
+  if (!box) return;
+  if (!lead.email) {
+    box.innerHTML = `<div class="lead-section-head"><h3>开发信历史</h3><span>补齐邮箱后就能发开发信</span></div>
+      <div class="lead-dev-email-empty">这条线索还没有邮箱，发出第一封后打开与回复会记在这里。</div>`;
+    return;
+  }
+  try {
+    const view = await api<LeadDevEmailView>(
+      `/api/outreach-journey?entityType=lead&entityId=${encodeURIComponent(lead.id)}`
+    );
+    if (!box.isConnected || state.selectedLeadId !== lead.id) return;
+    const stats = view.stats;
+    const emails = (view.emails || []).slice().reverse();
+    const hasTracked = (stats.outboundCount || 0) > 0;
+    box.innerHTML = `<div class="lead-section-head"><h3>开发信历史</h3><span>发出去的每一封、打开与回复</span></div>
+      ${hasTracked ? `<div class="lead-dev-email-summary">
+        <span><small>已发</small><b>${stats.outboundCount} 封</b></span>
+        <span class="is-open"><small>打开</small><b>${stats.openCount || 0} 次</b></span>
+        <span class="is-reply"><small>回复</small><b>${stats.replyCount || 0} 条</b></span>
+        <span><small>点击</small><b>${stats.clickCount || 0} 次</b></span>
+        ${stats.bounceCount ? `<span class="is-bad"><small>退信</small><b>${stats.bounceCount} 封</b></span>` : ""}
+      </div>` : ""}
+      ${emails.length ? `<div class="lead-dev-email-list">${emails.slice(0, 6).map((email) => {
+        const flags = [
+          email.openCount ? badge(`打开 ${email.openCount}`, "blue") : "",
+          email.clickCount ? badge(`点击 ${email.clickCount}`, "blue") : "",
+          email.repliedAt ? badge("已回复", "green") : "",
+          email.bouncedAt ? badge("已退信", "red") : "",
+          email.dispatchStatus && email.dispatchStatus !== "sent" ? badge("结果待确认", "amber") : ""
+        ].filter(Boolean).join("");
+        return `<div class="lead-dev-email-row">
+          <b>${escapeHtml(email.subject || "(无主题)")}</b>
+          <small>${escapeHtml(formatLeadDate(email.sentAt))}</small>
+          <span>${flags}</span>
+        </div>`;
+      }).join("")}</div>` : `<div class="lead-dev-email-empty">还没有发过开发信。点右上角「写开发信」发出第一封，打开与回复会记在这里。</div>`}`;
+  } catch (error) {
+    if (!box.isConnected || state.selectedLeadId !== lead.id) return;
+    const message = error instanceof Error ? error.message : "开发信历史加载失败";
+    box.innerHTML = `<div class="lead-section-head"><h3>开发信历史</h3></div>
+      <div class="lead-dev-email-empty">${escapeHtml(message)}</div>`;
+  }
 }
 
 export async function reloadLeads() {
@@ -301,6 +372,182 @@ export async function reloadLeads() {
   state.leadTrash = trash.leads;
   renderLeads();
   await refreshDashboardOnly();
+}
+
+// ── 线索指派（上级 → 员工） ────────────────────────────────────────────────
+
+const LEAD_ROLE_LABEL: Record<string, string> = {
+  sales: "业务员",
+  manager: "主管",
+  admin: "管理员",
+  super_admin: "平台管理员"
+};
+
+/**
+ * 当前账号能否指派线索。
+ * legacy 角色走 role 判断，IAM 走能力快照——两条路后端都是同一个 `lead.assign` 权限码。
+ */
+export function canAssignLeads() {
+  const user = state.user;
+  if (!user) return false;
+  if (state.iamCapabilities) return Boolean(state.iamCapabilities.permissions["lead.assign"]?.length);
+  if (user.iamPermissions) return Boolean(user.iamPermissions["lead.assign"]?.length);
+  return user.role === "admin" || user.role === "manager";
+}
+
+/**
+ * 是否属于「上级」口径（能指派本团队任意线索）。
+ * 与后端 `isSupervisorAssigner` 同口径：legacy admin/manager，或 IAM 授权范围不是 self。
+ */
+export function canAssignAnyTeamLead() {
+  const user = state.user;
+  if (!user || !canAssignLeads()) return false;
+  const scopes = state.iamCapabilities?.permissions["lead.assign"] || user.iamPermissions?.["lead.assign"];
+  if (scopes?.length) return scopes.some((scope) => scope !== "self");
+  return user.role === "admin" || user.role === "manager";
+}
+
+interface LeadAssignMember {
+  id: string;
+  name: string;
+  role: string;
+}
+
+interface LeadAssignmentRow {
+  leadId: string;
+  company: string;
+  country: string;
+  stage: string;
+  status: string;
+  ownerId: string;
+  ownerName: string;
+  fromOwnerName: string;
+  assignedByName: string;
+  assignedAt: string;
+  note: string;
+}
+
+function assignmentTimeText(value: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+/** 打开指派弹窗；leadIds 多条时走批量接口 */
+export async function openLeadAssignModal(leadIds: string[], presetAssignee = "") {
+  if (!canAssignLeads()) {
+    toast("没有指派线索的权限", "error");
+    return;
+  }
+  if (!leadIds.length) {
+    toast("先勾选要指派的线索", "error");
+    return;
+  }
+  let members: LeadAssignMember[] = [];
+  try {
+    const result = await api<{ members: LeadAssignMember[] }>("/api/leads/assignable-members");
+    members = result.members;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "可指派员工读取失败", "error");
+    return;
+  }
+  if (!members.length) {
+    toast("团队里没有可指派的在职员工", "error");
+    return;
+  }
+  const bulk = leadIds.length > 1;
+  openModal(bulk ? `指派 ${leadIds.length} 条线索` : "指派线索", `
+    <div class="form-grid">
+      <div class="form-field full"><label>指派给</label><select id="leadAssignTarget">${members.map((item) => `<option value="${item.id}" ${item.id === presetAssignee ? "selected" : ""}>${escapeHtml(item.name)} · ${escapeHtml(LEAD_ROLE_LABEL[item.role] || item.role)}</option>`).join("")}<option value="${escapeHtml(state.user?.id || "")}" ${presetAssignee === state.user?.id ? "selected" : ""}>我自己 · 收回名下</option></select><small class="form-hint">接收人须为本团队在职员工；确认后线索负责人立即变更，原负责人可在跟进记录里看到指派留痕。</small></div>
+      <div class="form-field full"><label>备注（可选）</label><input id="leadAssignNote" maxlength="500" placeholder="例如：德国区优先跟进 / 展会名单"></div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="leadAssignConfirm">确认指派</button>`);
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#leadAssignConfirm")?.addEventListener("click", async () => {
+    const button = qs<HTMLButtonElement>("#leadAssignConfirm");
+    if (button?.disabled) return;
+    const toOwnerId = qs<HTMLSelectElement>("#leadAssignTarget")?.value || "";
+    const note = qs<HTMLInputElement>("#leadAssignNote")?.value.trim() || "";
+    if (!toOwnerId) {
+      toast("请选择接收人", "error");
+      return;
+    }
+    if (button) {
+      button.disabled = true;
+      button.textContent = "指派中…";
+    }
+    try {
+      if (bulk) {
+        const result = await api<{ assigned: string[]; skipped: Array<{ leadId: string; reason: string }> }>("/api/leads/bulk-assign", {
+          method: "POST",
+          body: JSON.stringify({ ids: leadIds, toOwnerId, note })
+        });
+        toast(
+          result.skipped.length
+            ? `已指派 ${result.assigned.length} 条，${result.skipped.length} 条未处理：${result.skipped[0].reason}`
+            : `已指派 ${result.assigned.length} 条线索`,
+          result.skipped.length ? "warn" : "ok"
+        );
+      } else {
+        const result = await api<{ message: string }>(`/api/leads/${encodeURIComponent(leadIds[0])}/assign`, {
+          method: "POST",
+          body: JSON.stringify({ toOwnerId, note })
+        });
+        toast(result.message);
+      }
+      closeModal();
+      state.selectedLeadIds = [];
+      await reloadLeads();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "指派失败", "error");
+      if (button) {
+        button.disabled = false;
+        button.textContent = "确认指派";
+      }
+    }
+  });
+}
+
+/** 指派一览：当前账号有权看到的指派记录，支持逐条改派 */
+export async function openLeadAssignmentsModal() {
+  if (!canAssignLeads()) {
+    toast("没有查看线索指派的权限", "error");
+    return;
+  }
+  let rows: LeadAssignmentRow[] = [];
+  try {
+    const result = await api<{ assignments: LeadAssignmentRow[] }>("/api/leads/assignments");
+    rows = result.assignments;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "指派记录读取失败", "error");
+    return;
+  }
+  openModal("线索指派一览", `
+    <div class="lead-assignment-summary">共 ${rows.length} 条指派记录 · 改派会保留历史留痕</div>
+    <div class="table-wrap lead-assignment-table-wrap">
+      <table style="min-width:0">
+        <thead><tr><th>线索</th><th>原负责人</th><th>现负责人</th><th>指派人</th><th>指派时间</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody>${rows.length ? rows.map((row) => `<tr>
+          <td><button class="lead-name" data-open-assigned-lead="${escapeHtml(row.leadId)}">${escapeHtml(row.company)}</button><small>${escapeHtml(row.country || "国家待补充")} · ${escapeHtml(row.stage || "阶段待定")}</small></td>
+          <td>${escapeHtml(row.fromOwnerName || "未分配")}</td>
+          <td><b>${escapeHtml(row.ownerName)}</b></td>
+          <td>${escapeHtml(row.assignedByName || "—")}</td>
+          <td>${escapeHtml(assignmentTimeText(row.assignedAt))}</td>
+          <td>${escapeHtml(row.note || "—")}</td>
+          <td><button class="btn tiny" type="button" data-reassign-lead="${escapeHtml(row.leadId)}" data-reassign-owner="${escapeHtml(row.ownerId)}">改派</button></td>
+        </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">还没有指派记录。在线索列表里勾选线索后点「指派」即可。</td></tr>`}</tbody>
+      </table>
+    </div>
+  `, `<button class="btn" data-modal-close>关闭</button>`);
+  qs("#appModal .modal")?.classList.add("lead-assignment-modal");
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qsa<HTMLButtonElement>("[data-reassign-lead]").forEach((button) => button.addEventListener("click", () => {
+    void openLeadAssignModal([button.dataset.reassignLead || ""], button.dataset.reassignOwner || "");
+  }));
+  qsa<HTMLButtonElement>("[data-open-assigned-lead]").forEach((button) => button.addEventListener("click", () => {
+    closeModal();
+    void openLead(button.dataset.openAssignedLead || "");
+  }));
 }
 
 function openLeadTrashModal(lead: Lead) {

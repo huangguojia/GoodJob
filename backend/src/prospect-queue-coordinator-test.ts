@@ -257,6 +257,34 @@ assert.throws(
   /REDIS_URL/
 );
 
+// 空转短路：没有任何 queued/running 运行时，synchronize 不得触发 readBarrier
+// （readBarrier = 搜索执行状态 24 张表整块重读 + 整个 store 深拷贝）
+const savedRuns = store.prospectSearchRuns.splice(
+  0,
+  store.prospectSearchRuns.length
+);
+let barrierCalls = 0;
+const originalBarrier = store.readBarrier;
+store.readBarrier = async () => {
+  barrierCalls += 1;
+};
+await coordinator.synchronize();
+assert.equal(barrierCalls, 0, "无 queued/running 运行时不得重载搜索执行状态");
+
+// 反向验证：存在 running 运行时必须重载，否则短路会把真实任务挡掉
+const sampleRun = savedRuns[0];
+assert.ok(sampleRun);
+store.prospectSearchRuns.push({ ...sampleRun, status: "running" });
+await coordinator.synchronize();
+assert.ok(barrierCalls >= 1, "存在 running 运行时必须重载搜索执行状态");
+
+store.readBarrier = originalBarrier;
+store.prospectSearchRuns.splice(
+  0,
+  store.prospectSearchRuns.length,
+  ...savedRuns
+);
+
 await coordinator.stop();
 
 console.log("Prospect queue coordination tests passed");

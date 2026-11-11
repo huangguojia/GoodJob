@@ -456,6 +456,10 @@ export interface User {
   imapPassword?: string;
   hasImapPassword?: boolean;
   mailCredentialMigrationRequired?: boolean;
+  /** DKIM 签名（可选）：配置后该账号发出的邮件由 CRM 在编译阶段完成 DKIM-Signature 签名 */
+  dkimDomain?: string;
+  dkimSelector?: string;
+  dkimPrivateKey?: string;
   inboundSyncEnabled?: boolean;
   lastInboundSyncAt?: string;
   lastInboundSyncStatus?: "ok" | "error" | "";
@@ -476,6 +480,10 @@ export interface SessionUser {
   role: Role;
   iamPermissions?: Record<string, Array<"self" | "org_unit" | "org_subtree" | "tenant" | "public_pool">>;
   iamRoleNames?: string[];
+  dkimDomain?: string;
+  dkimSelector?: string;
+  dkimPrivateKey?: string;
+  hasDkimPrivateKey?: boolean;
   iamSource?: "iam" | "legacy_compatibility" | "platform";
   iamDataScope?: {
     permissionCode: string;
@@ -899,6 +907,15 @@ export interface Lead {
   deletedBy?: string;
   purgeAt?: string;
   statusBeforeDelete?: LeadStatus;
+  /**
+   * 线索指派（上级把进入自己账号的线索派给员工）。
+   * 只保留「最近一次」的指派信息用于一览表；完整改派历史写 leadActivities。
+   */
+  assignedBy?: string;
+  assignedAt?: string;
+  /** 最近一次指派前的负责人，用于展示「张三 → 李四」 */
+  assignmentFrom?: string;
+  assignmentNote?: string;
 }
 
 export interface LeadSourceEvent {
@@ -1256,6 +1273,8 @@ export interface OutboundEmailLog {
   payloadHash?: string;
   dispatchStatus?: "pending" | "sent" | "uncertain";
   dispatchError?: string;
+  /** 实际投递所用的发件邮箱（未启用邮箱池时 = 账号主发件邮箱）；用于池内单账号日限额统计 */
+  senderEmail?: string;
   sentAt: string;
   openCount?: number;
   clickCount?: number;
@@ -1330,6 +1349,12 @@ export interface SenderMailbox {
   imapPort: number;
   imapUser: string;
   imapPassword: string;
+  /** DKIM 签名（可选）：配置后该池内邮箱发出的邮件在编译阶段完成 DKIM-Signature 签名 */
+  dkimDomain?: string;
+  dkimSelector?: string;
+  dkimPrivateKey?: string;
+  /** 单账号每日外发上限（轮换时超过即跳过该账号），默认 50 */
+  dailyLimit?: number;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

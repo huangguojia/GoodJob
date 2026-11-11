@@ -3,6 +3,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import type { Pool } from "mysql2/promise";
 import nodemailer from "nodemailer";
 import { decryptMailCredential } from "./credential-security.js";
+import { bumpMailboxSyncCache, getMailboxSyncEpoch } from "./sender-mailbox.js";
 import type { SenderMailbox } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1063,7 @@ class MysqlMailCenterRepository {
         state.lastSyncScanned, state.lastSyncSaved, JSON.stringify(state.syncCursor), new Date(), mailboxId
       ]
     );
+    bumpMailboxSyncCache();
   }
 
   async setSyncSettings(mailboxId: string, syncEnabled: boolean, syncIntervalMinutes: number) {
@@ -1069,6 +1071,7 @@ class MysqlMailCenterRepository {
       "UPDATE sender_mailboxes SET sync_enabled = ?, sync_interval_minutes = ?, updated_at = ? WHERE id = ?",
       [syncEnabled ? 1 : 0, syncIntervalMinutes, new Date(), mailboxId]
     );
+    bumpMailboxSyncCache();
   }
 
   async listAccountsForSync() {
@@ -1130,6 +1133,11 @@ export class MailCenterSyncService {
   private readonly maxSourceBytes: number;
   private readonly minIntervalMinutes: number;
   private readonly lastAttemptAt = new Map<string, number>();
+  // 「哪些邮箱开了同步」的缓存：写路径 bumpMailboxSyncCache() 时失效，空闲时
+  // 不再每分钟重读一遍 sender_mailboxes。5 分钟 TTL 兜底跨进程写入。
+  private cachedAccounts: Array<Record<string, unknown>> | null = null;
+  private cachedAccountsEpoch = -1;
+  private cachedAccountsAt = 0;
 
   constructor(private readonly pool: Pool, options: MailCenterSyncOptions = {}) {
     this.tickMs = options.tickMs ?? 60_000;
@@ -1160,11 +1168,25 @@ export class MailCenterSyncService {
     return mailCenterRepository;
   }
 
+  /** 带缓存的同步候选列表：编号没变且未过兜底 TTL 就直接复用上一次结果。 */
+  private async accountsForTick() {
+    const epoch = getMailboxSyncEpoch();
+    const expired = Date.now() - this.cachedAccountsAt > 300_000;
+    if (this.cachedAccounts && !expired && epoch === this.cachedAccountsEpoch) {
+      return this.cachedAccounts;
+    }
+    const accounts = await this.repository.listAccountsForSync();
+    this.cachedAccounts = accounts;
+    this.cachedAccountsEpoch = epoch;
+    this.cachedAccountsAt = Date.now();
+    return accounts;
+  }
+
   async tick() {
     if (this.tickRunning) return;
     this.tickRunning = true;
     try {
-      const accounts = await this.repository.listAccountsForSync();
+      const accounts = await this.accountsForTick();
       const now = Date.now();
       for (const row of accounts) {
         const id = String(row.id || "");

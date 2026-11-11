@@ -755,8 +755,40 @@ try {
     "连续两轮新增率过低且重复率过高，搜索已收敛"
   );
 
+  // 空转短路：没有进行中的任务时，tick 不得触发 readBarrier（整库重载 + 全量深拷贝）。
+  // 反向验证用 readBarrier 抛哨兵错误，证明有活跃任务时确实走到了重载这一行。
+  const idleRunner = new ProspectSuperSearchRunner(store);
+  const originalReadBarrier = store.readBarrier;
+  let idleBarrierCalls = 0;
+  let activeBarrierReached = false;
+  try {
+    store.prospectSuperSearchMissions.splice(0, store.prospectSuperSearchMissions.length);
+    store.readBarrier = async () => {
+      idleBarrierCalls += 1;
+    };
+    await idleRunner.tick();
+    assert.equal(idleBarrierCalls, 0, "无进行中任务时 tick 不得重载整库");
+
+    store.prospectSuperSearchMissions.push({ ...completed.mission, status: "queued" });
+    store.readBarrier = async () => {
+      activeBarrierReached = true;
+      throw new Error("__BARRIER_REACHED__");
+    };
+    const previousEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
+    try {
+      await idleRunner.tick();
+    } finally {
+      process.env.NODE_ENV = previousEnv;
+    }
+    assert.ok(activeBarrierReached, "有进行中任务时 tick 必须重载整库");
+  } finally {
+    store.readBarrier = originalReadBarrier;
+  }
+
   console.log(JSON.stringify({
     ok: true,
+    idleTickSkipsReload: true,
     previewCells: preview.maximumCells,
     missionStatus: completed.mission.status,
     rounds: completed.rounds.length,
