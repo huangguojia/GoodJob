@@ -251,8 +251,11 @@ export interface FollowupSyncDispatchResult {
 }
 
 export interface FollowupSyncDeps {
-  /** 「我的」客户列表（与 GET /api/customers scope=mine 同口径，由 server.ts 注入 ownedCustomersFor）。 */
-  customersOf: (user: SessionUser) => Array<{ id: string; whatsapp?: string; whatsappPhone?: string }>;
+  /**
+   * 「我的」客户列表（与 GET /api/customers scope=mine 同口径，由 server.ts 注入 ownedCustomersFor）。
+   * `company` 只给预演用（列表里要显示「→ 客户 某某公司」），不参与匹配。
+   */
+  customersOf: (user: SessionUser) => Array<{ id: string; company?: string; whatsapp?: string; whatsappPhone?: string }>;
   /** 该用户启用的 AI 模型配置（server.ts 注入 getAiConfig(user)），null = 没配。后台补全的降级档。 */
   aiConfig: (user: SessionUser) => AiModelConfig | null;
   /** 线索创建（server.ts 注入 createLeadFromSource 的包装，保持幂等语义）。 */
@@ -390,6 +393,94 @@ function defaultEnqueueRefine(task: RefineTask, deps: FollowupSyncDeps): void {
         refineDraining = false;
       }
     })();
+  });
+}
+
+/** 客户在号码索引里的形状。`company` 只用于预演展示，不参与匹配。 */
+export interface FollowupCustomerRef {
+  id: string;
+  company?: string;
+  whatsapp?: string;
+  whatsappPhone?: string;
+}
+
+/**
+ * 号码（归一化 `+数字`）→ 客户。
+ *
+ * run 与 preview **共用这一份**：预演说「会更新客户 A」、实际却写成线索或跳过，
+ * 是最伤信任的一种不一致 —— 两处各写一遍必然漂移。
+ */
+export function indexCustomersByPhone(customers: FollowupCustomerRef[]): Map<string, FollowupCustomerRef[]> {
+  const index = new Map<string, FollowupCustomerRef[]>();
+  for (const customer of customers) {
+    for (const raw of [customer.whatsappPhone, customer.whatsapp]) {
+      const key = normalizePhone(raw);
+      if (!key) continue;
+      const bucket = index.get(key) ?? [];
+      if (!bucket.some((item) => item.id === customer.id)) bucket.push(customer);
+      index.set(key, bucket);
+    }
+  }
+  return index;
+}
+
+/** 预演 payload：只有会话身份，没有消息正文 —— 「看一眼」不该把聊天记录再传一遍。 */
+export const followupPreviewPayloadSchema = z.object({
+  runDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, "runDate 必须是 YYYY-MM-DD"),
+  conversations: z.array(z.object({
+    conversationId: z.string().min(1).max(180),
+    contactName: z.string().max(180).default(""),
+    contactPhone: z.string().max(40).default("")
+  })).max(MAX_CONVERSATIONS_PER_BATCH).default([])
+});
+
+/** 一个会话在 CRM 侧「会变成什么」。只读结论，不含任何正文。 */
+export interface FollowupPreviewItem {
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  /** customer = 写入已有客户的跟进；lead = 新建线索；ambiguous = 号码对应多个客户，同步会跳过。 */
+  match: "customer" | "lead" | "ambiguous";
+  customerId: string | null;
+  /** 命中客户时是客户公司名（客户没填公司则为空串）。 */
+  customerName: string;
+  /** 给人看的一句话，直接显示在列表行上。 */
+  note: string;
+}
+
+/**
+ * 预演：只回答「这一条会写成客户跟进，还是会新建线索」。
+ *
+ * **不写库、不调模型、不留对接日志**。判据与 `runWhatsappFollowupSync` 完全一致
+ * （共用 `indexCustomersByPhone`），只是把「写」换成「说」。
+ */
+export function previewWhatsappFollowupSync(
+  user: SessionUser,
+  payload: { runDate: string; conversations: Array<{ conversationId: string; contactName: string; contactPhone: string }> },
+  deps: Pick<FollowupSyncDeps, "customersOf">
+): FollowupPreviewItem[] {
+  const index = indexCustomersByPhone(deps.customersOf(user));
+  return payload.conversations.map((conversation) => {
+    const matched = index.get(normalizePhone(conversation.contactPhone)) ?? [];
+    const base = {
+      conversationId: conversation.conversationId,
+      contactName: conversation.contactName,
+      contactPhone: conversation.contactPhone
+    };
+    if (matched.length > 1) {
+      return { ...base, match: "ambiguous" as const, customerId: null, customerName: "", note: `CRM 里有 ${matched.length} 个客户用这个号码，同步会跳过，请先合并重复客户` };
+    }
+    if (matched.length === 1) {
+      const customerName = String(matched[0].company || "").trim();
+      return {
+        ...base,
+        match: "customer" as const,
+        customerId: matched[0].id,
+        customerName,
+        note: customerName ? `写入客户「${customerName}」的跟进` : "写入已有客户的跟进"
+      };
+    }
+    return { ...base, match: "lead" as const, customerId: null, customerName: "", note: "CRM 里没有这个号码，会新建一条线索" };
   });
 }
 
@@ -543,16 +634,7 @@ export async function runWhatsappFollowupSync(
 ): Promise<FollowupSyncDispatchResult> {
   const clock = deps.clock ?? (() => new Date());
   const store = getStore();
-  const customersByPhone = new Map<string, Array<{ id: string }>>();
-  for (const customer of deps.customersOf(user)) {
-    for (const raw of [customer.whatsappPhone, customer.whatsapp]) {
-      const key = normalizePhone(raw);
-      if (!key) continue;
-      const bucket = customersByPhone.get(key) ?? [];
-      if (!bucket.some((item) => item.id === customer.id)) bucket.push(customer);
-      customersByPhone.set(key, bucket);
-    }
-  }
+  const customersByPhone = indexCustomersByPhone(deps.customersOf(user));
 
   const config = deps.aiConfig(user);
   const outcomes: FollowupSyncOutcome[] = [];

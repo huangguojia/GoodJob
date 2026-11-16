@@ -12,7 +12,7 @@ import QRCode from "qrcode";
 import { z } from "zod";
 import { canSeeOwner, hasIamPermission, publicUser, requireAuth, signToken } from "../auth.js";
 import { callAiModel } from "../ai-model-runtime.js";
-import { followupSyncPayloadSchema, runWhatsappFollowupSync } from "../whatsapp-followup-sync.js";
+import { followupPreviewPayloadSchema, followupSyncPayloadSchema, previewWhatsappFollowupSync, runWhatsappFollowupSync } from "../whatsapp-followup-sync.js";
 import { createAgentPlan } from "../ai-agent.js";
 import { type Customer, type SessionUser, type WecomCommandEndpoint, type WecomMemberBinding } from "../types.js";
 import { getExchangeRepository } from "../exchange/exchange-repository.js";
@@ -1032,6 +1032,26 @@ export function registerCommunicationRoutes(app: Express) {
 
     await store.persist();
     res.json({ binding: publicWhatsAppBinding(binding) });
+  }));
+
+  /**
+   * 预演：这批会话同步后会「写成客户跟进」还是「新建线索」。
+   *
+   * 插件侧边栏的勾选列表靠它给每行打标签 —— 只读：不写库、不发站内信、不调模型、不留对接日志。
+   * 判据与下面的 run 共用同一份号码索引，避免「预演说客户、实际写线索」。
+   */
+  app.post("/api/whatsapp/followup-sync/preview", requireAuth, asyncRoute(async (req, res) => {
+    const payload = followupPreviewPayloadSchema.parse(req.body);
+    const store = getStore();
+    const items = previewWhatsappFollowupSync(req.user!, payload, {
+      customersOf: (user) => ownedCustomersFor(user, "mine").map((customer) => ({
+        id: customer.id,
+        company: customer.company,
+        whatsapp: customer.whatsapp || "",
+        whatsappPhone: customer.whatsapp || store.whatsappBindings.find((binding) => binding.customerId === customer.id)?.phoneNumber || ""
+      }))
+    });
+    res.json({ runDate: payload.runDate, items });
   }));
 
   app.post("/api/whatsapp/followup-sync", requireAuth, asyncRoute(async (req, res) => {

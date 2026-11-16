@@ -175,6 +175,12 @@ export function buildKbPrompt(segments: KbSegment[], options: { documentTitle?: 
   return [
     KB_SYSTEM_CONTRACT,
     "",
+    // ⚠️ 必须显式给编号区间：整份资料很长时会分多批调用，模型看不到「批次」这层，
+    //    会顺着上一批继续编号（第 2 批写成 21、22…），而代码只认本批 1..N。
+    //    2026-11-13 实测：104 段分 6 批，后 5 批 130 条候选全部写成全局编号被判"编造出处"丢弃。
+    //    这里把区间写在最前面，措辞要短且醒目，长提示词里模型容易漏看。
+    `**本批共 ${segments.length} 段，段落编号只有 1 到 ${segments.length}；source_seg 必须在这个区间内，不要用全文编号。**`,
+    "",
     "---- 以下是要整理的全部段落 ----",
     options.documentTitle ? `（来源资料：${options.documentTitle}）` : "",
     blocks.join("\n\n"),
@@ -248,12 +254,21 @@ function asStringArray(value: unknown): string[] {
  * - 顶层不是 `{candidates:[...]}` → 整批错误；
  * - 非对象 / 未知 kind / question 或 answer 为空（qa 必须有问法）→ 丢弃；
  * - `source_seg` 不是整数或超出本批段数 → 丢弃并计 invented；
+ *   例外（`segmentOffset`）：整份资料分批提炼时模型会沿用全文编号（本批是第 21 段起就写 21），
+ *   若「编号 - segmentOffset」落在本批区间内，视为**同一个段落的下标口径差异**，接受并归一化，不计 invented。
+ *   这不是放宽标准：能落回本批区间说明它确实引用了本批的某一段，编造的大编号仍会被丢。
  * - confidence 缺失、非数字或 NaN → **丢弃**（缺字段一律不放行；绝不默认高置信）。
  *
  * 注意：`confidence < KB_MIN_CONFIDENCE` **不丢弃**（它仍是有效语料，只是不预勾选），
  * 由 `shouldPreselect` 决定要不要自动勾选。
+ *
+ * @param options.segmentOffset 本批在全文里的 0-based 起始下标（第 1 批传 0）。
  */
-export function parseKbOutput(raw: string, segments: KbSegment[]): KbParseResult {
+export function parseKbOutput(
+  raw: string,
+  segments: KbSegment[],
+  options: { segmentOffset?: number } = {}
+): KbParseResult {
   const result: KbParseResult = { items: [], discarded: 0, invented: 0, error: "" };
   const parsed = extractJsonObject(raw);
   if (parsed === null) {
@@ -280,8 +295,22 @@ export function parseKbOutput(raw: string, segments: KbSegment[]): KbParseResult
     if (kind === "qa" && !question) { result.discarded += 1; continue; }
 
     const rawSeg = candidate.source_seg;
-    const segmentOrdinal = typeof rawSeg === "number" ? rawSeg : Number.parseInt(String(rawSeg ?? ""), 10);
-    if (!Number.isInteger(segmentOrdinal) || segmentOrdinal < 1 || segmentOrdinal > segments.length) {
+    const reported = typeof rawSeg === "number" ? rawSeg : Number.parseInt(String(rawSeg ?? ""), 10);
+    if (!Number.isInteger(reported)) {
+      result.discarded += 1;
+      result.invented += 1;
+      continue;
+    }
+    // 编号口径归一化：批内 1..N 直接接受；模型沿用全文编号时减去本批起点。
+    let segmentOrdinal = reported;
+    if (segmentOrdinal < 1 || segmentOrdinal > segments.length) {
+      const offset = Math.max(0, Math.trunc(options.segmentOffset ?? 0));
+      const rebased = reported - offset;
+      if (offset > 0 && Number.isInteger(rebased) && rebased >= 1 && rebased <= segments.length) {
+        segmentOrdinal = rebased;
+      }
+    }
+    if (segmentOrdinal < 1 || segmentOrdinal > segments.length) {
       // 引用了不存在的段落：这条答案在资料里找不到依据，**必须丢**。
       result.discarded += 1;
       result.invented += 1;

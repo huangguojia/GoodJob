@@ -274,6 +274,8 @@ const senderMailboxBaseSchema = {
   imapPort: z.coerce.number().int().min(1).max(65535).default(993),
   imapUser: z.string().trim().max(200).default(""),
   imapPassword: z.string().max(400).default(""),
+  // 署名尾缀（可选）：update 时不传 = 保留原值，不能给 default("")，否则只改端口就会清空落款。
+  signature: z.string().max(2000).optional(),
   // DKIM 签名（可选）：update 时不传 = 保留原值（与私钥/日限额同语义）。
   // 不能给 default("")：PUT 只改日限额时会把 selector/域名清空，留下「有私钥无 selector」的半残配置，
   // 表现就是签名静默失效。
@@ -630,6 +632,18 @@ export function registerMailRoutes(app: Express) {
     const input = schema.parse(req.body || {});
     assertSenderMailboxPortMatch(input.smtpPort, input.smtpSecure);
     const mailbox = await repository.update(user.id, user.teamId, req.params.id, input);
+    if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+    res.json({ mailbox: toSenderMailboxView(mailbox) });
+  }));
+
+  /** 只改署名尾缀：写信面板「设置尾缀」走这里，不动 SMTP/IMAP 凭据 */
+  app.patch("/api/sender-mailboxes/:id/signature", requireAuth, asyncRoute(async (req, res) => {
+    const repository = getSenderMailboxRepository();
+    if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+    const user = getStore().users.find((item) => item.id === req.user!.id);
+    if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+    const body = z.object({ signature: z.string().max(2000).default("") }).parse(req.body || {});
+    const mailbox = await repository.setSignature(user.id, user.teamId, req.params.id, body.signature);
     if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
     res.json({ mailbox: toSenderMailboxView(mailbox) });
   }));

@@ -252,20 +252,24 @@ export function extractInlineDataImages(html: string, options?: { cidPrefix?: st
   const images: InlineImageAttachment[] = [];
   const max = Math.max(1, options?.maxImages ?? 10);
   const prefix = (options?.cidPrefix || `mcimg-${Date.now().toString(36)}`).replace(/[^\w.-]/g, "");
-  const next = (html || "").replace(
-    /<img[^>]*\ssrc="data:image\/([^;]+);base64,([^"]+)"[^>]*>/gi,
-    (match, ext: string, base64: string) => {
-      if (images.length >= max) return match;
-      const cleanExt = /^[a-z0-9]+$/i.test(ext) ? ext.toLowerCase() : "png";
-      const cid = `${prefix}-${images.length + 1}@mail.inline`;
-      images.push({
-        filename: `inline-${images.length + 1}.${cleanExt === "jpeg" ? "jpg" : cleanExt}`,
-        content: Buffer.from(base64, "base64"),
-        contentType: `image/${cleanExt}`,
-        cid
-      });
-      return match.replace(/src="[^"]*"/i, `src="cid:${cid}"`);
-    }
-  );
+  // 逐个 <img> 标签处理，而不是一条正则卡死 src 的位置与引号：
+  // 单引号、属性顺序变化（alt/style 在 src 前）、换行都会让旧写法漏掉图，
+  // 漏掉的图会以 data URI 原样发出，Gmail/Outlook 直接吞掉 → 对方看不到图。
+  const next = (html || "").replace(/<img\b[^>]*>/gi, (tag) => {
+    if (images.length >= max) return tag;
+    const match = tag.match(/\ssrc\s*=\s*(["'])data:image\/([^;"']+);base64,([^"']+)\1/i);
+    if (!match) return tag;
+    const ext = match[2] || "";
+    const base64 = match[3] || "";
+    const cleanExt = /^[a-z0-9]+$/i.test(ext) ? ext.toLowerCase() : "png";
+    const cid = `${prefix}-${images.length + 1}@mail.inline`;
+    images.push({
+      filename: `inline-${images.length + 1}.${cleanExt === "jpeg" ? "jpg" : cleanExt}`,
+      content: Buffer.from(base64, "base64"),
+      contentType: `image/${cleanExt}`,
+      cid
+    });
+    return tag.replace(match[0], ` src="cid:${cid}"`);
+  });
   return { html: next, images };
 }

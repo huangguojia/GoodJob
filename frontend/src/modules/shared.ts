@@ -282,6 +282,7 @@ export const viewLabels: Record<string, string> = {
   "ai-agent": "AI Agent",
   "integration-center": "集成中心",
   exchange: "对接中心",
+  "lead-ads": "表单线索",
   "approval-center": "审批中心",
   "approval-workflows": "审批设置",
   "sales-distillation": "销售训练",

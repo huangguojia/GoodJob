@@ -25938,6 +25938,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
             <button class="nav-secondary-button" data-view="lead-finder" title="搜客"><span>搜客</span></button>
             <button class="nav-secondary-button" data-view="auto-flow" title="自动流获客"><span>自动流获客</span></button>
             <button class="nav-secondary-button" data-view="prospect-list" title="搜客清单"><span>搜客清单</span></button>
+            <button class="nav-secondary-button" data-view="lead-ads" title="表单线索"><span>表单线索</span></button>
           </div>
         </details>
 
@@ -27657,6 +27658,159 @@ body.platform-mode .workspace-tabs { display:none !important; }
             #exchange .exchange-msg-detail .exchange-detail-head .btn { min-height: 24px; padding: 2px 8px; font-size: 10px; }
             #exchange .exchange-empty { padding: 24px 16px; text-align: center; color: #98a2b3; font-size: 12px; line-height: 1.9; }
             @media (prefers-reduced-motion: reduce) { #exchange * { transition: none !important; } }
+          </style>
+        </div>
+
+        <div class="view" id="lead-ads">
+          <div class="la-head">
+            <div class="la-head-text">
+              <span class="la-eyebrow">Facebook Lead Ads</span>
+              <h1>表单线索
+                <span class="la-status" id="leadAdsStatusPill"><i></i><span id="leadAdsStatusText">读取中</span></span>
+              </h1>
+              <p class="la-sub">广告表单经 Make / Zapier 推入 CRM，推送即建线索；同一份表单重复推送不会重复创建。</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn" id="leadAdsRefreshButton" type="button">刷新</button>
+              <button class="btn primary" id="leadAdsOpenLeadsButton" type="button">查看线索池</button>
+            </div>
+          </div>
+
+          <div class="panel la-meter" id="leadAdsSummary"></div>
+
+          <section class="panel section la-card">
+            <div class="section-head">
+              <div class="section-title">
+                <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span>
+                <div><h2>接入配置</h2><small>把地址和令牌填进中转服务的 HTTP 动作，表单提交后自动落成线索</small></div>
+              </div>
+              <span class="la-note">改动即时生效</span>
+            </div>
+            <div id="leadAdsConfig"></div>
+          </section>
+
+          <section class="panel section la-card">
+            <div class="section-head">
+              <div class="section-title">
+                <span class="icon"><svg viewBox="0 0 24 24"><path d="M3 5h18"/><path d="M3 12h18"/><path d="M3 19h18"/><circle cx="7" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg></span>
+                <div><h2>已接收的表单线索 <span class="la-count" id="leadAdsCount">0 条</span></h2><small>按接收时间倒序，最多 200 条；完整管理仍在线索池里做</small></div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>接收时间</th><th>公司</th><th>联系人</th><th>邮箱</th><th>国家</th><th>广告系列</th><th>阶段</th></tr></thead>
+                <tbody id="leadAdsRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <style>
+            /* ===== 表单线索 · 视觉升级（沿用全局设计令牌，不新增品牌色） ===== */
+            #lead-ads .la-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 16px; }
+            #lead-ads .la-head-text { min-width: 0; }
+            #lead-ads .la-eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 7px; color: var(--brand); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+            #lead-ads .la-eyebrow::before { content: ""; width: 20px; height: 2px; border-radius: 999px; background: currentColor; opacity: .5; }
+            #lead-ads h1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0; font-size: 26px; letter-spacing: -.02em; }
+            #lead-ads .la-status { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+            #lead-ads .la-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .5; }
+            #lead-ads .la-status.is-on { color: var(--green); border-color: color-mix(in srgb, var(--green) 22%, var(--line)); background: var(--green-tint); }
+            #lead-ads .la-status.is-on i { opacity: 1; background: var(--green); animation: laPulse 2.4s ease-in-out infinite; }
+            #lead-ads .la-sub { max-width: 68ch; margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.62; }
+            @keyframes laPulse { 0%,100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 16%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--green) 4%, transparent); } }
+
+            /* 概览带：一条卡片四格，用分隔线而不是四张同质小卡 */
+            #lead-ads .la-meter { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 16px; overflow: hidden; }
+            #lead-ads .la-meter-cell { position: relative; min-width: 0; padding: 15px 18px 14px; border-left: 1px solid var(--line-soft); }
+            #lead-ads .la-meter-cell:first-child { border-left: 0; }
+            #lead-ads .la-meter-cell.is-primary { padding-left: 22px; }
+            #lead-ads .la-meter-cell.is-primary::before { content: ""; position: absolute; left: 10px; top: 16px; bottom: 16px; width: 3px; border-radius: 999px; background: var(--brand); }
+            #lead-ads .la-meter-label { display: block; color: var(--muted); font-size: 11px; font-weight: 600; }
+            #lead-ads .la-meter-value { display: block; margin-top: 6px; color: var(--ink); font-size: 26px; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+            #lead-ads .la-meter-value i { margin-left: 3px; color: var(--muted); font-size: 11px; font-style: normal; font-weight: 600; }
+            #lead-ads .la-meter-cell.is-time .la-meter-value { font-size: 16px; letter-spacing: 0; }
+            #lead-ads .la-meter-cell.is-state .la-meter-value { display: inline-flex; align-items: center; gap: 7px; font-size: 18px; }
+            #lead-ads .la-meter-cell.is-state .la-meter-value::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+            #lead-ads .la-meter-cell.is-state.is-on .la-meter-value { color: var(--green); }
+            #lead-ads .la-meter-cell.is-state.is-on .la-meter-value::before { background: var(--green); }
+            #lead-ads .la-meter-cell small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+            #lead-ads .la-loading { grid-column: 1 / -1; padding: 22px; color: var(--muted); font-size: 12px; text-align: center; }
+
+            #lead-ads .la-card { margin-bottom: 18px; }
+            #lead-ads .la-card .section-head { margin-bottom: 16px; }
+            #lead-ads .la-note { color: var(--muted); font-size: 11px; }
+
+            /* 配置字段：每项一张浅底瓦片，URL 行内嵌方法标记与复制动作 */
+            #lead-ads .la-config { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+            #lead-ads .la-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 13px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface-2); }
+            #lead-ads .la-field.is-wide { grid-column: 1 / -1; }
+            #lead-ads .la-field.is-token { border-color: color-mix(in srgb, var(--brand) 20%, var(--line)); background: color-mix(in srgb, var(--brand) 4%, #fff); }
+            #lead-ads .la-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text); font-size: 12px; font-weight: 700; }
+            #lead-ads .la-label em { padding: 2px 7px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 10px; font-style: normal; font-weight: 600; }
+            #lead-ads .la-field.is-token .la-label em { background: var(--brand-tint); color: var(--brand); }
+            #lead-ads .la-hint { color: var(--muted); font-size: 11px; line-height: 1.55; }
+            #lead-ads .la-input { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 5px 6px 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-xs); transition: border-color .16s var(--ease-out), box-shadow .16s var(--ease-out); }
+            #lead-ads .la-input:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #lead-ads .la-input code { flex: 1 1 auto; min-width: 0; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+            #lead-ads .la-input code.la-token-value { color: var(--brand-strong); letter-spacing: .01em; }
+            #lead-ads .la-method { flex: 0 0 auto; display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 5px; background: var(--brand-tint); color: var(--brand); font-family: var(--font-sans); font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+            #lead-ads .la-copy { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-family: var(--font-sans); font-size: 11px; font-weight: 600; cursor: pointer; transition: background .16s var(--ease-out), color .16s var(--ease-out); }
+            #lead-ads .la-copy:hover { background: var(--surface-3); color: var(--ink); }
+            #lead-ads .la-copy:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--brand-ring); }
+            #lead-ads .la-copy.is-copied { background: var(--green-tint); color: var(--green); }
+            #lead-ads .la-copy svg { width: 13px; height: 13px; }
+            #lead-ads select { width: 100%; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-family: var(--font-sans); font-size: 12px; }
+            #lead-ads .la-field.is-inline { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
+            #lead-ads .la-field.is-inline .la-label { flex: 0 0 auto; }
+            #lead-ads .la-field.is-inline select { flex: 1 1 320px; width: auto; max-width: 520px; }
+            #lead-ads .la-field.is-inline .la-hint { flex: 0 1 auto; margin-left: auto; text-align: right; }
+            #lead-ads select:focus-visible { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+            #lead-ads .la-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line-soft); }
+            #lead-ads .la-actions .btn { height: 32px; }
+
+            /* 列表 */
+            #lead-ads .la-count { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 11px; font-weight: 600; vertical-align: middle; }
+            #lead-ads .table-wrap { border-radius: 10px; }
+            #lead-ads table { min-width: 780px; }
+            #lead-ads th { padding: 10px 14px; background: var(--surface-2); font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+            #lead-ads td { padding: 12px 14px; }
+            #lead-ads tbody tr:last-child td { border-bottom: 0; }
+            #lead-ads tbody tr:hover td { background: color-mix(in srgb, var(--brand) 4%, #fff); }
+            #lead-ads th:nth-child(1), #lead-ads td:nth-child(1) { width: 116px; white-space: nowrap; }
+            #lead-ads th:nth-child(2), #lead-ads td:nth-child(2) { width: 26%; }
+            #lead-ads th:nth-child(3), #lead-ads td:nth-child(3) { width: 116px; }
+            #lead-ads th:nth-child(4), #lead-ads td:nth-child(4) { width: 220px; }
+            #lead-ads th:nth-child(5), #lead-ads td:nth-child(5) { width: 84px; white-space: nowrap; }
+            #lead-ads th:nth-child(6), #lead-ads td:nth-child(6) { width: 156px; }
+            #lead-ads th:nth-child(7), #lead-ads td:nth-child(7) { width: 96px; white-space: nowrap; }
+            #lead-ads .la-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+            #lead-ads .la-company { display: flex; align-items: center; gap: 9px; min-width: 0; }
+            #lead-ads .la-avatar { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--brand-tint); color: var(--brand); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+            #lead-ads .la-company b { min-width: 0; overflow: hidden; color: var(--ink); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+            #lead-ads .la-mail { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+            #lead-ads .la-campaign { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 8px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-2); color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+            #lead-ads .la-dash { color: var(--muted); opacity: .65; }
+            #lead-ads .la-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 46px 20px; text-align: center; }
+            #lead-ads .la-empty-icon { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 2px; border-radius: 14px; background: var(--brand-tint); color: var(--brand); }
+            #lead-ads .la-empty-icon svg { width: 22px; height: 22px; }
+            #lead-ads .la-empty b { color: var(--ink); font-size: 13px; font-weight: 600; }
+            #lead-ads .la-empty small { max-width: 42ch; color: var(--muted); font-size: 12px; line-height: 1.6; }
+            #lead-ads tbody tr > td { animation: laRowIn .32s var(--ease-out, cubic-bezier(.22,1,.36,1)) backwards; animation-delay: calc(min(var(--la-i, 0), 8) * 35ms); }
+            @keyframes laRowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+            @media (max-width: 1100px) {
+              #lead-ads .la-meter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+              #lead-ads .la-meter-cell:nth-child(3) { border-left: 0; }
+              #lead-ads .la-meter-cell:nth-child(n+3) { border-top: 1px solid var(--line-soft); }
+              /* 两列时地址会被迫折行，单列让 URL 保持一行可读 */
+              #lead-ads .la-config { grid-template-columns: minmax(0, 1fr); }
+            }
+            @media (max-width: 860px) {
+              #lead-ads .la-meter { grid-template-columns: minmax(0, 1fr); }
+              #lead-ads .la-meter-cell { border-left: 0; }
+              #lead-ads .la-meter-cell + .la-meter-cell { border-top: 1px solid var(--line-soft); }
+              #lead-ads h1 { font-size: 23px; }
+            }
+            @media (prefers-reduced-motion: reduce) { #lead-ads tbody tr > td, #lead-ads .la-status.is-on i { animation: none; } }
           </style>
         </div>
 
@@ -29862,7 +30016,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <div class="form-field"><label>SMTP授权码/密码</label><input id="profileSmtpPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small id="profileSmtpPasswordHint">保存后不会明文回显。</small></div>
                 <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select><small id="profileSmtpConfigHint">465 通常选 SSL/TLS，587 通常选 STARTTLS/普通。</small></div>
                 <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给发件邮箱"></div>
-                <div class="form-field full"><label>邮件签名</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea></div>
+                <div class="form-field full"><label>邮件签名（通用尾缀）</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea><small>没有单独设置尾缀的发件邮箱用这一份；在下方「发件邮箱池」里可以给某个邮箱配专属尾缀。</small></div>
                 <div class="form-field"><label>DKIM 域名（可选）</label><input id="profileDkimDomain" placeholder="例如 mail.your-company.com，留空 = 不签名"></div>
                 <div class="form-field"><label>DKIM Selector（可选）</label><input id="profileDkimSelector" placeholder="例如 s1（与 DNS 的 s1._domainkey 记录对应）"></div>
                 <div class="form-field full"><label>DKIM 私钥（可选）</label><textarea id="profileDkimPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea><small id="profileDkimPrivateKeyHint">配置后该邮箱发出的开发信由系统自动完成 DKIM 签名，显著提升进箱率。私钥加密落库、不会明文回显；DNS 侧需同步添加 &lt;selector&gt;._domainkey 的 TXT 公钥记录。</small></div>
@@ -29885,7 +30039,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
 
             <section class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>发件邮箱池（轮换发信）</h2><small>登记多个 SMTP 发件邮箱后，自动发信方案可按「每 N 封」轮流使用，降低单个邮箱的发信压力</small></div></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>发件邮箱池（轮换发信）</h2><small>登记多个 SMTP 发件邮箱后，自动发信方案可按「每 N 封」轮流使用，降低单个邮箱的发信压力；每个邮箱可配自己的署名尾缀</small></div></div>
                 <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 登记发件邮箱</button></div>
               </div>
               <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
@@ -30935,9 +31089,10 @@ body.platform-mode .workspace-tabs { display:none !important; }
           .mail-center-compose-modal .mc-compose-tools .mc-tool-color .mc-tool-color-a { font-size: 12px; font-weight: 700; pointer-events: none; border-radius: 3px; padding: 0 3px; }
           .mail-center-compose-modal .mc-compose-editor img { max-width: 100%; height: auto; border-radius: 4px; }
 
-          /* 就地回复 = 阅读栏下半截的一个「区」，不是浮在里面的卡：
-             无圆角、无外边距、无投影，只有一条上边框把它和原信分开。
-             留着圆角+投影就还是「小窗」，用户第一版否掉的就是这个观感。 */
+          /* ⚠️ 已废弃（2026-11-13）：回复/全部回复/转发已改为复用 .mc-compose-pane（与写邮件同尺寸）。
+             下面这批 .mc-compose-inline 规则是旧「阅读栏底部小卡」方案，仅作为样式表结构的历史记录，
+             **不要复用这个类名**——它会把发件人行藏掉、输入框压到 26px、正文地板压到 64px，
+             正是用户投诉的「回复框太小」。新增回复相关样式请写 .mc-compose-pane。 */
           .mc-compose-inline {
             /* ⚠️ 父类 .mail-center-compose-modal 带 width:min(680px,…)：不覆盖就会顶出阅读栏
                （实测 616px 的栏里塞 680px 的卡 → 整栏横向滚动、正文被推着往左跑） */

@@ -2155,17 +2155,78 @@ function backToJourneySourceMail() {
   void loadMailCenterMessages({ silent: true, focusId: mailId }).then(() => openMailCenterMessage(mailId));
 }
 
-/** 署名尾缀：优先用个人设置里维护的邮件签名（emailSignature），没设置才回落账号名+邮箱；
- *  随正文一起可编辑（富文本编辑器用 HTML 形态） */
+/** 署名尾缀：优先用当前发件邮箱的专属尾缀（account.signature），其次个人设置里维护的
+ *  邮件签名（emailSignature），都没设置才回落账号名+邮箱；随正文一起可编辑（富文本编辑器用 HTML 形态） */
 function mcComposeSignatureLines(account: MailCenterAccount | undefined) {
-  const custom = (state.user?.emailSignature || "").trim();
-  if (custom) return custom.split(/\r?\n/).slice(0, 8).filter((line) => line.trim());
+  const custom = (account?.signature || state.user?.emailSignature || "").trim();
+  if (custom) return custom.split(/\r?\n/).slice(0, 20).filter((line) => line.trim());
   return [account?.fromName?.trim() || "", account?.email || ""].filter(Boolean);
 }
 
 function mcComposeSignatureHtml(account: MailCenterAccount | undefined) {
+  const inner = mcSignatureInnerHtml(account);
+  // 用 data-mc-signature 标记这一块：写信面板里「设置尾缀」可以直接替换它，
+  // 不会误伤用户已经写好的正文或引用原文。
+  return inner ? `<div class="mc-signature" data-mc-signature="1">${inner}</div>` : "";
+}
+
+function mcSignatureInnerHtml(account: MailCenterAccount | undefined) {
   const lines = mcComposeSignatureLines(account);
   return lines.length ? `<br><br>--<br>${lines.map(escapeHtml).join("<br>")}` : "";
+}
+
+/**
+ * 「设置尾缀」弹窗：直接编辑当前发件邮箱的署名尾缀。
+ * - 保存走 PATCH /api/sender-mailboxes/:id/signature（只改这一列，不碰 SMTP/IMAP 凭据）
+ * - 保存后立刻替换正文里带 data-mc-signature 的那一块，老草稿没有标记就追加到末尾
+ * - 清空 = 该邮箱不再有专属尾缀，回落「邮箱设置 → 邮件签名」的账号级签名
+ */
+function openComposeSignatureModal(account: MailCenterAccount | undefined) {
+  if (!account) { toast("先选择发件邮箱", "error"); return; }
+  const current = (account.signature || "").trim();
+  const fallback = (state.user?.emailSignature || "").trim();
+  openModal("设置署名尾缀", `
+    <div class="form-grid">
+      <div class="form-field full">
+        <label>${escapeHtml(account.label || account.email)} 的署名尾缀</label>
+        <textarea id="mcSignatureInput" rows="7" placeholder="Best regards,&#10;Kevin&#10;ZHUHAI LONGTEC CO.,LTD">${escapeHtml(current)}</textarea>
+        <small>每行一段，会原样带在正文末尾（前面自动加 -- 分隔线）。留空 = 沿用账号级邮件签名${fallback ? `（当前：${escapeHtml(fallback.split("\n")[0] || "已设置")}）` : "（当前未设置）"}，切换发件邮箱时尾缀跟着换。</small>
+      </div>
+    </div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="mcSignatureSaveButton">保存并更新正文</button>`, { closeOnBackdrop: false });
+  qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
+  qs<HTMLButtonElement>("#mcSignatureSaveButton")?.addEventListener("click", (event) => void saveComposeSignature(event.currentTarget as HTMLButtonElement, account));
+}
+
+async function saveComposeSignature(button: HTMLButtonElement, account: MailCenterAccount) {
+  const signature = qs<HTMLTextAreaElement>("#mcSignatureInput")?.value.trim() || "";
+  setButtonPending(button, true, "保存并更新正文", "保存中…");
+  try {
+    await api(`/api/sender-mailboxes/${encodeURIComponent(account.id)}/signature`, {
+      method: "PATCH",
+      body: JSON.stringify({ signature })
+    });
+    account.signature = signature;
+    account.fromName = account.fromName || "";
+    // 正文里的尾缀块就地替换；老草稿没标记就只在末尾补一份（不动用户已写内容）
+    const editor = qs<HTMLElement>("#mcComposeBody");
+    const inner = mcSignatureInnerHtml(account);
+    if (editor) {
+      const block = editor.querySelector<HTMLElement>("[data-mc-signature]");
+      if (block) {
+        if (inner) block.innerHTML = inner;
+        else block.remove();
+      } else if (inner) {
+        editor.insertAdjacentHTML("beforeend", `<div class="mc-signature" data-mc-signature="1">${inner}</div>`);
+      }
+      mcComposeDraftSaveSoon();
+    }
+    closeModal();
+    toast(signature ? "尾缀已保存，正文已同步" : "已清空该邮箱尾缀，改用账号级签名", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "尾缀保存失败", "error");
+    setButtonPending(button, false, "保存并更新正文", "保存并更新正文");
+  }
 }
 
 /* ===== 写邮件：收件人 chips + CRM 联系人自动补全 ===== */
@@ -2183,14 +2244,17 @@ function mcComposeRoot(): HTMLElement | null {
     || document.getElementById("mcComposeDrawer");
 }
 
-/** 当前写信界面的草稿落在哪个 key：就地回复（按原信 id）或新写信 */
+/** 当前写信界面的草稿落在哪个 key：回复/转发（按原信 id）或新写信 */
 function mcComposeDraftKey() {
-  const inline = document.getElementById("mcComposeInline");
-  const forMessage = inline?.dataset.mcForMessage || "";
+  // 回复已与写信共用 #mcComposePane，靠 data-mc-for-message 区分；旧的就地回复卡仍兼容
+  const root = document.getElementById("mcComposePane") || document.getElementById("mcComposeInline");
+  const forMessage = root?.dataset.mcForMessage || "";
   return forMessage ? MC_REPLY_DRAFT_PREFIX + forMessage : MC_DRAFT_KEY;
 }
 const MC_ATTACH_MAX_TOTAL = 12 * 1024 * 1024;
 const MC_ATTACH_MAX_ONE = 8 * 1024 * 1024;
+/** 附件按 base64 上传，体积会膨胀 4/3；整包 JSON 的预算要和后端 mail-center 那档对齐。 */
+const MC_SEND_BODY_BUDGET = 18 * 1024 * 1024;
 
 interface McComposeAttachment { filename: string; size: number; contentBase64: string; contentType: string }
 let mcComposeAttachments: McComposeAttachment[] = [];
@@ -2467,6 +2531,79 @@ function mcFormatSize(bytes: number) {
   return `${bytes}B`;
 }
 
+/* ===== 图片压缩：发信体积的真正瓶颈在这里 =====
+ * 手机照片 3~6MB 一张，base64 再涨 37% → 直接被服务端 JSON 体积上限挡回来（用户看到的是
+ * 「请求内容过大」，等于发不出去）。所以在进内存前先按长边缩放 + JPEG 重编码，
+ * 典型照片能从 5MB 掉到 200~400KB，画质在邮件场景看不出差别。
+ * 压缩失败不影响发送：任何异常都退回原文件。 */
+function mcReadFileAsDataUrl(file: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function mcDecodeImage(dataUrl: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("解码失败"));
+    img.src = dataUrl;
+  });
+}
+
+function mcImageFilename(name: string, ext: string) {
+  const base = name.replace(/\.[^.]+$/, "") || "image";
+  return `${base}.${ext}`;
+}
+
+/**
+ * 按长边缩放后重编码。图本来就小、或压完反而更大 → 返回 null（调用方保留原文件）。
+ * keepPng：截图类 PNG 转 JPEG 会把小字压糊，所以 PNG 体积没到 JPEG 的 1.5 倍就继续用 PNG
+ * （顺带保住透明通道）。
+ */
+async function mcShrinkImage(file: File, maxSide: number, options?: { keepPng?: boolean }) {
+  const dataUrl = await mcReadFileAsDataUrl(file);
+  const img = await mcDecodeImage(dataUrl);
+  const longSide = Math.max(img.naturalWidth, img.naturalHeight);
+  // 不小也不超预算：原图直传，不为压缩而压缩
+  if (longSide <= maxSide && file.size <= 600 * 1024) return null;
+  const scale = Math.min(1, maxSide / longSide);
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const encode = (type: string, quality?: number) =>
+    new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
+  // 透明图转 JPEG 会变黑底，先铺白
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  const jpeg = await encode("image/jpeg", 0.82);
+  let picked: { blob: Blob; ext: string } | null = jpeg ? { blob: jpeg, ext: "jpg" } : null;
+  if (options?.keepPng) {
+    const png = await encode("image/png");
+    if (png && png.size <= (jpeg?.size ?? Number.POSITIVE_INFINITY) * 1.5) picked = { blob: png, ext: "png" };
+  }
+  if (!picked || picked.blob.size >= file.size) return null;
+  return new File([picked.blob], mcImageFilename(file.name, picked.ext), { type: picked.blob.type });
+}
+
+/** 附件：长边压到 1600px。GIF 不动（压了就变成一张静图），其余失败一律退回原文件。 */
+async function mcPrepareAttachment(file: File) {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") return file;
+  try {
+    return (await mcShrinkImage(file, 1600, { keepPng: file.type === "image/png" })) || file;
+  } catch {
+    return file;
+  }
+}
+
 function mcRenderAttachList() {
   const list = qs<HTMLElement>("#mcAttachList");
   if (!list) return;
@@ -2485,24 +2622,33 @@ function mcRenderAttachList() {
   });
 }
 
-function mcAddComposeFiles(files: File[]) {
-  for (const file of files) {
-    if (file.size > MC_ATTACH_MAX_ONE) { toast(`「${file.name}」超过单文件 8MB 上限`, "error"); continue; }
+async function mcAddComposeFiles(files: File[]) {
+  for (const raw of files) {
+    // 先压再算体积：限额和实际上传的都是压缩后的这一份
+    const file = await mcPrepareAttachment(raw);
+    if (file.size > MC_ATTACH_MAX_ONE) { toast(`「${raw.name}」超过单文件 8MB 上限`, "error"); continue; }
     if (mcComposeAttachments.reduce((sum, item) => sum + item.size, 0) + file.size > MC_ATTACH_MAX_TOTAL) {
       toast("附件总大小超过 12MB 上限", "error");
       break;
     }
-    const item: McComposeAttachment = { filename: file.name, size: file.size, contentBase64: "", contentType: file.type || "application/octet-stream" };
+    const compressed = file !== raw;
+    const item: McComposeAttachment = {
+      filename: file.name,
+      size: file.size,
+      contentBase64: "",
+      contentType: file.type || "application/octet-stream"
+    };
     mcComposeAttachments.push(item);
     mcRenderAttachList();
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || "");
-      item.contentBase64 = result.includes(",") ? result.slice(result.indexOf(",") + 1) : result;
-      mcRenderAttachList();
-    };
-    reader.onerror = () => toast(`「${file.name}」读取失败`, "error");
-    reader.readAsDataURL(file);
+    if (compressed) toast(`「${raw.name}」已压到 ${mcFormatSize(file.size)}（原 ${mcFormatSize(raw.size)}）`, "info");
+    try {
+      const dataUrl = await mcReadFileAsDataUrl(file);
+      item.contentBase64 = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
+    } catch {
+      toast(`「${file.name}」读取失败`, "error");
+      mcComposeAttachments = mcComposeAttachments.filter((entry) => entry !== item);
+    }
+    mcRenderAttachList();
   }
 }
 
@@ -2722,7 +2868,7 @@ function mcComposeStackHtml(account: MailCenterAccount, withNote = true) {
 
 /** 说明条：浮窗/就地回复放正文末尾；阅读栏整块写信时挪到页脚一行（省高度，正文能多两行） */
 function mcComposeNoteHtml(extraClass = "") {
-  return `<div class="mc-form-note ${extraClass}" title="发送使用所选账号的 SMTP 配置；署名来自邮箱设置里的邮件签名，随正文发出、可就地修改；副本自动归档「已发送」；也可把文件直接拖进正文。">发送使用所选账号的 SMTP 配置；署名来自<button type="button" class="mc-compose-link" data-mc-edit-signature>邮箱设置里的邮件签名</button>，随正文发出、可就地修改；副本自动归档「已发送」。也可把文件直接拖进正文。</div>`;
+  return `<div class="mc-form-note ${extraClass}" title="发送使用所选账号的 SMTP 配置；署名尾缀按当前发件邮箱自动带在正文末尾，可就地修改，也可点「设置尾缀」改默认；副本自动归档「已发送」；也可把文件直接拖进正文。">发送使用所选账号的 SMTP 配置；<button type="button" class="mc-compose-link" data-mc-edit-signature>设置尾缀</button>按当前发件邮箱自动带在正文末尾、可就地修改；副本自动归档「已发送」。也可把文件直接拖进正文。</div>`;
 }
 
 function mcComposeFootHtml(cancelLabel = "存草稿并收起", footNote = "") {
@@ -2747,19 +2893,42 @@ function mcComposeHeadButtonsHtml(showMin = true, showClose = true) {
       ${showClose ? `<button type="button" class="mc-compose-head-btn mc-compose-drawer-close" id="mcComposeClose" title="关闭（草稿自动保存）">×</button>` : ""}`;
 }
 
+type McComposePaneOptions = {
+  /** 抬头文字：写邮件 / 回复 / 全部回复 / 转发 */
+  title?: string;
+  /** 抬头副文字 */
+  sub?: string;
+  /** 回复/转发时挂原信 id：草稿按原信分开存，不与新写信串档 */
+  forMessageId?: string;
+  /** 回复态才给「取消」，新写信用右上角 × */
+  showCancel?: boolean;
+};
+
 /**
- * 新写一封 = 占满阅读栏（跟「回复」同一个位置：右栏那一整块）。
- * 用户明确要求：回复和发邮件都在右边这一整块里，不要右下角小浮窗、也不要侧边抽屉。
+ * 写信界面 = 占满阅读栏（右栏那一整块）。
+ * 新写信与回复/转发/全部回复**共用同一个面板**：用户明确要求「回复框要和写邮件一样大」，
+ * 共用面板是唯一能保证两者尺寸、字段密度、工具栏完全一致的实现方式
+ * （旧的就地回复小卡片有自己的压缩 CSS：隐藏发件人与操作区、输入框 26px、正文最小 64px）。
  */
-function openMailCenterComposePane(host: HTMLElement, account: MailCenterAccount, prefill: McComposePrefill, draft: McComposeDraft | null) {
+function openMailCenterComposePane(
+  host: HTMLElement,
+  account: MailCenterAccount,
+  prefill: McComposePrefill,
+  draft: McComposeDraft | null,
+  options: McComposePaneOptions = {}
+) {
+  const title = options.title || "写邮件";
+  const sub = options.sub || "草稿自动保存 · Esc 关闭";
   const pane = document.createElement("div");
   pane.className = "mail-center-compose-modal mc-compose-pane";
   pane.id = "mcComposePane";
+  if (options.forMessageId) pane.dataset.mcForMessage = options.forMessageId;
   pane.innerHTML = `
     <div class="mc-compose-pane-head">
-      <h3>写邮件</h3>
-      <span class="mc-compose-inline-sub">草稿自动保存 · Esc 关闭</span>
-      ${mcComposeHeadButtonsHtml(false)}
+      <h3>${escapeHtml(title)}</h3>
+      <span class="mc-compose-inline-sub" title="${escapeHtml(sub)}">${escapeHtml(sub)}</span>
+      ${mcComposeHeadButtonsHtml(false, !options.showCancel)}
+      ${options.showCancel ? `<button type="button" class="mc-compose-head-text" data-mc-compose-cancel>取消</button>` : ""}
     </div>
     <div class="mc-compose-pane-body">${mcComposeStackHtml(account, false)}</div>
     ${mcComposeFootHtml("存草稿并关闭", mcComposeNoteHtml("mc-compose-foot-note"))}`;
@@ -2835,7 +3004,11 @@ function openMailCenterCompose(prefill: McComposePrefill = {}) {
   mcComposeWire(drawer, prefill, draft, account);
 }
 
-/** 就地回复 / 全部回复 / 转发：写信界面长在阅读栏里，原信内容就在上面，边看边回（Gmail inline reply 惯例） */
+/**
+ * 回复 / 全部回复 / 转发：复用「写邮件」的整块阅读栏面板，尺寸与字段密度完全一致。
+ * 原信不再留在上方，而是作为引用块附在正文末尾（`mcQuoteBlockHtml`，长引用默认折叠，
+ * 点「显示引用的原文」可展开）——这是用户明确要求的形态：回复框要和写邮件一样大。
+ */
 function openMailCenterInlineCompose(message: MailCenterMessage, mode: McComposeMode) {
   const accounts = mailCenterState.accounts;
   if (!accounts.length) {
@@ -2859,27 +3032,12 @@ function openMailCenterInlineCompose(message: MailCenterMessage, mode: McCompose
   const detail = qs<HTMLElement>("#mcMessageDetail");
   if (!detail) { openMailCenterCompose(prefill); return; } // 阅读栏不在了就退回浮窗
   const actionText = mode === "reply" ? "回复" : mode === "replyAll" ? "全部回复" : "转发";
-  const card = document.createElement("div");
-  card.className = "mail-center-compose-modal mc-compose-inline";
-  card.id = "mcComposeInline";
-  card.dataset.mcForMessage = message.id;
-  card.innerHTML = `
-    <div class="mc-compose-inline-head">
-      <h3 title="${escapeHtml(message.subject || "(无主题)")}">${actionText}</h3>
-      <span class="mc-compose-inline-sub" title="用 ${escapeHtml(account.email)} 发，引用原文已附在正文末尾">用 ${escapeHtml(account.email)} 发</span>
-      ${mcComposeHeadButtonsHtml(false, false)}
-      <button type="button" class="mc-compose-head-text" data-mc-compose-cancel>取消</button>
-    </div>
-    <div class="mc-compose-inline-body">${mcComposeStackHtml(account)}</div>
-    ${mcComposeFootHtml()}`;
-  // 附件按钮挪到回复卡页脚（正文下面那条太吃高度，且会被工具栏挤成半行）
-  const attachBtn = card.querySelector<HTMLElement>("#mcAttachBtn");
-  if (attachBtn) card.querySelector(".mc-compose-drawer-foot")?.prepend(attachBtn);
-  detail.appendChild(card);
-  // 回复卡钉在阅读栏底部（原信上半部分自己滚），这样一进来就能看见正文和发送键
-  detail.classList.add("is-replying");
-  mcFocusWriting(true);
-  mcComposeWire(card, prefill, saved, account);
+  openMailCenterComposePane(detail, account, prefill, saved, {
+    title: actionText,
+    sub: `用 ${account.email} 发 · 引用原文已附在正文末尾`,
+    forMessageId: message.id,
+    showCancel: true
+  });
 }
 
 /** 引用块：包一层不可编辑容器；长引用默认折叠（内容仍在 DOM 里，发送不受折叠影响） */
@@ -2947,27 +3105,35 @@ function mcApplyBrush() {
 
 /** 插入图片：>800px 宽等比压缩为 jpg(0.82)；小 png 保留原样（透明通道）。
  *  编辑器里存 dataURL，发送时后端抽出来转 CID 内嵌附件（data URI 在 Gmail/Outlook 会被吞）。 */
+/** 正文内嵌图：长边压到 800px 并优先保留 PNG 透明通道；仍超预算就退成 JPEG。
+ *  只判宽度不够——手机长截图（780×4000）宽度没过线，体积却能把整个请求顶穿。 */
 async function mcInsertInlineImage(file: File) {
   const editor = qs<HTMLElement>("#mcComposeBody");
   if (!editor || !file.type.startsWith("image/")) { toast("只能插入图片文件", "error"); return; }
   try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(new Error("读取失败"));
-      reader.readAsDataURL(file);
-    });
-    const img = new Image();
-    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error("解码失败")); img.src = dataUrl; });
+    const dataUrl = await mcReadFileAsDataUrl(file);
+    const img = await mcDecodeImage(dataUrl);
     let out = dataUrl;
-    if (img.naturalWidth > 800 || (file.type !== "image/png" && dataUrl.length > 400_000)) {
-      const w = Math.min(800, img.naturalWidth);
-      const h = Math.round((img.naturalHeight * w) / img.naturalWidth);
+    const longSide = Math.max(img.naturalWidth, img.naturalHeight);
+    if (longSide > 800 || dataUrl.length > 400_000) {
+      const scale = Math.min(1, 800 / longSide);
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
       canvas.getContext("2d")?.drawImage(img, 0, 0, w, h);
-      out = canvas.toDataURL("image/jpeg", 0.82);
+      const jpeg = canvas.toDataURL("image/jpeg", 0.82);
+      // PNG 优先（保留透明通道与截图里的细字）；照片类重编码成 PNG 反而更大，
+      // 只要 JPEG 明显更小就换过去——这一步才是体积真正降下来的地方。
+      let candidate = file.type === "image/png" ? canvas.toDataURL("image/png") : jpeg;
+      if (jpeg.length < candidate.length * 0.9) candidate = jpeg;
+      // 压完比原图还大就保留原图，别为了「压过」把图变肥
+      if (candidate.length < dataUrl.length) out = candidate;
+    }
+    if (out.length > 2_400_000) {
+      toast("这张图太大，压完还有 1.8MB，建议先用附件发送", "error");
+      return;
     }
     mcRestoreEditorRange(editor);
     document.execCommand("insertImage", false, out);
@@ -3039,7 +3205,7 @@ function mcComposeWire(root: HTMLElement, prefill: McComposePrefill, draft: McCo
       event.preventDefault();
       editor.classList.remove("is-dragover");
       const files = Array.from(event.dataTransfer?.files || []);
-      if (files.length) mcAddComposeFiles(files);
+      if (files.length) void mcAddComposeFiles(files);
     });
     // 截图/复制的图片直接 Ctrl+V 进正文（内嵌图，发送时转附件）
     editor.addEventListener("paste", (event: ClipboardEvent) => {
@@ -3149,7 +3315,7 @@ function mcComposeWire(root: HTMLElement, prefill: McComposePrefill, draft: McCo
   qs("#mcAttachBtn")?.addEventListener("click", () => qs<HTMLInputElement>("#mcAttachInput")?.click());
   qs("#mcAttachInput")?.addEventListener("change", (event) => {
     const input = event.currentTarget as HTMLInputElement;
-    if (input.files?.length) mcAddComposeFiles(Array.from(input.files));
+    if (input.files?.length) void mcAddComposeFiles(Array.from(input.files));
     input.value = "";
   });
   // 抄送 / 密送 行
@@ -3164,11 +3330,11 @@ function mcComposeWire(root: HTMLElement, prefill: McComposePrefill, draft: McCo
   revealRow("mcComposeBccToggle", "mcComposeBccRow");
   // 通讯录选人
   qs("#mcComposeContactsBtn")?.addEventListener("click", () => openMailCenterContactPicker());
-  // 去邮箱设置维护邮件签名（先存草稿；写信界面关掉，别浮在设置页上面）
+  // 设置当前发件邮箱的署名尾缀（不再跳走，直接在写信面板上改）
   qs("[data-mc-edit-signature]")?.addEventListener("click", () => {
-    mcComposeDraftSaveNow();
-    mcComposeTeardownAll();
-    activateNavView("mail-settings");
+    const mailboxId = qs<HTMLSelectElement>("#mcComposeMailbox")?.value || "";
+    const account = mailCenterState.accounts.find((item) => item.id === mailboxId);
+    openComposeSignatureModal(account);
   });
   // 草稿：填入预填/恢复内容后再挂监听；已保存草稿的值优先于预填（用户改过的收件人不被覆盖）
   if (toBox) {
@@ -3189,7 +3355,21 @@ function mcComposeWire(root: HTMLElement, prefill: McComposePrefill, draft: McCo
   }
   if (draft?.html) toast(prefill.quoteHtml ? "已恢复这封信的回复草稿" : "已恢复上次未发送的草稿", "info");
   qs("#mcComposeSubject")?.addEventListener("input", () => mcComposeDraftSaveSoon());
-  qs("#mcComposeMailbox")?.addEventListener("change", () => mcComposeDraftSaveSoon());
+  // 切换发件邮箱：尾缀跟着换。只在「正文除签名外还是空的」时替换，
+  // 已经写了内容就不动（用户可能已经按上一位发件人改过落款）。
+  qs("#mcComposeMailbox")?.addEventListener("change", () => {
+    mcComposeDraftSaveSoon();
+    const editor = qs<HTMLElement>("#mcComposeBody");
+    const block = editor?.querySelector<HTMLElement>("[data-mc-signature]");
+    if (!editor || !block) return;
+    const clone = editor.cloneNode(true) as HTMLElement;
+    clone.querySelector("[data-mc-signature]")?.remove();
+    const written = (clone.textContent || "").replace(/\u00a0/g, " ").trim();
+    if (written) return;
+    const mailboxId = qs<HTMLSelectElement>("#mcComposeMailbox")?.value || "";
+    block.innerHTML = mcSignatureInnerHtml(mailCenterState.accounts.find((item) => item.id === mailboxId));
+    mcComposeDraftSaveSoon();
+  });
   if (prefill.quoteHtml) {
     // 回复/转发：光标直接落在正文开头，边看原信边写（别再抢到主题上）
     editor?.focus();
@@ -3305,6 +3485,13 @@ async function sendMailCenterCompose() {
   if (!to) { toast("请填写收件人邮箱", "error"); toBox?.querySelector<HTMLInputElement>("input")?.focus(); return; }
   if (!content && !mcComposeAttachments.length) { toast("邮件正文不能为空", "error"); editor?.focus(); return; }
   if (mcComposeAttachments.some((item) => !item.contentBase64)) { toast("附件还在读取中，等一下再发", "warn"); return; }
+  // 体积守门：附件与内嵌图都要按 base64 计（×4/3），算准了再发，别等服务器 413 把提示丢给用户
+  const payloadBytes = html.length + content.length
+    + mcComposeAttachments.reduce((sum, item) => sum + (item.contentBase64.length || Math.ceil(item.size / 3) * 4), 0);
+  if (payloadBytes > MC_SEND_BODY_BUDGET) {
+    toast(`这封邮件约 ${mcFormatSize(payloadBytes)}，超过 ${mcFormatSize(MC_SEND_BODY_BUDGET)} 上限：请压缩图片，或把大文件改用网盘链接`, "error");
+    return;
+  }
   // 守门一：没主题（Gmail 式确认，不硬拦）
   if (!subject) {
     const ok = await confirmAction({
@@ -3348,7 +3535,11 @@ async function sendMailCenterCompose() {
     void loadMailCenterFolders();
     if (mailCenterState.folder === "sent") void loadMailCenterMessages({ silent: true });
   } catch (error) {
-    toast(error instanceof Error ? error.message : "发送失败，请检查发件账号配置", "error");
+    const message = error instanceof Error ? error.message : "";
+    // 「请求内容过大」是网关/服务端的体积上限，不是账号配置问题：给出可操作的下一步
+    toast(/请求内容过大|entity\.too\.large|413/i.test(message)
+      ? "图片或附件太大，服务器拒收：把图片压缩后再发，或改用网盘链接"
+      : (message || "发送失败，请检查发件账号配置"), "error");
     mailCenterState.composeSending = false;
     sendBtn.disabled = false;
     sendBtn.classList.remove("is-sending");

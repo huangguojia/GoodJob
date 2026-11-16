@@ -27,6 +27,7 @@ const deniedPatterns: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /^\/api\/whatsapp\/binding(?:\/|$)/u, reason: "个人 Communication 账号绑定配置不向 Agent 开放" },
   { pattern: /^\/api\/whatsapp\/webhook(?:\/|$)/u, reason: "外部 webhook 接收接口不向 Agent 开放" },
   { pattern: /^\/api\/website-leads(?:\/|$)/u, reason: "官网询盘 webhook 靠签名校验接收，不向 Agent 开放" },
+  { pattern: /^\/api\/lead-ads(?:\/|$)/u, reason: "广告表单 webhook 靠令牌校验接收，不向 Agent 开放" },
   { pattern: /^\/api\/exchange(?:\/|$)/u, reason: "对接控制面持有对接方密钥并可直接向第三方推送报文，必须经过专用执行网关，不向 Agent 开放" },
   { pattern: /^\/api\/kb(?:\/|$)/u, reason: "知识库训练会改写自动回复语料并直接发布到运行端，属治理控制面，必须由人工确认后发布" },
   { pattern: /^\/api\/tools\/logs(?:\/|$)/u, reason: "系统审计日志不能由 Agent 直接读取或伪造" },

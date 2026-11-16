@@ -31,10 +31,34 @@ describe("WhatsApp 对话 → CRM 客户跟进自动同步（插件侧）", () =
   /** 每次推送都留痕，断言靠它们而不是靠返回值的自述。 */
   const dispatchCalls: Array<{ auth: string | undefined; payload: Record<string, unknown> }> = [];
   const seenLeads = new Set<string>();
+  /** 预演请求的 payload（只读接口，单独记，不和写入混在一起）。 */
+  const previewCalls: Array<Record<string, any>> = [];
   let crmShouldFail = false;
 
   const crmHandler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/api/whatsapp/followup-sync/preview") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, any>;
+      previewCalls.push(payload);
+      if (crmShouldFail) {
+        response.statusCode = 503;
+        response.end(JSON.stringify({ message: "CRM 正在维护" }));
+        return;
+      }
+      response.end(JSON.stringify({
+        runDate: payload.runDate,
+        items: (payload.conversations as Array<Record<string, any>>).map((conversation) => ({
+          conversationId: conversation.conversationId,
+          match: conversation.contactName === "Sofia" ? "customer" : "lead",
+          customerId: conversation.contactName === "Sofia" ? "crm-a" : null,
+          customerName: conversation.contactName === "Sofia" ? "Nordwind GmbH" : "",
+          note: conversation.contactName === "Sofia" ? "写入客户「Nordwind GmbH」的跟进" : "CRM 里没有这个号码，会新建一条线索"
+        }))
+      }));
+      return;
+    }
     if (request.method === "POST" && request.url === "/api/whatsapp/followup-sync") {
       if (crmShouldFail) {
         response.statusCode = 503;
@@ -208,6 +232,69 @@ describe("WhatsApp 对话 → CRM 客户跟进自动同步（插件侧）", () =
     expect(nextDay).toMatchObject({ runDate: "2026-08-10", conversationsScanned: 1 });
     expect(await runtime.repository.listFollowupSyncRuns(ownerUserId)).toHaveLength(2);
     void hansId;
+  });
+
+  it("同步前给可勾选清单：预览只读，同步只写选中的会话", async () => {
+    const owner = `${ownerUserId}-preview`;
+    const day = "2026-08-13";
+    currentTime = new Date(`${day}T01:00:00.000Z`);
+    const sofiaId = await seedConversation(owner, { displayName: "Sofia", phone: "+34612140788", day, bodies: [
+      { direction: "inbound", body: "Could you send the CE certificate?" },
+      { direction: "outbound", body: "Sure, today." }
+    ] });
+    const hansId = await seedConversation(owner, { displayName: "Hans", phone: "+4915112345678", day, bodies: [
+      { direction: "inbound", body: "Do you have UL certification?" }
+    ] });
+
+    const service = new FollowupSyncService(runtime.repository, crmBaseUrl, CRM_SECRET, () => currentTime);
+    const dispatchBefore = dispatchCalls.length;
+    const previewBefore = previewCalls.length;
+    const preview = await service.preview(owner);
+
+    // ---- 清单：每行有联系人、条数、最后一条客户消息、会变成什么 ----
+    expect(preview).toMatchObject({ runDate: day, timezone: "Asia/Shanghai", total: 2, crmNote: "" });
+    expect(previewCalls).toHaveLength(previewBefore + 1);
+    expect(preview.items).toHaveLength(2);
+    const sofia = preview.items.find((item) => item.conversationId === sofiaId)!;
+    expect(sofia).toMatchObject({
+      contactName: "Sofia",
+      messageCount: 2,
+      inboundCount: 1,
+      outboundCount: 1,
+      match: "customer",
+      customerName: "Nordwind GmbH"
+    });
+    expect(sofia.lastInbound).toContain("CE certificate");
+    expect(preview.items.find((item) => item.conversationId === hansId)).toMatchObject({ match: "lead" });
+    // 预览只读：不建 run、不落明细、不推写入请求。
+    expect(await runtime.repository.listFollowupSyncRuns(owner)).toHaveLength(0);
+    expect(dispatchCalls).toHaveLength(dispatchBefore);
+
+    // ---- 只同步勾中的那一个 ----
+    const result = await service.run(owner, { trigger: "manual", conversationIds: [sofiaId] });
+    expect(dispatchCalls).toHaveLength(dispatchBefore + 1);
+    const pushed = dispatchCalls.at(-1)!.payload.conversations as Array<Record<string, any>>;
+    expect(pushed.map((item) => item.conversationId)).toEqual([sofiaId]);
+    expect(result).toMatchObject({ conversationsScanned: 1, customersMatched: 1, activitiesWritten: 1, leadsCreated: 0 });
+    void hansId;
+  });
+
+  it("CRM 预演失败不挡预览：列表照出，匹配标记 unknown 并说明原因", async () => {
+    const owner = `${ownerUserId}-preview-down`;
+    const day = "2026-08-14";
+    currentTime = new Date(`${day}T01:00:00.000Z`);
+    await seedConversation(owner, { displayName: "Sofia", phone: "+34612140788", day, bodies: [
+      { direction: "inbound", body: "Please confirm the warranty." }
+    ] });
+    crmShouldFail = true;
+    try {
+      const preview = await new FollowupSyncService(runtime.repository, crmBaseUrl, CRM_SECRET, () => currentTime).preview(owner);
+      expect(preview.items).toHaveLength(1);
+      expect(preview.items[0].match).toBe("unknown");
+      expect(preview.crmNote).toContain("CRM 预演失败");
+    } finally {
+      crmShouldFail = false;
+    }
   });
 
   it("CRM 不可达/报错：整批会话留失败明细，整轮 partial，且推进下次时点", async () => {

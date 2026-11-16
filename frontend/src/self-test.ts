@@ -1173,22 +1173,17 @@ assert.ok(
   /\.mc-compose-pane\s*\{[^}]*width:\s*100%/u.test(prototype),
   "阅读栏写信区没有压掉 .mail-center-compose-modal 的 680px 固定宽（会顶出右栏）"
 );
+// 回复/全部回复/转发必须复用同一个写邮件面板：用户明确要求「回复框要和写邮件一样大」。
+// 只要再造一个独立的 .mc-compose-inline 卡，就会连带它那套压缩样式（隐藏发件人、输入框 26px、正文地板 64px）。
 assert.ok(
-  /\.mc-compose-inline\s*\{[^}]*width:\s*auto/u.test(prototype),
-  "就地回复卡片没有覆盖 680px 固定宽（会把阅读栏撑出横向滚动、正文被推着往左跑）"
+  /openMailCenterComposePane\(detail,\s*account,\s*prefill,\s*saved,\s*\{[\s\S]{0,240}?forMessageId:\s*message\.id/u.test(apiLayer),
+  "回复没有复用写邮件面板（必须走 openMailCenterComposePane + forMessageId），否则回复框会比写信小一号"
 );
-// 回复框必须钉在阅读栏底部（原信上半截自己滚），不能接在长正文末尾——那样一点「回复」只看到半个框
-assert.ok(apiLayer.includes('classList.add("is-replying")'), "回复没有进入阅读栏底部布局（is-replying）");
+assert.ok(
+  !apiLayer.includes('id = "mcComposeInline"'),
+  "回复又生成了独立的就地回复卡（mcComposeInline）——回复必须与写邮件共用 #mcComposePane"
+);
 assert.ok(prototype.includes("mc-detail-scroll"), "阅读栏缺少可滚动区包装 .mc-detail-scroll");
-assert.ok(
-  /#mcMessageDetail\.is-replying\s*\{[^}]*display:\s*flex/u.test(prototype),
-  "缺少回复态的两段式布局样式（#mcMessageDetail.is-replying）"
-);
-// 回复卡是「阅读栏的一个区」，不是浮在里面的小窗：圆角/外边距/投影一留，观感立刻回到小弹窗
-assert.ok(
-  /\.mc-compose-inline\s*\{[^}]*border-radius:\s*0/u.test(prototype),
-  "就地回复卡还留着圆角（观感上仍是浮窗，而不是阅读栏底部的一块）"
-);
 // 800px 高的窗口里，页头+账号卡占 250px，三栏只剩 360px：不回血 130px，回复框一开原信就没了
 assert.ok(
   apiLayer.includes('classList.toggle("is-writing"') &&
@@ -1202,14 +1197,72 @@ assert.ok(
 // 抬头「取消」不能抢页脚的 #mcComposeCancel（重复 id 会让「存草稿并收起」失去处理函数）
 assert.ok(
   apiLayer.includes("data-mc-compose-cancel") &&
+    apiLayer.includes("showCancel: true") &&
     (apiLayer.match(/id="mcComposeCancel"/gu) || []).length === 1,
-  "就地回复抬头的取消按钮没有接线，或与页脚按钮复用了同一个 id"
+  "回复面板的「取消」没有接线：showCancel 未传，或与页脚按钮复用了同一个 id"
 );
-// 就地回复抬头不许出现 ×/最小化：那两个是浮窗的招牌动作，留着就还是「小弹窗」
+// 图片「发不出去」的两个真因（2026-11-13 修）：附件原图直传、内嵌图只按宽度判断是否压缩。
+// 手机照片 3~6MB，base64 再涨 4/3，直接顶穿服务端 JSON 体积上限，用户只看到「请求内容过大」。
+const mcFunctionBody = (name: string) => {
+  const start = apiLayer.indexOf(`function ${name}(`);
+  if (start < 0) return "";
+  const rest = apiLayer.slice(start + 10);
+  const end = rest.search(/\n(?:export )?(?:async )?function |\n\/\*\* /u);
+  return end >= 0 ? rest.slice(0, end) : rest;
+};
+const mcAttachFn = mcFunctionBody("mcAddComposeFiles");
 assert.ok(
-  apiLayer.includes("mcComposeHeadButtonsHtml(false, false)"),
-  "就地回复抬头又带上了 × 或最小化按钮（观感会退回小弹窗）"
+  mcAttachFn.includes("await mcPrepareAttachment(") &&
+    mcAttachFn.indexOf("await mcPrepareAttachment(") < mcAttachFn.indexOf("mcComposeAttachments.push("),
+  "附件入列前没有压缩大图（必须先 await mcPrepareAttachment 再 push），否则照片级附件必然被服务端体积上限挡回"
 );
+const mcInlineImageFn = mcFunctionBody("mcInsertInlineImage");
+assert.ok(
+  mcInlineImageFn.includes("Math.max(img.naturalWidth, img.naturalHeight)") &&
+    !mcInlineImageFn.includes("img.naturalWidth > 800"),
+  "内嵌图只按宽度判断是否压缩——手机长截图（780×4000）宽度没过线，体积照样顶穿请求体"
+);
+const mcSendFn = mcFunctionBody("sendMailCenterCompose");
+assert.ok(
+  mcSendFn.includes("MC_SEND_BODY_BUDGET") &&
+    mcSendFn.indexOf("MC_SEND_BODY_BUDGET") < mcSendFn.indexOf('api("/api/mail-center/send"'),
+  "发送前没有按 base64 估体积（必须用 MC_SEND_BODY_BUDGET 先拦），用户会撞上服务器那句「请求内容过大」"
+);
+assert.ok(
+  /PAYLOAD_TOO_LARGE|请求内容过大/u.test(mcSendFn),
+  "413 体积超限没有翻译成人话（应提示压缩图片 / 改用网盘链接）"
+);
+
+// 署名尾缀（2026-11-13）：每个发件邮箱可以有自己的尾缀，切换账号时跟着换。
+// 以前只读 state.user.emailSignature，池里 10 个邮箱共用一份落款。
+const mcSignatureLinesFn = mcFunctionBody("mcComposeSignatureLines");
+assert.ok(
+  mcSignatureLinesFn.includes("account?.signature") &&
+    mcSignatureLinesFn.indexOf("account?.signature") < mcSignatureLinesFn.indexOf("state.user?.emailSignature"),
+  "署名尾缀没有优先读发件邮箱自己的 account.signature——多个发件邮箱会共用同一份落款"
+);
+assert.ok(
+  mcFunctionBody("mcComposeSignatureHtml").includes("data-mc-signature"),
+  "签名块没有 data-mc-signature 标记，「设置尾缀」保存后无法就地替换正文里的旧落款"
+);
+const mcSignatureSaveFn = mcFunctionBody("saveComposeSignature");
+assert.ok(
+  mcSignatureSaveFn.includes("/signature") && mcSignatureSaveFn.includes('method: "PATCH"'),
+  "尾缀保存没有走专用 PATCH /api/sender-mailboxes/:id/signature（走 PUT 全量会误清 IMAP 授权码）"
+);
+assert.ok(
+  !mcSignatureSaveFn.includes("/api/profile/email-binding"),
+  "尾缀保存改到了账号级邮箱配置——会连带覆盖 SMTP/IMAP 字段"
+);
+assert.ok(
+  apiLayer.includes('id="smbSignature"') && apiLayer.includes("signature: qs<HTMLTextAreaElement>"),
+  "发件邮箱登记/编辑弹窗没有署名尾缀输入框，用户无处设置每个邮箱的落款"
+);
+assert.ok(
+  /#mcComposeMailbox[\s\S]{0,900}?mcSignatureInnerHtml/u.test(apiLayer),
+  "切换发件邮箱时没有同步尾缀——多个邮箱会一直沿用上一个账号的落款"
+);
+
 // 切文件夹/切账号会重建 #mcTabBody，把写信界面整个换掉：专注态必须同时撤，
 // 否则账号统计条一直藏着不回来（实测切「已发送」后复现）。先切出函数体，避免正则跨函数误命中。
 const tabBodyFn = (() => {

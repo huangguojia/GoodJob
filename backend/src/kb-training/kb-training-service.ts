@@ -251,7 +251,9 @@ export async function executeKbTrainingRun(
         return;
       }
       const batch = usable.slice(offset, offset + KB_SEGMENTS_PER_CALL);
-      const prompt = buildKbPrompt(batch, { documentTitle: collected.items[0]?.title });
+      // documentTitle 取**本批**首段的来源，不是整份资料的第一份：一个 run 可以喂几十份产品资料，
+      // 每批都是不同产品，标题写错会让模型把上一批的参数往这一批的产品上套。
+      const prompt = buildKbPrompt(batch, { documentTitle: batch[0]?.title });
 
       let raw = "";
       if (chosen === "ai" && deps.aiConfig) {
@@ -277,7 +279,7 @@ export async function executeKbTrainingRun(
         }
       }
 
-      const parsed = parseKbOutput(raw, batch);
+      const parsed = parseKbOutput(raw, batch, { segmentOffset: offset });
       if (parsed.error) {
         // 整批不可读：这批段一条都没产出，如实计入 skipped（不是"成功 0 条"）。
         stats.skipped += batch.length;

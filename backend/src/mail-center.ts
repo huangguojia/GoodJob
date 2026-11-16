@@ -68,6 +68,8 @@ export interface MailAccountOverview {
   label: string;
   email: string;
   fromName: string;
+  /** 该邮箱专属署名尾缀；空 = 沿用账号级邮件签名 */
+  signature?: string;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;
@@ -1746,6 +1748,7 @@ export function mailAccountOverview(
     label: mailbox.label || mailbox.email,
     email: mailbox.email,
     fromName: mailbox.fromName,
+    signature: mailbox.signature || "",
     smtpHost: mailbox.smtpHost,
     smtpPort: mailbox.smtpPort || 465,
     smtpSecure: mailbox.smtpSecure ?? true,

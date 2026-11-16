@@ -384,6 +384,7 @@ define("POST /api/sender-mailboxes", objectSchema(["email", "smtpHost", "smtpUse
   dkimDomain: string({ maxLength: 180 }),
   dkimSelector: string({ maxLength: 63 }),
   dkimPrivateKey: string({ maxLength: 12000 }),
+  signature: string({ maxLength: 2000 }),
   dailyLimit: integer({ minimum: 1, maximum: 500 }),
   enabled: boolean()
 }), "向发件邮箱池登记一个 SMTP 发件邮箱（授权码加密落库，最多 10 个）；供自动发信方案按数量轮换发件身份。dkimDomain/dkimSelector/dkimPrivateKey 可选，配置后该邮箱发出的邮件带 DKIM 签名；dailyLimit 为单账号每日外发上限（默认 50）。");
@@ -403,9 +404,13 @@ define("PUT /api/sender-mailboxes/{id}", objectSchema(["email", "smtpHost", "smt
   dkimDomain: string({ maxLength: 180 }),
   dkimSelector: string({ maxLength: 63 }),
   dkimPrivateKey: string({ maxLength: 12000 }),
+  signature: string({ maxLength: 2000 }),
   dailyLimit: integer({ minimum: 1, maximum: 500 }),
   enabled: boolean()
 }), "更新发件邮箱池里自己名下的一个发件邮箱；smtpPassword 留空表示保留原授权码，dkimPrivateKey 不传表示保留原私钥。");
+define("PATCH /api/sender-mailboxes/{id}/signature", objectSchema([], {
+  signature: string({ maxLength: 2000 })
+}), "只更新发件邮箱池里某个邮箱的署名尾缀（写信/回复时自动带在正文末尾）；留空表示回落账号级邮件签名，不触碰 SMTP/IMAP 凭据。");
 define("DELETE /api/sender-mailboxes/{id}", emptySchema, "从发件邮箱池删除自己名下的一个发件邮箱；删除不可撤销，需要明确确认。");
 define("POST /api/sender-mailboxes/{id}/test", objectSchema([], { to: string({ format: "email", maxLength: 255 }) }), "用发件邮箱池里的指定邮箱发一封测试邮件验证 SMTP 配置；默认发给该邮箱自己。");
 define("PATCH /api/mail-center/accounts/{id}/sync", objectSchema([], {
@@ -609,6 +614,14 @@ define("POST /api/whatsapp/followup-sync", objectSchema(["runId", "runDate", "ti
     }), { maxItems: 500 })
   }), { maxItems: 30 })
 }), "接收 Communication 插件同步的当日会话批次，由 CRM 匹配客户并生成跟进结论写入跟进/线索；runId/runDate/timezone 必须来自插件同步任务，会话正文只用于整理摘要、原文不落库，响应逐会话明细是记账证据。");
+define("POST /api/whatsapp/followup-sync/preview", objectSchema(["runDate"], {
+  runDate: string({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+  conversations: array(objectSchema(["conversationId"], {
+    conversationId: string({ minLength: 1, maxLength: 180 }),
+    contactName: string({ maxLength: 180 }),
+    contactPhone: string({ maxLength: 40 })
+  }), { maxItems: 30 })
+}), "只读预演：逐会话返回同步后会「写入已有客户跟进 / 新建线索 / 因号码歧义跳过」，供插件同步前列出可勾选清单；不写库、不调模型、不发站内信。");
 
 const commissionProductFields: Record<string, JsonSchema> = { name: string({ minLength: 1 }), category: string(), model: string(), currency: string(), defaultPrice: number({ minimum: 0 }), costPrice: number({ minimum: 0 }), status: oneOf("active", "disabled"), remark: string() };
 const commissionRuleFields: Record<string, JsonSchema> = { ruleType: oneOf("rate", "fixed", "tier", "gross_profit", "none"), rate: number({ minimum: 0, maximum: 1 }), fixedAmount: number({ minimum: 0 }), tierJson: string(), grossProfitRate: number({ minimum: 0, maximum: 1 }), effectiveFrom: string(), effectiveTo: string(), enabled: boolean(), remark: string() };

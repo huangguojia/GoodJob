@@ -24,6 +24,7 @@ import { registerIamRoutes } from "./routes/iam.js";
 import { registerCustomersRoutes } from "./routes/customers.js";
 import { registerAiEngineRoutes } from "./routes/ai-engine.js";
 import { registerLeadsRoutes } from "./routes/leads.js";
+import { registerLeadAdsRoutes } from "./routes/lead-ads.js";
 import { registerCommissionRoutes } from "./routes/commission.js";
 import { registerKbRoutes } from "./routes/kb.js";
 import { registerExchangeRoutes } from "./routes/exchange.js";
@@ -50,6 +51,7 @@ registerIamRoutes(app);
 registerCustomersRoutes(app);
 registerAiEngineRoutes(app);
 registerLeadsRoutes(app);
+registerLeadAdsRoutes(app);
 registerCommissionRoutes(app);
 registerKbRoutes(app);
 registerExchangeRoutes(app);
@@ -82,7 +84,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
   if (typeof error === "object" && error && "type" in error && error.type === "entity.too.large") {
-    res.status(413).json({ message: "请求内容过大" });
+    // 带上 code：前端要把「体积超限」翻译成「压缩图片/改用网盘链接」，而不是原样甩「请求内容过大」
+    res.status(413).json({ message: "请求内容过大", code: "PAYLOAD_TOO_LARGE" });
     return;
   }
   if (error instanceof SyntaxError && "body" in error) {

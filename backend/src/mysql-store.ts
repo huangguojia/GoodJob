@@ -2186,7 +2186,7 @@ export async function createMysqlStore(
   return store;
 }
 
-export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.31-lead-assignment";
+export const GOODJOB_MYSQL_SCHEMA_VERSION = "1.4.32-sender-mailbox-signature";
 
 /** 内置超级管理员（公司最高权限账号）：可登录、管理账号、一键批量生成带有效期的体验账号 */
 const BUILT_IN_SUPERADMIN = {

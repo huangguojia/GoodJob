@@ -329,9 +329,14 @@ app.use("/whatsapp-plugin/api", (req, res) => {
   req.url = `/api${req.url}`;
   communicationProxy.web(req, res);
 });
-app.use(express.json({
-  limit: process.env.JSON_BODY_LIMIT || "3mb",
-  verify(req, _res, buffer) {
+/**
+ * JSON 请求体默认 3MB，但邮件中心要带附件与正文内嵌图：base64 会把体积放大 4/3，
+ * 一张 3MB 的手机照片就顶穿 3MB，用户看到的是「请求内容过大」——图片根本发不出去。
+ * 所以只给发信这条链路单独一档预算，其余接口保持不变，避免为了一个发信入口放大整站解析内存。
+ */
+const MAIL_CENTER_UPLOAD_PATHS = new Set(["/api/mail-center/send", "/api/mail-center/personalize"]);
+const jsonBodyOptions = {
+  verify(req: Request, _res: Response, buffer: Buffer) {
     if (String(req.url || "").startsWith("/api/integrations/webhooks/")) {
       (req as typeof req & { integrationRawBody?: Buffer }).integrationRawBody = Buffer.from(buffer);
     }
@@ -339,7 +344,15 @@ app.use(express.json({
       (req as typeof req & { websiteLeadRawBody?: Buffer }).websiteLeadRawBody = Buffer.from(buffer);
     }
   }
-}));
+};
+const defaultJsonParser = express.json({ ...jsonBodyOptions, limit: process.env.JSON_BODY_LIMIT || "3mb" });
+// 12MB 附件按 base64 约 16MB，加上正文与 JSON 结构留到 20MB；服务端 12MB 解码后总量守门仍在路由里兜底。
+const mailCenterJsonParser = express.json({ ...jsonBodyOptions, limit: process.env.MAIL_CENTER_BODY_LIMIT || "20mb" });
+app.use((req, res, next) => {
+  const path = String(req.url || "").split("?")[0].replace(/\/+$/u, "");
+  const parser = MAIL_CENTER_UPLOAD_PATHS.has(path) ? mailCenterJsonParser : defaultJsonParser;
+  parser(req, res, next);
+});
 app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
 export const loginLimiter = rateLimit({

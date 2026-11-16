@@ -1349,6 +1349,9 @@ export interface SenderMailbox {
   imapPort: number;
   imapUser: string;
   imapPassword: string;
+  /** 署名尾缀（可选）：该发件邮箱专属的落款，写信/回复时自动带在正文末尾。
+   *  空 = 回落账号级「邮件签名」。 */
+  signature?: string;
   /** DKIM 签名（可选）：配置后该池内邮箱发出的邮件在编译阶段完成 DKIM-Signature 签名 */
   dkimDomain?: string;
   dkimSelector?: string;

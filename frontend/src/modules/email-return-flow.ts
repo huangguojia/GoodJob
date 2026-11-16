@@ -356,6 +356,8 @@ export interface MailCenterAccount {
   label: string;
   email: string;
   fromName: string;
+  /** 该邮箱专属署名尾缀；空 = 沿用账号级邮件签名 */
+  signature?: string;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;

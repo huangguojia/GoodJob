@@ -93,6 +93,8 @@ interface SenderMailboxView {
   label: string;
   email: string;
   fromName: string;
+  /** 该邮箱专属署名尾缀；空 = 沿用账号级邮件签名 */
+  signature?: string;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;
@@ -182,11 +184,15 @@ function renderSenderMailboxList() {
       : `<span class="badge amber">缺授权码</span>`;
     const primary = mailbox.email === (state.user?.outboundEmail || "") ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8">同主邮箱</span>` : "";
     const dkim = mailbox.dkimDomain && mailbox.dkimSelector ? `<span class="badge" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d">DKIM ${escapeHtml(mailbox.dkimSelector)}.${escapeHtml(mailbox.dkimDomain)}</span>` : "";
+    const signature = mailbox.signature?.trim()
+      ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8" title="${escapeHtml(mailbox.signature)}">专属尾缀</span>`
+      : `<span class="badge gray" title="沿用「邮件签名」里的账号级签名">通用尾缀</span>`;
     return `<div class="mailbox-pool-row${mailbox.enabled ? "" : " is-off"}" style="--mb-i:${index}">
       <div class="mailbox-pool-main">
         <b>${escapeHtml(mailbox.label || mailbox.email)}${primary}</b>
         <small>${escapeHtml(mailbox.email)} · ${escapeHtml(mailbox.smtpHost)}:${mailbox.smtpPort} ${mailbox.smtpSecure ? "SSL" : "STARTTLS"}${mailbox.fromName ? ` · 发件人 ${escapeHtml(mailbox.fromName)}` : ""} · 日限额 ${mailbox.dailyLimit || 50}</small>
         ${dkim ? `<small>${dkim}</small>` : ""}
+        <small>${signature}</small>
       </div>
       <div class="mailbox-pool-side">${status}</div>
       <div class="mailbox-pool-actions">
@@ -211,6 +217,7 @@ export function openSenderMailboxModal(mailbox?: SenderMailboxView) {
       <div class="form-field"><label>备注名称</label><input id="smbLabel" placeholder="例如 腾讯企业邮 2 号" value="${escapeHtml(mailbox?.label || "")}"></div>
       <div class="form-field"><label>发件邮箱 *</label><input id="smbEmail" placeholder="sales2@your-company.com" value="${escapeHtml(mailbox?.email || "")}"></div>
       <div class="form-field"><label>发件人显示名</label><input id="smbFromName" placeholder="留空 = 沿用账号发件人名称" value="${escapeHtml(mailbox?.fromName || "")}"></div>
+      <div class="form-field full"><label>署名尾缀（这个邮箱专属）</label><textarea id="smbSignature" rows="4" placeholder="留空 = 沿用「邮箱设置 → 邮件签名」的账号级签名&#10;Best regards,&#10;Kevin&#10;ZHUHAI LONGTEC CO.,LTD">${escapeHtml(mailbox?.signature || "")}</textarea><small>写信、回复、转发时自动带在正文末尾；每个发件邮箱可以不一样，切换账号时尾缀跟着换。</small></div>
       <div class="form-field"><label>SMTP服务器 *</label><input id="smbSmtpHost" placeholder="smtp.exmail.qq.com" value="${escapeHtml(mailbox?.smtpHost || "")}"></div>
       <div class="form-field"><label>SMTP端口</label><input id="smbSmtpPort" type="number" min="1" max="65535" value="${mailbox?.smtpPort || 465}"></div>
       <div class="form-field"><label>加密方式</label><select id="smbSmtpSecure"><option value="true"${mailbox?.smtpSecure === false ? "" : " selected"}>SSL/TLS（465）</option><option value="false"${mailbox?.smtpSecure === false ? " selected" : ""}>STARTTLS/普通（587）</option></select></div>
@@ -237,6 +244,7 @@ async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
     label: qs<HTMLInputElement>("#smbLabel")?.value.trim() || "",
     email: qs<HTMLInputElement>("#smbEmail")?.value.trim() || "",
     fromName: qs<HTMLInputElement>("#smbFromName")?.value.trim() || "",
+    signature: qs<HTMLTextAreaElement>("#smbSignature")?.value.trim() || "",
     smtpHost: qs<HTMLInputElement>("#smbSmtpHost")?.value.trim() || "",
     smtpPort: Number(qs<HTMLInputElement>("#smbSmtpPort")?.value || 465),
     smtpSecure: qs<HTMLSelectElement>("#smbSmtpSecure")?.value !== "false",

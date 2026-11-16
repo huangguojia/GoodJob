@@ -15,6 +15,7 @@ import {
   isGreetingLike,
   leadExternalId,
   normalizePhone,
+  previewWhatsappFollowupSync,
   runWhatsappFollowupSync,
   sanitizeSummary,
   type FollowupSyncConversationInput,
@@ -144,6 +145,43 @@ check("marker 打头且日期可读", followupMarker(RUN_DATE) === `[${FOLLOWUP_
   check("线索幂等键只由号码决定且不带日期", first === "whatsapp:+4915112345678" && leadExternalId("004915112345678") === first);
 }
 check("号码归一：数字以外的字符全剥掉", normalizePhone("+49 (151) 1234-5678") === "+4915112345678" && normalizePhone("") === "");
+
+/* ---------- 同步预演：只说结论，不写任何东西 ---------- */
+{
+  const customers = [
+    { id: "c1", company: "Nordwind GmbH", whatsappPhone: "+4915112345678" },
+    { id: "c2", company: "Dup A", whatsapp: "+971501234567" },
+    { id: "c3", company: "Dup B", whatsappPhone: "+971501234567" }
+  ];
+  const items = previewWhatsappFollowupSync(USER, {
+    runDate: RUN_DATE,
+    conversations: [
+      { conversationId: "wa:1", contactName: "Sofia", contactPhone: "+49 151 1234 5678" },
+      { conversationId: "wa:2", contactName: "Ahmed", contactPhone: "+971501234567" },
+      { conversationId: "wa:3", contactName: "New guy", contactPhone: "+44 7700 900123" }
+    ]
+  }, { customersOf: () => customers });
+  check("预演：命中唯一客户 → customer，并带客户公司名", items[0].match === "customer" && items[0].customerId === "c1" && items[0].customerName === "Nordwind GmbH", items[0]);
+  check("预演：号码对应多个客户 → ambiguous，且不指向任何客户", items[1].match === "ambiguous" && items[1].customerId === null, items[1]);
+  check("预演：号码不在 CRM → lead", items[2].match === "lead" && items[2].customerId === null, items[2]);
+  check("预演：号码写法不同也能命中（+49 151… 与 +49151…）", items[0].contactPhone !== customers[0].whatsappPhone && items[0].match === "customer");
+}
+{
+  const previous = getStore();
+  const probe = rig({ customers: [{ id: "c1", company: "Nordwind GmbH", whatsappPhone: "+4915112345678" }] });
+  try {
+    previewWhatsappFollowupSync(USER, {
+      runDate: RUN_DATE,
+      conversations: [{ conversationId: "wa:1", contactName: "Sofia", contactPhone: "+4915112345678" }]
+    }, probe.deps);
+    check(
+      "预演不写跟进、不建线索、不发站内信、不落库",
+      probe.store.customerActivities.length === 0 && probe.leads.length === 0 && probe.store.internalMessages.length === 0 && probe.store.persistCalls === 0
+    );
+  } finally {
+    restoreStore(previous);
+  }
+}
 
 /* ---------- 纯函数：寒暄判据与基础跟进 ---------- */
 

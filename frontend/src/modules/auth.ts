@@ -117,6 +117,7 @@ export const viewPermissionRequirements: Record<string, string> = {
   "outreach-journey": "prospect.read",
   "integration-center": "integration.read",
   exchange: "integration.read",
+  "lead-ads": "lead.read",
   leads: "lead.read",
   customers: "customer.read",
   suppliers: "supplier.read",

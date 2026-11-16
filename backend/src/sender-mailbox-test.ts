@@ -77,6 +77,11 @@ function mailbox(overrides: Partial<SenderMailbox> = {}): SenderMailbox {
   ok(overrides.imapPassword === "auth-a", "IMAP 密码缺省回落 SMTP 授权码（已发送归档可用）");
   const withImap = senderMailboxOverrides(mailbox({ imapHost: "imap.b.com", imapUser: "b@x.com", imapPassword: "imap-pass" }));
   ok(withImap.imapHost === "imap.b.com" && withImap.imapUser === "b@x.com" && withImap.imapPassword === "imap-pass", "显式 IMAP 配置优先");
+  // 专属尾缀：配了才覆盖账号级签名，没配必须保持 undefined（否则会静默清空账号签名）
+  const noSignature = senderMailboxOverrides(mailbox());
+  ok(!Object.prototype.hasOwnProperty.call(noSignature, "emailSignature"), "没配专属尾缀时不覆盖账号级邮件签名");
+  const withSignature = senderMailboxOverrides(mailbox({ signature: "Best regards,\nKevin" }));
+  ok(withSignature.emailSignature === "Best regards,\nKevin", "配了专属尾缀时覆盖发件签名");
 }
 
 // ---- toSenderMailboxView：密码不回显 ----

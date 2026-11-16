@@ -91,6 +91,7 @@ import {
   renderOutreachJourneyPage
 } from "./modules/outreach";
 import { bindExchangeEvents, loadExchangeData } from "./modules/exchange";
+import { bindLeadAdsEvents, loadLeadAdsData } from "./modules/lead-ads";
 import { bindSalesSkillCenterEvents, loadSalesSkillCenter } from "./modules/sales-skill-center";
 import { type ConfirmActionOptions, type ModalOptions, api, setButtonPending, toast } from "./modules/ui";
 import {
@@ -4368,6 +4369,10 @@ export function activateNavView(view: string, after?: () => void) {
   }
   if (view === "exchange") {
     void loadExchangeData();
+  }
+  if (view === "lead-ads") {
+    bindLeadAdsEvents();
+    void loadLeadAdsData();
   }
   if (view === "dashboard") requestDashboardRefresh();
   if (view === "file-center") void loadFileCenter();
