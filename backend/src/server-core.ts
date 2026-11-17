@@ -479,7 +479,10 @@ app.use("/api/reports", requireAuth, asyncRoute(async (req, res, next) => {
 app.use("/api/dashboard", requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, "workspace.dashboard.read");
 }));
-app.use(["/api/problems", "/api/competitors", "/api/case-studies", "/api/memos", "/api/plan-tasks", "/api/plan-templates"], requireAuth, asyncRoute(async (req, res, next) => {
+// 注意：/api/peers（同行管理）必须挂在这道闸门里。它的读接口用 canSeeOwner 过滤，
+// 而 canSeeOwner 在 iamPermissions 存在、iamDataScope 缺失时会一律判 false（见 auth.ts）。
+// iamDataScope 只由 enforceIamTenantPermission 填充，漏挂闸门 = 保存成功但列表永远为空。
+app.use(["/api/problems", "/api/competitors", "/api/case-studies", "/api/memos", "/api/plan-tasks", "/api/plan-templates", "/api/peers"], requireAuth, asyncRoute(async (req, res, next) => {
   await enforceIamTenantPermission(req, res, next, req.method === "GET" ? "workspace.dashboard.read" : "workspace.dashboard.manage");
 }));
 app.use(["/api/trade-documents", "/api/trade-document-imports", "/api/trade-document-templates", "/api/trade-document-recognition-templates", "/api/document-assets", "/api/document-defaults", "/api/quote-history"], requireAuth, asyncRoute(async (req, res, next) => {
