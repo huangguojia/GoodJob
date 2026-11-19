@@ -163,7 +163,8 @@ export async function recognizeConfiguredTradeDocument(input: {
 
 function documentType(value: unknown): TradeDocument["type"] {
   const normalized = cleanText(value, 40).toUpperCase();
-  if (["PI", "CI", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"].includes(normalized)) return normalized as TradeDocument["type"];
+  if (["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"].includes(normalized)) return normalized as TradeDocument["type"];
+  if (/采购订单|purchase\s+order/iu.test(normalized)) return "PO";
   if (/报价|quotation|quote/iu.test(normalized)) return "QUOTATION";
   if (/装箱|packing/iu.test(normalized)) return "PL";
   if (/商业发票|commercial/iu.test(normalized)) return "CI";

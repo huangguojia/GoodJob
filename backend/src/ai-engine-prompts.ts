@@ -28,6 +28,7 @@ import {
   unwrapEnginePayload
 } from "./engine-output.js";
 import { repairJsonText } from "./ai-model-runtime.js";
+import type { ExtractedWebsiteContact } from "./types.js";
 
 export interface EnginePromptSection {
   title: string;
@@ -89,6 +90,52 @@ export function engineSkillDirective(skillName: string) {
     `FIRST STEP: load the Skill named \`${skillName}\` using the Skill tool, then follow that Skill's methodology for the whole task.`,
     "If that Skill is unavailable in this session, continue with the instructions below anyway — never stop, fail or ask because a Skill is missing."
   ].join(" ");
+}
+
+/**
+ * Codex CLI 版本的技能指令。
+ *
+ * Codex 没有 WorkBuddy 的 Skill 工具，也不会扫描 `.workbuddy/skills/`。但技能包本来就放在
+ * Runner 授权的工作目录里（`<workspace>/.workbuddy/skills/<name>/SKILL.md`），Codex 以
+ * `-C <workspace>` 在只读沙箱里运行、能读这个文件——所以直接让它先读技能文件，
+ * 两个 CLI 共用同一份技能包，不需要另装一份。降级口径与 WorkBuddy 版完全一致。
+ */
+export function engineSkillDirectiveForCodex(skillName: string) {
+  return [
+    `FIRST STEP: read the file \`.workbuddy/skills/${skillName}/SKILL.md\` in the current working directory (read-only) and follow that skill's methodology for the whole task.`,
+    "If that file does not exist, continue with the instructions below anyway — never stop, fail or ask because a skill file is missing."
+  ].join(" ");
+}
+
+/**
+ * 按实际派给的 CLI 改写提示词里的 WorkBuddy 专属写法（在入队这一个出口统一处理）。
+ *
+ * 提示词由各业务模块在挑选 CLI 之前就拼好了，所以不在各处分支，而是在
+ * enqueueEngineCliTask 里按 choice.adapter 改写：
+ *   - 技能指令：Skill 工具 → 读取工作目录里的 SKILL.md；
+ *   - 招标日报的「会话工具现实」说明：WebFetch / Bash/curl 是 WorkBuddy 的权限语境，
+ *     换成 Codex 只读沙箱的等价说明（命令不能联网，用联网搜索 / goodjob_browser）。
+ * WorkBuddy 原样返回，行为不变。
+ */
+export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbuddy" | "codex") {
+  if (adapter !== "codex") return prompt;
+  return prompt
+    .replace(
+      /FIRST STEP: load the Skill named `([^`]+)` using the Skill tool, then follow that Skill's methodology for the whole task\. If that Skill is unavailable in this session, continue with the instructions below anyway — never stop, fail or ask because a Skill is missing\./gu,
+      (_match, skillName: string) => engineSkillDirectiveForCodex(skillName)
+    )
+    .replace(
+      "In this non-interactive session the DIRECT page-fetch tools (WebFetch, Bash/curl) are DENIED by the permission policy. Do NOT waste turns trying them.",
+      "This session runs in a read-only sandbox: shell commands cannot reach the network, so do NOT try curl, wget or other commands to fetch pages."
+    )
+    .replace(
+      "Your web SEARCH tool works, and its results usually include substantial page content (titles, buyer, dates, sometimes deadline/budget).",
+      "Use your web search tool (and the goodjob_browser tool when it is available); search results usually include substantial page content (titles, buyer, dates, sometimes deadline/budget)."
+    )
+    .replace(
+      "You do NOT need to have opened it with WebFetch for that — the search evidence IS your verification.",
+      "You do NOT need to have opened the page yourself for that — the search evidence IS your verification."
+    );
 }
 
 export interface ResearchCliPromptInput {
@@ -198,6 +245,14 @@ export function buildAcquisitionCliPrompt(input: {
     "Return ONE JSON object and nothing else — no markdown fences, no commentary before or after.",
     "Do not create, modify or delete any file. Do not run shell commands. Do not ask clarifying questions.",
     "",
+    "## Contact requirement (hard gate — this is the point of the task)",
+    "The CRM only keeps a company when you can name a REAL decision maker or purchasing contact AND give that person's public business email.",
+    "Decision maker = owner, founder, co-founder, CEO, chief executive, managing director, general manager, president, partner, proprietor, chairman.",
+    "Purchasing contact = procurement / purchasing / sourcing / buyer / supply chain / import manager.",
+    "Generic inboxes (info@, sales@, contact@, export@, office@, admin@) NEVER qualify — they are not a person and not a buyer.",
+    "Never guess an email pattern (firstname.lastname@, initial+lastname@). Report only an address you actually saw on a public page (team / contact / imprint page, trade directory, tender document, press release).",
+    "If you cannot verify such a person together with an email, DO NOT return that company at all. Zero results is an acceptable answer; a list of companies without a buyer contact is not.",
+    "",
     "## Required JSON shape",
     "{",
     '  "companies": [{',
@@ -207,17 +262,24 @@ export function buildAcquisitionCliPrompt(input: {
     '    "business": "一行主营业务",',
     '    "description": "为什么值得跟进：和搜索目标的关系、可切入点（中文，1-3 句）",',
     '    "sourceUrl": "你核实该公司时实际访问的页面 URL（没有就留空）",',
-    '    "confidence": 0-100 的整数',
+    '    "confidence": 0-100 的整数,',
+    '    "contacts": [{',
+    '      "name": "联系人姓名（保留原文）",',
+    '      "title": "职位原文，例如 Purchasing Manager / Managing Director",',
+    '      "email": "此人的公开工作邮箱，必须是你实际看到的",',
+    '      "role": "decision_maker | purchasing",',
+    '      "sourceUrl": "看到这个姓名 + 职位 + 邮箱的页面 URL"',
+    '    }]',
     "  }]",
     "}",
-    "Return at most the requested number of companies. Prefer quality over quantity; return fewer (even zero) rather than unverified names.",
+    "Return at most the requested number of companies. Prefer quality over quantity; return fewer (even zero) rather than companies without a buyer contact.",
     "",
     engineOutputContract(),
     "",
     "## Streaming findings (IMPORTANT — incremental ingestion)",
     "The CRM ingests results incrementally: users see companies as soon as they are found, not after the whole task ends.",
-    "As soon as ONE company is verified, IMMEDIATELY print a single line in exactly this format (no code fences, one line per company):",
-    '@@FOUND@@ {"company": "...", "website": "https://...", "country": "...", "business": "...", "description": "...", "sourceUrl": "...", "confidence": 0}',
+    "As soon as ONE company is verified WITH a qualifying contact, IMMEDIATELY print a single line in exactly this format (no code fences, one line per company):",
+    '@@FOUND@@ {"company": "...", "website": "https://...", "country": "...", "business": "...", "description": "...", "sourceUrl": "...", "confidence": 0, "contacts": [{"name": "...", "title": "...", "email": "...", "role": "decision_maker", "sourceUrl": "https://..."}]}',
     "Each @@FOUND@@ line must be valid JSON on a single line. Print it the moment the company is verified; do not batch them until the end.",
     "At the end, STILL return the final JSON object (shape below) summarizing all companies — it is the authoritative record.",
     "",
@@ -234,6 +296,17 @@ export function buildAcquisitionCliPrompt(input: {
   ].join("\n");
 }
 
+/** 联系人角色：只有 decision_maker / purchasing 才算「决策人或采购人」 */
+export type EngineAcquisitionContactRole = "decision_maker" | "purchasing" | "other";
+
+export interface EngineAcquisitionContact {
+  name: string;
+  title: string;
+  email: string;
+  role: EngineAcquisitionContactRole;
+  sourceUrl: string;
+}
+
 export interface EngineAcquisitionCompany {
   company: string;
   website: string;
@@ -242,6 +315,12 @@ export interface EngineAcquisitionCompany {
   description: string;
   sourceUrl: string;
   confidence: number | null;
+  contacts: EngineAcquisitionContact[];
+  /**
+   * 准入判定：至少一位「有真实姓名 + 可核实邮箱」的决策人或采购。
+   * false 的公司不写进候选池（用户要求：CLI 获客只要决策人/采购人邮箱）。
+   */
+  qualified: boolean;
 }
 
 /**
@@ -259,6 +338,113 @@ const ACQUISITION_BUSINESS_KEYS = ["business", "mainBusiness", "main_business", 
 const ACQUISITION_DESCRIPTION_KEYS = ["description", "desc", "why", "reason", "note", "notes", "说明", "理由", "推荐理由", "跟进理由"];
 const ACQUISITION_SOURCE_KEYS = ["sourceUrl", "source_url", "evidenceUrl", "evidence_url", "source", "参考链接", "来源"];
 const ACQUISITION_CONFIDENCE_KEYS = ["confidence", "score", "confidenceScore", "confidence_score", "可信度", "置信度"];
+const ACQUISITION_CONTACTS_KEYS = ["contacts", "contactPersons", "contact_persons", "persons", "people", "联系人", "联系人列表"];
+const ACQUISITION_CONTACT_NAME_KEYS = ["name", "contactName", "contact_name", "person", "fullName", "full_name", "姓名", "联系人"];
+const ACQUISITION_CONTACT_TITLE_KEYS = ["title", "jobTitle", "job_title", "position", "职位", "职务"];
+const ACQUISITION_CONTACT_EMAIL_KEYS = ["email", "mail", "emailAddress", "email_address", "邮箱", "邮件"];
+const ACQUISITION_CONTACT_DECLARED_ROLE_KEYS = ["role", "roleType", "role_type", "角色"];
+const ACQUISITION_CONTACT_SOURCE_KEYS = ["sourceUrl", "source_url", "evidenceUrl", "evidence_url", "url", "来源"];
+
+/**
+ * 决策人 vs 采购人：按**职位原文**判定，不信任模型自己贴的 role 标签。
+ *
+ * 刻意不收裸 `director`：Sales Director / Marketing Director 是对外销售侧，不是买方决策人；
+ * 只认 Managing Director（英国/东南亚语境里就是总经理）。
+ */
+const DECISION_TITLE_PATTERN = /(owner|founder|co-?founder|\bceo\b|chief executive|managing director|general manager|president|proprietor|chairman|chairwoman|\bpartner\b|董事长|总经理|总裁|老板|创始人|法人代表|代表取締役|社長|대표이사|directeur général|gérant|président|geschäftsführer|inhaber|gerente general|director general|propietario|diretor geral|amministratore delegato|direttore generale|genel müdür|prezes|dyrektor generalny|генеральный директор|tổng giám đốc|giám đốc|direktur utama|ผู้จัดการทั่วไป|المدير العام)/iu;
+const PURCHASING_TITLE_PATTERN = /(purchas|procurement|sourcing|supply chain|\bbuyer\b|buying (?:manager|director|lead|head)|import manager|采购|buyer|einkauf|einkäufer|acheteur|acheteuse|responsable achats|jefe de compras|comprador|compras|acquisti|responsabile acquisti|satın alma|zakupy|закупк|mua hàng|thu mua|จัดซื้อ|pembelian|purchasing|المشتريات|구매)/iu;
+
+/**
+ * 通用/职能邮箱：这些是「部门信箱」，不是某个人，也不代表买方角色。
+ * 采购部的公共信箱（purchasing@ / procurement@）同样不算——用户要的是人。
+ */
+const GENERIC_MAILBOXES = new Set([
+  "info", "sales", "contact", "contacts", "hello", "support", "admin", "office",
+  "enquiry", "enquiries", "inquiry", "inquiries", "export", "import", "service", "services",
+  "marketing", "hr", "jobs", "job", "career", "careers", "webmaster", "noreply", "no-reply",
+  "purchasing", "purchase", "procurement", "sourcing", "buying"
+]);
+
+/** 邮箱只做「语法 + 非部门信箱」校验；是否真实存在由提示词的「必须亲眼看到」约束保证 */
+export function normalizeAcquisitionContactEmail(value: string) {
+  const email = value.trim().replace(/^mailto:/iu, "").toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/u.test(email)) return "";
+  const local = email.split("@")[0] || "";
+  if (!local || GENERIC_MAILBOXES.has(local)) return "";
+  if (/^(info|sales|contact|export|office|admin|enquiry|inquiry)[._-]/u.test(local)) return "";
+  return email;
+}
+
+export function acquisitionContactRole(title: string): EngineAcquisitionContactRole {
+  const probe = String(title || "").trim();
+  if (!probe) return "other";
+  if (PURCHASING_TITLE_PATTERN.test(probe)) return "purchasing";
+  if (DECISION_TITLE_PATTERN.test(probe)) return "decision_maker";
+  return "other";
+}
+
+function contactRoleFromDeclaration(value: string): EngineAcquisitionContactRole {
+  const declared = value.trim().toLowerCase();
+  if (!declared) return "other";
+  if (/decision|决策|老板|ceo|owner/.test(declared)) return "decision_maker";
+  if (/purchas|采购|buyer|procurement/.test(declared)) return "purchasing";
+  return "other";
+}
+
+/** 占位姓名（模型偶尔会写「待维护」「N/A」）不算人 */
+function isPlaceholderContactName(name: string) {
+  const value = name.trim();
+  if (!value || value.length < 2) return true;
+  return /^(待维护|待补充|待核实|未知|不详|n\/?a|none|unknown|—+|-+)$/iu.test(value);
+}
+
+/** 单条联系人规范化：必须有姓名 + 合格邮箱；职位决定角色（无职位时才看模型声明） */
+function normalizeAcquisitionContact(record: Record<string, unknown>): EngineAcquisitionContact | null {
+  const name = readText(record, ACQUISITION_CONTACT_NAME_KEYS, 80);
+  if (isPlaceholderContactName(name)) return null;
+  const email = normalizeAcquisitionContactEmail(readText(record, ACQUISITION_CONTACT_EMAIL_KEYS, 200));
+  if (!email) return null;
+  const title = readText(record, ACQUISITION_CONTACT_TITLE_KEYS, 120);
+  const role = title
+    ? acquisitionContactRole(title)
+    : contactRoleFromDeclaration(readText(record, ACQUISITION_CONTACT_DECLARED_ROLE_KEYS, 40));
+  const sourceUrl = readText(record, ACQUISITION_CONTACT_SOURCE_KEYS, 500);
+  return {
+    name,
+    title,
+    email,
+    role,
+    sourceUrl: /^https?:\/\//iu.test(sourceUrl) ? sourceUrl : ""
+  };
+}
+
+/**
+ * 联系人解析：优先结构化 contacts 数组；模型只给扁平字段时兜底拼一条。
+ * 结果按「决策人 → 采购 → 其他」排序、按邮箱去重，最多留 5 位。
+ */
+function readAcquisitionContacts(record: Record<string, unknown>): EngineAcquisitionContact[] {
+  const list = readRecordList(record, ACQUISITION_CONTACTS_KEYS)
+    .map(normalizeAcquisitionContact)
+    .filter((item): item is EngineAcquisitionContact => Boolean(item));
+  if (!list.length) {
+    const flat = normalizeAcquisitionContact({
+      name: pickRaw(record, ["contactName", "contact_name", "contact", "联系人", "姓名"]),
+      title: pickRaw(record, ["contactTitle", "contact_title", "title", "职位", "职务"]),
+      email: pickRaw(record, ["contactEmail", "contact_email", "email", "邮箱"]),
+      role: pickRaw(record, ["contactRole", "contact_role", "role"]),
+      sourceUrl: pickRaw(record, ["contactSourceUrl", "contact_source_url", "sourceUrl"])
+    });
+    if (flat) list.push(flat);
+  }
+  const seen = new Set<string>();
+  const unique = list.filter((item) => {
+    if (seen.has(item.email)) return false;
+    seen.add(item.email);
+    return true;
+  });
+  const weight: Record<EngineAcquisitionContactRole, number> = { decision_maker: 0, purchasing: 1, other: 2 };
+  return unique.sort((left, right) => weight[left.role] - weight[right.role]).slice(0, 5);
+}
 
 /** 裸域名（example.com、www.example.com/path）补上协议，否则前端渲染不出可点链接 */
 function normalizeWebsite(value: string) {
@@ -276,6 +462,7 @@ export function normalizeAcquisitionCompanies(parsed: Record<string, unknown> | 
     const company = readText(record, ACQUISITION_COMPANY_KEYS, 200);
     if (!company) return [];
     const sourceUrl = readText(record, ACQUISITION_SOURCE_KEYS, 500);
+    const contacts = readAcquisitionContacts(record);
     return [{
       company,
       website: normalizeWebsite(readText(record, ACQUISITION_WEBSITE_KEYS, 500)),
@@ -283,9 +470,55 @@ export function normalizeAcquisitionCompanies(parsed: Record<string, unknown> | 
       business: readText(record, ACQUISITION_BUSINESS_KEYS, 255),
       description: readText(record, ACQUISITION_DESCRIPTION_KEYS, 2000),
       sourceUrl: /^https?:\/\//iu.test(sourceUrl) ? sourceUrl : "",
-      confidence: readInt(record, ACQUISITION_CONFIDENCE_KEYS, 0, 100)
+      confidence: readInt(record, ACQUISITION_CONFIDENCE_KEYS, 0, 100),
+      contacts,
+      qualified: contacts.some((contact) => contact.role !== "other")
     }];
   }).slice(0, 60);
+}
+
+/**
+ * 把 CLI 找到的人落成候选池既有的结构化联系人（extracted_contacts_json）。
+ * 抽成纯函数是为了可测：落库字段（contact 单行文本 / contactInfo 邮箱 / reasonCodes 角色）
+ * 一旦写错，前端徽章、发信收件人、角色筛选会同时失效，而且只在真实跑一轮后才看得出来。
+ */
+export function acquisitionQualifiedContacts(record: EngineAcquisitionCompany) {
+  // 只有「决策人 / 采购人」是这条获客链路的产出口径。模型常会顺带给出 Sales Director、
+  // 前台、客服等 role=other 的人，那些不进候选池：一旦进池，主联系人可能被挑成销售，
+  // 候选详情也会挂着不该发信的人（2026-10-31 用真实输出做反例实验时发现）。
+  return record.contacts.filter((contact) => contact.role !== "other");
+}
+
+export function acquisitionExtractedContacts(
+  record: EngineAcquisitionCompany,
+  observedAt: string
+): ExtractedWebsiteContact[] {
+  return acquisitionQualifiedContacts(record).map((contact) => ({
+    kind: "person" as const,
+    name: contact.name,
+    title: contact.title,
+    emails: [contact.email],
+    phones: [],
+    whatsapp: [],
+    source: "cli_acquisition",
+    sourceLabel: "本机 CLI 获客",
+    confidence: record.confidence ?? undefined,
+    verificationStatus: "source_confirmed" as const,
+    observedAt,
+    // 角色落在 reasonCodes：前端只读这一个字段打徽章，不必再抄一份职位正则
+    reasonCodes: [contact.role],
+    evidenceUrl: contact.sourceUrl || record.sourceUrl || record.website || ""
+  }));
+}
+
+/** 候选池只有 contact / contactInfo 两个文本字段：放主联系人「姓名 · 职位」+ 邮箱 */
+export function acquisitionPrimaryContact(record: EngineAcquisitionCompany) {
+  const primary = acquisitionQualifiedContacts(record)[0];
+  if (!primary) return { contact: "待维护", contactInfo: "" };
+  return {
+    contact: primary.title ? `${primary.name} · ${primary.title}` : primary.name,
+    contactInfo: primary.email
+  };
 }
 
 /**

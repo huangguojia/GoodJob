@@ -134,6 +134,56 @@ assert.equal(extractJsonObject(""), null);
   assert.ok(wrongShape.error.includes("candidates"));
 }
 
+// --- 分批提炼的编号口径：模型会沿用全文编号，不能因此把整批候选丢光 --------
+{
+  // 实测背景（2026-11-13）：104 段分 6 批，第 2 批起模型把 source_seg 写成 21、22…
+  // 旧代码按本批 1..20 校验 → 后 5 批 130 条候选全部被判"编造出处"，实际只训到前 8 个产品。
+  const { segments } = segmentDocuments([
+    { title: "手册", body: "甲".repeat(700) },
+    { title: "手册", body: "乙".repeat(700) }
+  ]);
+  // 第 3 批（offset=40）：模型写 41、42 → 归一化成 1、2
+  const globalNumbered = parseKbOutput(
+    JSON.stringify({
+      candidates: [
+        { kind: "qa", question: "供电多少", answer: "DC10V-33V。", confidence: 0.95, source_seg: 41 },
+        { kind: "qa", question: "精度多少", answer: "65000 分度。", confidence: 0.9, source_seg: 42 }
+      ]
+    }),
+    segments,
+    { segmentOffset: 40 }
+  );
+  assert.equal(globalNumbered.error, "");
+  assert.equal(globalNumbered.items.length, 2, "全文编号要能归一化回本批下标，不能整批丢掉");
+  assert.equal(globalNumbered.invented, 0, "归一化成功不算编造出处");
+  assert.equal(globalNumbered.items[0].segmentOrdinal, 1);
+  assert.equal(globalNumbered.items[1].segmentOrdinal, 2);
+
+  // 编造的大编号仍要丢：减去 offset 后依然越界
+  const stillInvented = parseKbOutput(
+    JSON.stringify({
+      candidates: [{ kind: "qa", question: "瞎编", answer: "x", confidence: 0.9, source_seg: 999 }]
+    }),
+    segments,
+    { segmentOffset: 40 }
+  );
+  assert.equal(stillInvented.invented, 1, "减完 offset 仍越界 = 真编造，必须丢");
+
+  // 第 1 批（offset=0）不能把 1..N 之外的编号"归一化"进来
+  const firstBatch = parseKbOutput(
+    JSON.stringify({
+      candidates: [{ kind: "qa", question: "越界", answer: "x", confidence: 0.9, source_seg: 3 }]
+    }),
+    segments,
+    { segmentOffset: 0 }
+  );
+  assert.equal(firstBatch.invented, 1, "offset=0 时不该做任何平移");
+
+  // 提示词必须显式给出编号区间，否则模型没有依据知道"本批从 1 开始"
+  const prompt = buildKbPrompt(segments);
+  assert.ok(prompt.includes("段落编号只有 1 到 2"), "提示词要写明本批编号区间（分批提炼的防错前提）");
+}
+
 // --- 指纹与插件同口径（空白折叠 + 小写）------------------------------------
 assert.equal(
   candidateFingerprint("qa", "  What  is   MOQ?  ", "500  PCS"),

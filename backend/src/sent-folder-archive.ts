@@ -312,6 +312,3 @@ export async function archiveMessageToSentFolder(
 }
 
 /** 关闭全部缓存连接（进程退出、测试收尾时用）。 */
-export async function closeSentFolderConnections() {
-  await Promise.all([...pool.keys()].map((key) => dropConnection(key)));
-}

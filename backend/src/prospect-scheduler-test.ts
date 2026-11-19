@@ -298,6 +298,31 @@ function exhaustRunStrategy(
 }
 
 try {
+  // 空闲短路回归：一条 active 排期都没有时，runOnce 不允许触发 readBarrier
+  // （readBarrier = 重读 30 张表 + 整个 store 深拷贝，是生产空闲 CPU 的主因）。
+  // 放在用例最前面，此时库里的排期为空，正是空闲态。
+  {
+    let barrierCalls = 0;
+    const originalReadBarrier = store.readBarrier.bind(store);
+    store.readBarrier = async () => {
+      barrierCalls += 1;
+      await originalReadBarrier();
+    };
+    const idleScheduler = new ProspectScheduler({
+      store,
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      pollMs: 500
+    });
+    assert.equal(
+      store.prospectSchedules.filter((item) => item.status === "active").length,
+      0,
+      "空闲态前置条件：此刻没有 active 排期"
+    );
+    await idleScheduler.runOnce();
+    assert.equal(barrierCalls, 0, "无 active 排期时不应重载整库");
+    store.readBarrier = originalReadBarrier;
+  }
+
   assert.equal(
     nextProspectScheduleOccurrence(
       "2026-01-01T10:15:00.000Z",

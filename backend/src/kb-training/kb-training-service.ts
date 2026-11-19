@@ -14,7 +14,6 @@ import {
   KB_SEGMENTS_PER_CALL,
   parseKbOutput,
   segmentDocuments,
-  type KbSegment,
   type KbSourceItem
 } from "./kb-training-prompt.js";
 
@@ -141,7 +140,7 @@ export interface KbTrainingDeps {
   /** CRM 已配置且启用的模型：CLI 失败时的降级档。没有就只能如实失败。 */
   aiConfig?: AiModelConfig;
   /** 测试注入点：默认走本机 CLI（runCliSummary）。 */
-  runCli?: (prompt: string, options?: { timeoutMs?: number }) => Promise<{ text: string; model: string }>;
+  runCli?: (prompt: string, options?: { timeoutMs?: number; teamId?: string }) => Promise<{ text: string; model: string }>;
   /** 测试注入点：默认走 callAiModel。 */
   callAi?: (config: AiModelConfig, prompt: string) => Promise<string>;
 }
@@ -252,14 +251,16 @@ export async function executeKbTrainingRun(
         return;
       }
       const batch = usable.slice(offset, offset + KB_SEGMENTS_PER_CALL);
-      const prompt = buildKbPrompt(batch, { documentTitle: collected.items[0]?.title });
+      // documentTitle 取**本批**首段的来源，不是整份资料的第一份：一个 run 可以喂几十份产品资料，
+      // 每批都是不同产品，标题写错会让模型把上一批的参数往这一批的产品上套。
+      const prompt = buildKbPrompt(batch, { documentTitle: batch[0]?.title });
 
       let raw = "";
       if (chosen === "ai" && deps.aiConfig) {
         raw = await runAi(deps, prompt);
       } else {
         try {
-          const cli = await (deps.runCli ?? runCliSummary)(prompt, { timeoutMs: KB_CLI_TIMEOUT_MS });
+          const cli = await (deps.runCli ?? runCliSummary)(prompt, { timeoutMs: KB_CLI_TIMEOUT_MS, teamId: actor.teamId });
           stats.cliCalls += 1;
           raw = cli.text;
           if (!chosen) { chosen = "cli"; engine = "cli"; model = cli.model; }
@@ -278,7 +279,7 @@ export async function executeKbTrainingRun(
         }
       }
 
-      const parsed = parseKbOutput(raw, batch);
+      const parsed = parseKbOutput(raw, batch, { segmentOffset: offset });
       if (parsed.error) {
         // 整批不可读：这批段一条都没产出，如实计入 skipped（不是"成功 0 条"）。
         stats.skipped += batch.length;
@@ -360,10 +361,6 @@ async function runAi(deps: KbTrainingDeps, prompt: string): Promise<string> {
 }
 
 /** 供路由层复用：把批次里的段落信息整理成「出处」展示文案。 */
-export function describeSegment(segment: KbSegment): string {
-  return `${segment.title || "（未命名）"} ${segment.anchor}`;
-}
-
 // ---------------------------------------------------------------------------
 // 发布编排
 // ---------------------------------------------------------------------------

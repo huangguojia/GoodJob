@@ -35,10 +35,6 @@ export function isPublicCustomer(customer: Customer) {
   return customer.poolStatus === "public";
 }
 
-export function isOwnedCustomer(customer: Customer) {
-  return !isPublicCustomer(customer);
-}
-
 export function canReleaseCustomer(
   customer: Customer,
   input: CustomerOwnershipMutationInput

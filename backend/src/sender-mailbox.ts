@@ -9,7 +9,21 @@ import type { SenderMailbox } from "./types.js";
 // 独立表 + 独立仓库（不进 persistAll 全表重写体系），密码用 mail-v1 加密落库。
 // ---------------------------------------------------------------------------
 
-type MailboxCredentialContext = { id: string; teamId: string; kind: "smtp" | "imap" };
+type MailboxCredentialContext = { id: string; teamId: string; kind: "smtp" | "imap" | "dkim" };
+
+// ── 同步列表失效信号 ─────────────────────────────────────────────────────────
+// 邮件中心的 IMAP 回流调度每分钟都要问一次「哪些邮箱开了同步」。空闲时这不是
+// 必要开销：调度侧缓存列表，任何改变 sender_mailboxes 的写路径 bump 一次编号，
+// 缓存即刻失效。跨进程兜底由调度侧 5 分钟 TTL 负责。
+let mailboxSyncEpoch = 0;
+
+export function bumpMailboxSyncCache() {
+  mailboxSyncEpoch++;
+}
+
+export function getMailboxSyncEpoch() {
+  return mailboxSyncEpoch;
+}
 
 export interface SenderMailboxInput {
   label: string;
@@ -25,23 +39,37 @@ export interface SenderMailboxInput {
   imapPort?: number;
   imapUser?: string;
   imapPassword?: string;
+  /** 署名尾缀：该邮箱专属落款；空 = 回落账号级邮件签名 */
+  signature?: string;
+  dkimDomain?: string;
+  dkimSelector?: string;
+  dkimPrivateKey?: string;
+  /** 单账号每日外发上限（轮换时超过即跳过该账号），默认 50 */
+  dailyLimit?: number;
   enabled?: boolean;
 }
 
-/** 对外视图：密码不回显，只给「是否已设置」 */
-export type SenderMailboxView = Omit<SenderMailbox, "smtpPassword" | "imapPassword"> & {
+/** 对外视图：密码/私钥不回显，只给「是否已设置」 */
+export type SenderMailboxView = Omit<SenderMailbox, "smtpPassword" | "imapPassword" | "dkimPrivateKey"> & {
   hasSmtpPassword: boolean;
   hasImapPassword: boolean;
+  hasDkimPrivateKey: boolean;
 };
 
 export function toSenderMailboxView(mailbox: SenderMailbox): SenderMailboxView {
-  const { smtpPassword, imapPassword, ...rest } = mailbox;
-  return { ...rest, hasSmtpPassword: Boolean(smtpPassword), hasImapPassword: Boolean(imapPassword) };
+  const { smtpPassword, imapPassword, dkimPrivateKey, ...rest } = mailbox;
+  return {
+    ...rest,
+    hasSmtpPassword: Boolean(smtpPassword),
+    hasImapPassword: Boolean(imapPassword),
+    hasDkimPrivateKey: Boolean(dkimPrivateKey)
+  };
 }
 
-/** 按已发封数挑邮箱：第 k 封（0 起）落在第 floor(k / every) 组 → 轮流使用池内邮箱 */
-export function pickSenderMailbox(mailboxes: SenderMailbox[], sentSteps: number, every: number): SenderMailbox | null {
-  const pool = mailboxes.filter((row) => row.enabled);
+/** 按已发封数挑邮箱：第 k 封（0 起）落在第 floor(k / every) 组 → 轮流使用池内邮箱。
+ *  skipEmails：当日额度用尽的邮箱集合（小写），轮换时直接跳过。 */
+export function pickSenderMailbox(mailboxes: SenderMailbox[], sentSteps: number, every: number, skipEmails?: Set<string>): SenderMailbox | null {
+  const pool = mailboxes.filter((row) => row.enabled && !(skipEmails && skipEmails.has(row.email.toLowerCase())));
   if (!pool.length) return null;
   // every <= 0 表示不轮换（调用方回落主发件邮箱）
   const interval = Math.floor(Number(every) || 0);
@@ -63,6 +91,11 @@ export interface SenderMailboxUserOverride {
   imapSecure: boolean;
   imapUser: string;
   imapPassword: string;
+  /** 只在池内邮箱配置了专属尾缀时提供；缺省表示沿用账号级邮件签名 */
+  emailSignature?: string;
+  dkimDomain: string;
+  dkimSelector: string;
+  dkimPrivateKey: string;
 }
 
 /** 用池内邮箱覆盖账号发件身份（ownerId/teamId 等归属字段保持原账号，台账/触点仍记在账号名下） */
@@ -79,7 +112,12 @@ export function senderMailboxOverrides(mailbox: SenderMailbox): SenderMailboxUse
     imapPort: mailbox.imapPort || 993,
     imapSecure: true,
     imapUser: mailbox.imapUser || mailbox.smtpUser,
-    imapPassword: mailbox.imapPassword || mailbox.smtpPassword
+    imapPassword: mailbox.imapPassword || mailbox.smtpPassword,
+    // 只有配了专属尾缀才覆盖，否则让 sendOutboundEmail 继续用账号级 emailSignature
+    ...(mailbox.signature ? { emailSignature: mailbox.signature } : {}),
+    dkimDomain: mailbox.dkimDomain || "",
+    dkimSelector: mailbox.dkimSelector || "",
+    dkimPrivateKey: mailbox.dkimPrivateKey || ""
   };
 }
 
@@ -115,6 +153,13 @@ export function ensureSenderMailboxSchema(pool: Pool) {
     await ensureSenderMailboxColumn(pool, "last_sync_scanned", "INT NOT NULL DEFAULT 0");
     await ensureSenderMailboxColumn(pool, "last_sync_saved", "INT NOT NULL DEFAULT 0");
     await ensureSenderMailboxColumn(pool, "sync_cursor_json", "TEXT");
+    // DKIM 签名（可选）：私钥落库为 mail-v1 密文（kind "dkim"）
+    await ensureSenderMailboxColumn(pool, "dkim_domain", "VARCHAR(180) NOT NULL DEFAULT ''");
+    await ensureSenderMailboxColumn(pool, "dkim_selector", "VARCHAR(63) NOT NULL DEFAULT ''");
+    await ensureSenderMailboxColumn(pool, "dkim_private_key", "TEXT");
+    await ensureSenderMailboxColumn(pool, "daily_limit", "INT NOT NULL DEFAULT 50");
+    // 署名尾缀：每个发件邮箱可以有自己的落款（空 = 沿用账号级邮件签名）
+    await ensureSenderMailboxColumn(pool, "signature", "TEXT");
   });
 }
 
@@ -165,6 +210,13 @@ class MysqlSenderMailboxRepository {
       imapPort: Number(row.imap_port || 993),
       imapUser: String(row.imap_user || ""),
       imapPassword: decryptMailCredential({ ...context, kind: "imap" }, String(row.imap_password || "")),
+      signature: String(row.signature || ""),
+      dkimDomain: String(row.dkim_domain || ""),
+      dkimSelector: String(row.dkim_selector || ""),
+      dkimPrivateKey: row.dkim_private_key
+        ? decryptMailCredential({ ...context, kind: "dkim" }, String(row.dkim_private_key))
+        : "",
+      dailyLimit: Number(row.daily_limit || 50),
       enabled: Boolean(row.enabled),
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ""),
       updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at || ""),
@@ -214,26 +266,37 @@ class MysqlSenderMailboxRepository {
       imapPort: Number(input.imapPort || 993),
       imapUser: (input.imapUser || "").trim(),
       imapPassword: input.imapPassword || "",
+      signature: (input.signature || "").trim(),
+      dkimDomain: (input.dkimDomain || "").trim(),
+      dkimSelector: (input.dkimSelector || "").trim(),
+      dkimPrivateKey: input.dkimPrivateKey || "",
+      dailyLimit: Math.max(1, Math.min(500, Number(input.dailyLimit || 50))),
       enabled: input.enabled ?? true,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     };
     const smtpContext: MailboxCredentialContext = { id: mailbox.id, teamId, kind: "smtp" };
     const imapContext: MailboxCredentialContext = { id: mailbox.id, teamId, kind: "imap" };
+    const dkimContext: MailboxCredentialContext = { id: mailbox.id, teamId, kind: "dkim" };
     await this.pool.execute(
       `INSERT INTO sender_mailboxes
         (id, owner_id, team_id, label, email, from_name, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
-         imap_host, imap_port, imap_user, imap_password, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         imap_host, imap_port, imap_user, imap_password, signature, dkim_domain, dkim_selector, dkim_private_key, daily_limit, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         mailbox.id, ownerId, teamId, mailbox.label, mailbox.email, mailbox.fromName,
         mailbox.smtpHost, mailbox.smtpPort, mailbox.smtpSecure ? 1 : 0, mailbox.smtpUser,
         encryptMailCredential(smtpContext, mailbox.smtpPassword),
         mailbox.imapHost, mailbox.imapPort, mailbox.imapUser,
         encryptMailCredential(imapContext, mailbox.imapPassword),
+        mailbox.signature || "",
+        mailbox.dkimDomain || "", mailbox.dkimSelector || "",
+        mailbox.dkimPrivateKey ? encryptMailCredential(dkimContext, mailbox.dkimPrivateKey) : "",
+        mailbox.dailyLimit || 50,
         mailbox.enabled ? 1 : 0, now, now
       ]
     );
+    bumpMailboxSyncCache();
     return mailbox;
   }
 
@@ -255,33 +318,60 @@ class MysqlSenderMailboxRepository {
       imapPort: input.imapPort !== undefined ? Number(input.imapPort || 993) : existing.imapPort,
       imapUser: input.imapUser !== undefined ? (input.imapUser || "").trim() : existing.imapUser,
       imapPassword: input.imapPassword !== undefined ? input.imapPassword : existing.imapPassword,
+      // PUT 不传 = 保留原尾缀（与 DKIM 同语义），否则只改其他字段会静默清空落款
+      signature: input.signature !== undefined ? (input.signature || "").trim() : existing.signature || "",
+      dkimDomain: input.dkimDomain !== undefined ? (input.dkimDomain || "").trim() : existing.dkimDomain || "",
+      dkimSelector: input.dkimSelector !== undefined ? (input.dkimSelector || "").trim() : existing.dkimSelector || "",
+      dkimPrivateKey: input.dkimPrivateKey !== undefined ? input.dkimPrivateKey : existing.dkimPrivateKey || "",
+      dailyLimit: input.dailyLimit !== undefined
+        ? Math.max(1, Math.min(500, Number(input.dailyLimit || 50)))
+        : existing.dailyLimit || 50,
       enabled: input.enabled !== undefined ? Boolean(input.enabled) : existing.enabled,
       updatedAt: new Date().toISOString()
     };
     const smtpContext: MailboxCredentialContext = { id, teamId, kind: "smtp" };
     const imapContext: MailboxCredentialContext = { id, teamId, kind: "imap" };
+    const dkimContext: MailboxCredentialContext = { id, teamId, kind: "dkim" };
     await this.pool.execute(
       `UPDATE sender_mailboxes SET
         label = ?, email = ?, from_name = ?, smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_user = ?, smtp_password = ?,
-        imap_host = ?, imap_port = ?, imap_user = ?, imap_password = ?, enabled = ?, updated_at = ?
+        imap_host = ?, imap_port = ?, imap_user = ?, imap_password = ?, signature = ?, dkim_domain = ?, dkim_selector = ?, dkim_private_key = ?,
+        daily_limit = ?, enabled = ?, updated_at = ?
        WHERE id = ? AND owner_id = ? AND team_id = ?`,
       [
         next.label, next.email, next.fromName, next.smtpHost, next.smtpPort, next.smtpSecure ? 1 : 0, next.smtpUser,
         encryptMailCredential(smtpContext, next.smtpPassword),
         next.imapHost, next.imapPort, next.imapUser,
         encryptMailCredential(imapContext, next.imapPassword),
+        next.signature || "",
+        next.dkimDomain || "", next.dkimSelector || "",
+        next.dkimPrivateKey ? encryptMailCredential(dkimContext, next.dkimPrivateKey) : "",
+        next.dailyLimit || 50,
         next.enabled ? 1 : 0, new Date(), id, ownerId, teamId
       ]
     );
+    bumpMailboxSyncCache();
     return next;
   }
 
-  async remove(ownerId: string, teamId: string, id: string): Promise<boolean> {
-    const [result] = await this.pool.execute(
+  /** 只改署名尾缀：写信面板里的快捷设置走这里，避免 PUT 全量字段误伤密码 */
+  async setSignature(ownerId: string, teamId: string, id: string, signature: string): Promise<SenderMailbox | null> {
+    const existing = await this.get(ownerId, teamId, id);
+    if (!existing) return null;
+    await this.pool.execute(
+      "UPDATE sender_mailboxes SET signature = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND team_id = ?",
+      [(signature || "").trim(), new Date(), id, ownerId, teamId]
+    );
+    return { ...existing, signature: (signature || "").trim(), updatedAt: new Date().toISOString() };
+  }
+
+  async remove(ownerId: string, teamId: string, id: string): Promise<boolean> {    const [result] = await this.pool.execute(
       "DELETE FROM sender_mailboxes WHERE id = ? AND owner_id = ? AND team_id = ?",
       [id, ownerId, teamId]
     );
-    return Number((result as { affectedRows?: number }).affectedRows || 0) > 0;
+    const removed = Number((result as { affectedRows?: number }).affectedRows || 0) > 0;
+    if (removed) bumpMailboxSyncCache();
+    return removed;
   }
 }
 

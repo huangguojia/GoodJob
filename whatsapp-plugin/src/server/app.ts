@@ -698,15 +698,23 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     demoProviderEnabled,
     timestamp: new Date().toISOString()
   });
+  // 健康探针降频：Docker 每 15s 戳一次 /api/health/ready，没必要每次都真查库。
+  // 60s 内的成功结果直接复用；探活失败不缓存，下一轮（15s 后）立即重试。
+  const DATABASE_PROBE_TTL_MS = 60_000;
+  let lastDatabaseProbeAt = 0;
   const respondReady = async (response: Response, legacy = false): Promise<void> => {
     if (shuttingDown) {
       response.status(503).json({ status: "not_ready", ready: false, reason: "shutting_down", ...healthDetails() });
       return;
     }
     try {
-      await database.query("SELECT 1 AS ready");
+      if (Date.now() - lastDatabaseProbeAt >= DATABASE_PROBE_TTL_MS) {
+        await database.query("SELECT 1 AS ready");
+        lastDatabaseProbeAt = Date.now();
+      }
       response.json({ status: legacy ? "ok" : "ready", ready: true, ...healthDetails() });
     } catch (error) {
+      lastDatabaseProbeAt = 0;
       logger.warn(
         {
           requestId: response.locals.requestId,
@@ -1145,6 +1153,13 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   app.get("/api/v1/automation/followup-sync/runs/:id", asyncRoute(async (request, response) => {
     response.json(await followupSync.listItems(routeParam(request.params.id), request.crmIdentity!.userId));
   }));
+  /**
+   * 同步前先看：今天有消息的会话清单 + 每条会变成客户跟进还是新线索。
+   * 只读接口，不写 runs/items，也不写 CRM。
+   */
+  app.get("/api/v1/automation/followup-sync/preview", asyncRoute(async (request, response) => {
+    response.json(await followupSync.preview(request.crmIdentity!.userId));
+  }));
   app.put("/api/v1/automation/followup-sync/settings", asyncRoute(async (request, response) => {
     const input = z.object({
       enabled: z.boolean(),
@@ -1157,8 +1172,12 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
   }));
   app.post("/api/v1/automation/followup-sync/run", asyncRoute(async (request, response) => {
     if (!followupSync.configured) throw new DomainError("CRM_NOT_CONFIGURED", 409, "CRM 服务签名密钥尚未配置，无法同步客户跟进");
+    // 侧边栏勾选后只同步选中的会话；不传（定时任务 / 旧的整批按钮）就是今天全部。
+    const body = z.object({
+      conversationIds: z.array(z.string().min(1).max(200)).max(60).optional()
+    }).parse(request.body ?? {});
     try {
-      response.json(await followupSync.run(request.crmIdentity!.userId, { trigger: "manual" }));
+      response.json(await followupSync.run(request.crmIdentity!.userId, { trigger: "manual", conversationIds: body.conversationIds }));
     } catch (error) {
       // 手动同步失败要如实回 502 + 原因：界面必须能区分「今天没内容」和「CRM 挂了」。
       throw new DomainError("FOLLOWUP_SYNC_FAILED", 502, error instanceof Error ? error.message : "同步失败");

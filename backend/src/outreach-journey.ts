@@ -796,6 +796,8 @@ export interface OutreachJourneyView {
     bounceCount: number;
     firstSentAt: string;
     lastSentAt: string;
+    /** 最近一次被打开的时刻；一封都没打开时为空 */
+    lastOpenedAt: string;
     lastEventAt: string;
   };
 }
@@ -1053,6 +1055,8 @@ export async function buildOutreachJourney(
       bounceCount: replies.filter((reply) => reply.eventType === "bounce" || reply.classification === "bounced").length,
       firstSentAt: emails.at(0)?.sentAt || "",
       lastSentAt: emails.at(-1)?.sentAt || "",
+      /** 最近一次被打开的时刻（各封的最后打开时间取最大）；一次没打开为空 */
+      lastOpenedAt: emails.map((email) => email.lastOpenedAt || "").filter(Boolean).sort().at(-1) || "",
       lastEventAt: timeline.at(0)?.at || ""
     }
   };
@@ -1081,6 +1085,7 @@ export interface OutreachJourneyListItem {
   lastReplyLabel: string;
   bounceCount: number;
   openCount: number;
+  clickCount: number;
   converted: boolean;
   convertedTo: string;
   nextFollowAt: string;
@@ -1166,6 +1171,7 @@ export async function listOutreachJourneyOverview(
       lastReplyLabel: stage.lastReplyLabel,
       bounceCount: replies.filter((reply) => reply.eventType === "bounce" || reply.classification === "bounced").length,
       openCount: emails.reduce((sum, email) => sum + (email.openCount || 0), 0),
+      clickCount: emails.reduce((sum, email) => sum + (email.clickCount || 0), 0),
       converted: entity.convertedToCustomer || entity.convertedToLead,
       convertedTo: entity.convertedToCustomer ? "客户档案" : entity.convertedToLead ? "正式线索" : "",
       nextFollowAt: entity.nextFollowAt,

@@ -33,6 +33,18 @@ compose() {
   docker compose --project-name goodjobcrm --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
+# 本项目要求 MySQL 关闭 binlog：读取运行中 mysql 容器的 @@log_bin，未关闭则中止安装/升级。
+assert_mysql_binlog_disabled() {
+  local log_bin
+  log_bin="$(compose exec -T mysql sh -ec \
+    'MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" mysql -u root -N -B -e "SELECT @@log_bin;"' 2>/dev/null | tr -d '[:space:]')" \
+    || die "无法读取 MySQL 的 binlog 状态（@@log_bin）"
+  case "$log_bin" in
+    0|OFF) log "MySQL binlog 已关闭（log_bin=OFF）" ;;
+    *) die "MySQL binlog 仍处于开启状态（log_bin=${log_bin:-未知}）。请确认 compose.yml 中 mysql 的 command 含 --disable-log-bin，然后重新执行安装/升级" ;;
+  esac
+}
+
 release_id() {
   if [[ -n "${GOODJOB_RELEASE_ID:-}" ]]; then
     printf '%s\n' "$GOODJOB_RELEASE_ID"

@@ -5,7 +5,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { browserServiceConfiguration, isBrowserCdpReady, isBrowserMcpReady, isBrowserServiceReachable, startBrowserService, tryStartBrowserService } from "./browser-service.js";
-import { codexCodeModeHost, executeCodexTask, resolveCodexBinary } from "./codex-adapter.js";
+import { codexCodeModeHost, executeCodexTask, parseCodexCliProfile, resolveCodexBinary } from "./codex-adapter.js";
 import { execFileSync } from "node:child_process";
 import { executeWorkbuddyTask, parseWorkbuddyCliProfile, resolveWorkbuddyBinary, workbuddyProcessEnvironment, workbuddySkillDirs, STRIPPED_ENVIRONMENT_PREFIXES } from "./workbuddy-adapter.js";
 import { cachedRunnerIdentity, cliDetectionSnapshot, detectRunnerClis, resetRunnerCliCache, runnerCliIssue, runnerIdentity } from "./runner.js";
@@ -78,6 +78,32 @@ assert.ok(invocation.argv.includes('mcp_servers.goodjob_browser.url="http://127.
 assert.ok(invocation.argv.includes("--approve-for-me"));
 assert.ok(invocation.prompt.includes("必须使用 goodjob_browser"));
 assert.ok(invocation.prompt.endsWith("用户任务：\ntest"));
+
+// Codex 执行档位：CRM 首行标记 → `exec -m <model>` + `-c model_reasoning_effort=...`，标记不进提示词
+{
+  const parsed = parseCodexCliProfile('[[gj-cli-options {"model":"gpt-5.6-sol","effort":"xhigh","maxTurns":6,"disallowedTools":["Grep"]}]]\n正文第一行');
+  assert.deepEqual(parsed.profile, { model: "gpt-5.6-sol", effort: "high" }, "xhigh/max 按 Codex 最高档 high 执行");
+  assert.equal(parsed.prompt, "正文第一行");
+  assert.equal(parseCodexCliProfile('[[gj-cli-options {"model":"bad model; rm -rf /"}]]\nx').profile.model, "", "非法模型名不得进命令行");
+  assert.equal(parseCodexCliProfile('[[gj-cli-options {"effort":"low"}]] 同行正文').prompt, "同行正文", "只剥标记、不吞同一行正文");
+  assert.deepEqual(parseCodexCliProfile("普通提示词").profile, { model: "", effort: "" });
+  const profiled = await executeCodexTask({
+    id: "task_profile", runnerId: "runner_test", adapter: "codex",
+    prompt: '[[gj-cli-options {"model":"gpt-5.6-sol","effort":"medium"}]]\n执行档位测试',
+    workspace: root, executionMode: "read_only", timeoutSeconds: 30, status: "running"
+  }, {
+    allowedWorkspaces: [root], signal: new AbortController().signal,
+    codexBinary: process.execPath, codexArgumentPrefix: [fakeCodex],
+    async onEvent() { /* ignore */ }
+  });
+  assert.equal(profiled.status, "succeeded");
+  const profiledInvocation = JSON.parse(await readFile(invocationFile, "utf8")) as { argv: string[]; prompt: string };
+  const execAt = profiledInvocation.argv.indexOf("exec");
+  assert.deepEqual(profiledInvocation.argv.slice(execAt + 1, execAt + 3), ["-m", "gpt-5.6-sol"], "模型参数紧跟 exec");
+  const effortAt = profiledInvocation.argv.indexOf('model_reasoning_effort="medium"');
+  assert.ok(effortAt > 0 && effortAt < execAt && profiledInvocation.argv[effortAt - 1] === "-c", "思考档位以 -c 覆盖项放在 exec 之前");
+  assert.equal(profiledInvocation.prompt, "执行档位测试", "标记行不得喂给 Codex");
+}
 assert.equal(resolveCodexBinary(fakeCodex), fakeCodex);
 if (process.platform === "darwin") {
   const resolved = resolveCodexBinary("/opt/homebrew/bin/codex");

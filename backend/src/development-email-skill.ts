@@ -1377,7 +1377,3 @@ export function checkDevelopmentEmailDraft(
 }
 
 /** 便于外部（批次模板等）复用同一套英文守卫。 */
-export const developmentEmailLanguage = {
-  containsCjk,
-  englishOnly
-};

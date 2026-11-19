@@ -31,6 +31,13 @@ export const IAM_PERMISSION_CATALOG: IamPermissionDefinition[] = [
   { code: "customer.export", module: "客户", name: "导出客户", riskLevel: "critical", scopeModes: ["self", "org_subtree", "tenant"] },
   { code: "customer.pool.claim", module: "客户", name: "领取公池客户", riskLevel: "normal", scopeModes: ["public_pool"] },
   { code: "customer.pool.release", module: "客户", name: "释放客户到公池", riskLevel: "sensitive", scopeModes: ["self", "org_subtree", "tenant"] },
+  // 供应商 = 公司共享的供应链资产：scopeModes 刻意不含 self。
+  // 业务员拿到的 scope 因此落在 org_unit（本部门/本团队），全公司共用一份供应商库，
+  // 否则同一个工厂会被每个业务员各录一遍。删除留给主管及以上（不进 salesPermissions）。
+  { code: "supplier.read", module: "供应商", name: "查看供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "supplier.create", module: "供应商", name: "创建供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "supplier.update", module: "供应商", name: "维护供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "supplier.delete", module: "供应商", name: "删除供应商", riskLevel: "high", scopeModes: ["org_unit", "org_subtree", "tenant"] },
   { code: "deal.read", module: "商机", name: "查看商机", riskLevel: "normal", scopeModes: ["self", "org_unit", "org_subtree", "tenant"] },
   { code: "deal.create", module: "商机", name: "创建商机", riskLevel: "normal", scopeModes: ["self", "org_unit", "tenant"] },
   { code: "deal.update", module: "商机", name: "维护商机", riskLevel: "normal", scopeModes: ["self", "org_unit", "org_subtree", "tenant"] },
@@ -69,6 +76,9 @@ export const IAM_PERMISSION_CATALOG: IamPermissionDefinition[] = [
   { code: "product.manage", module: "产品", name: "维护产品资料", riskLevel: "sensitive", scopeModes: ["org_subtree", "tenant"] },
   { code: "shipment.read", module: "发货", name: "查看发货信息", riskLevel: "normal", scopeModes: ["self", "org_subtree", "tenant"] },
   { code: "shipment.manage", module: "发货", name: "维护发货信息", riskLevel: "sensitive", scopeModes: ["self", "org_subtree", "tenant"] },
+  { code: "order.read", module: "订单", name: "查看订单", riskLevel: "normal", scopeModes: ["self", "org_subtree", "tenant"] },
+  { code: "order.manage", module: "订单", name: "维护订单", riskLevel: "sensitive", scopeModes: ["self", "org_subtree", "tenant"] },
+  { code: "order.status.override", module: "订单", name: "订单状态回退/强推", riskLevel: "high", scopeModes: ["org_subtree", "tenant"] },
   { code: "approval.read", module: "审批", name: "查看审批中心", riskLevel: "normal", scopeModes: ["self", "org_subtree", "tenant"] },
   { code: "approval.task.act", module: "审批", name: "处理审批任务", riskLevel: "sensitive", scopeModes: ["self"] },
   { code: "approval.workflow.manage", module: "审批", name: "管理审批流程", riskLevel: "critical", scopeModes: ["tenant"] },
@@ -99,19 +109,22 @@ export const PLATFORM_PERMISSION_CODES = [
 const salesPermissions = new Set([
   "workspace.dashboard.read", "workspace.dashboard.manage", "lead.read", "lead.create", "lead.update", "lead.delete",
   "customer.read", "customer.create", "customer.update", "customer.delete", "customer.pool.claim",
-  "customer.pool.release", "customer.export", "deal.read", "deal.create", "deal.update", "deal.delete",
+  "customer.pool.release", "customer.export", "supplier.read", "supplier.create", "supplier.update",
+  "deal.read", "deal.create", "deal.update", "deal.delete",
   "deal.stage.advance", "deal.quote.create", "report.read", "daily_report.read",
   "daily_report.create", "daily_report.comment", "message.read", "message.send",
   "reminder.read", "reminder.manage",
   "document.read", "document.manage", "commission.read", "prospect.read", "prospect.execute",
   "communication.read", "communication.send", "agent.use", "integration.read", "integration.connect",
   "integration.execute", "training.read",
-  "product.read", "shipment.read", "shipment.manage", "approval.read"
+  "product.read", "shipment.read", "shipment.manage", "approval.read",
+  "order.read", "order.manage"
 ]);
 
 const managerExtraPermissions = new Set([
-  "lead.assign", "lead.export", "customer.assign", "report.export",
+  "lead.assign", "lead.export", "customer.assign", "report.export", "supplier.delete",
   "deal.stage.override",
+  "order.status.override",
   "commission.manage", "document.approve", "agent.manage", "integration.manage", "integration.approval.act", "training.manage",
   "product.manage", "approval.task.act", "approval.workflow.manage"
 ]);

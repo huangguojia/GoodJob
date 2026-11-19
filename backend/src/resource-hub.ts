@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { Pool } from "mysql2/promise";
 import { canSeeOwner, isPlatformIdentity } from "./auth.js";
 import { listAgentKnowledgeDocuments } from "./agent-knowledge.js";
@@ -201,10 +201,6 @@ export function expandQueryTerms(raw: string): { original: Set<string>; expanded
 }
 
 /** 每次资源内容变化都会改变，用作 embedding 缓存键。 */
-export function resourceContentHash(resource: HubResource): string {
-  return createHash("sha256").update(`${resource.sourceType}|${resource.id}|${resource.searchText}`).digest("hex");
-}
-
 export function toPublicResource(resource: HubResource): PublicHubResource {
   const { searchText, inlineContent, ...rest } = resource;
   void searchText;

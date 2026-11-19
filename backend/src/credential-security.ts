@@ -30,7 +30,7 @@ interface ProviderResponseCacheContext {
 interface MailCredentialContext {
   id: string;
   teamId: string;
-  kind: "smtp" | "imap";
+  kind: "smtp" | "imap" | "dkim";
 }
 
 const DEVELOPMENT_FALLBACK_SECRET = randomBytes(48).toString("base64url");

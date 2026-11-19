@@ -115,6 +115,7 @@ export class ProspectWorkerService {
         process.env.PROSPECT_COVERAGE_MASTER_SECRET
         || process.env.ORGANIZATION_IDENTITY_MASTER_SECRET,
       pollMs: Number(process.env.PROSPECT_WORKER_POLL_MS || 1_000),
+      idleMaxPollMs: Number(process.env.PROSPECT_WORKER_IDLE_MAX_POLL_MS || 15_000),
       concurrency: Number(process.env.PROSPECT_WORKER_CONCURRENCY || 3),
       websiteDiscoverySearch: async ({ candidate, runId, query }) => {
         let lastFailure: unknown;
@@ -376,6 +377,8 @@ export class ProspectWorkerService {
   }
 
   async synchronize() {
+    // 新建/变更运行后调用：立即唤醒处于空闲退避中的 Worker，不用等退避到期
+    if (this.running) this.worker.wakeNow();
     await this.coordinator?.synchronize();
   }
 

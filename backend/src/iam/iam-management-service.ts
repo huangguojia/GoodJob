@@ -12,7 +12,7 @@ import { loadIamCapabilitySnapshot, type IamCapabilitySnapshot } from "./iam-cap
 
 type Queryable = mysql.Pool | mysql.PoolConnection;
 type AuditContext = { requestId?: string; ip?: string; reason?: string; ticketNo?: string };
-type Mutation = "member.create" | "member.update" | "organization.create" | "organization.update" | "organization.assign" |
+type Mutation = "member.create" | "member.update" | "member.delete" | "organization.create" | "organization.update" | "organization.assign" |
   "role.create" | "role.clone" | "role.update" | "role.disable" | "role.permissions.replace" |
   "member.roles.replace" | "member.grants.create" | "member.grants.revoke";
 
@@ -132,6 +132,42 @@ async function assertTenantOperator(pool: Queryable, actor: SessionUser, tenantI
   ]);
   if (!one(membershipResult[0])) throw Object.assign(new Error("当前账号不属于该公司"), { status: 403 });
   if (!snapshot.permissions[permission]?.length) throw Object.assign(new Error("当前账号没有执行该操作的权限"), { status: 403 });
+}
+
+/**
+ * 删除成员前要数清「这个人还在业务上留下了什么」。
+ *
+ * 这不是洁癖：files.owner_id、order_events.operator_id 这些列只是普通字符串，没有外键兜底。
+ * users 行一旦物理删掉，文件中心立刻多出一批无法归属的孤儿文件，订单操作记录也会变成空白操作人。
+ * 所以先查引用，有引用就保留一个只读主体，没引用才真删。
+ */
+const MEMBER_BUSINESS_REFERENCES: Array<{ table: string; column: string; label: string }> = [
+  { table: "customers", column: "owner_id", label: "客户" },
+  { table: "leads", column: "owner_id", label: "线索" },
+  { table: "orders", column: "owner_id", label: "订单" },
+  { table: "files", column: "owner_id", label: "文件" },
+  { table: "file_references", column: "created_by", label: "文件关联记录" },
+  { table: "share_links", column: "created_by", label: "分享链接" },
+  { table: "order_events", column: "operator_id", label: "订单操作记录" },
+  { table: "file_access_logs", column: "user_id", label: "文件访问日志" }
+];
+
+async function memberBusinessReferences(connection: mysql.PoolConnection, userId: string) {
+  // 开源部署未必装了全部模块，先问哪些表真实存在，缺表就当没有引用。
+  // 但不用 try/catch 吞异常 —— 那会把 SQL 语法错误也误判成「没有引用」，导致误删。
+  const names = MEMBER_BUSINESS_REFERENCES.map((item) => item.table);
+  const [tableRows] = await connection.query(
+    `SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${names.map(() => "?").join(",")})`,
+    names
+  );
+  const existing = new Set(rows<{ name: string }>(tableRows).map((item) => item.name));
+  const hits: Array<{ table: string; label: string }> = [];
+  for (const item of MEMBER_BUSINESS_REFERENCES) {
+    if (!existing.has(item.table)) continue;
+    const [found] = await connection.query(`SELECT 1 FROM \`${item.table}\` WHERE \`${item.column}\` = ? LIMIT 1`, [userId]);
+    if (one(found)) hits.push({ table: item.table, label: item.label });
+  }
+  return hits;
 }
 
 async function bumpRevision(connection: mysql.PoolConnection, tenantId: string, membershipIds: string[]) {
@@ -332,6 +368,87 @@ export function createIamManagementService(pool: mysql.Pool): IamManagementServi
           }
           await connection.query(`UPDATE users SET status = ?, auth_version = auth_version + 1 WHERE id = ? AND team_id = ?`, [status === "active" ? "active" : "disabled", userId, tenantId]);
           affected.push(membership.id); targetType = "membership"; targetId = membership.id; after = { status, primaryOrgUnitId: orgUnitId };
+        } else if (operation === "member.delete") {
+          const userId = String(payload.userId || "");
+          if (!userId) throw Object.assign(new Error("缺少成员标识"), { status: 400 });
+          // 删自己会立刻把当前会话踢掉，还可能让公司同时失去唯一的操作人
+          if (userId === actor.id) throw Object.assign(new Error("不能删除当前登录账号"), { status: 400 });
+          const membership = one<any>((await connection.query(
+            `SELECT tm.id, tm.status, u.name, u.email, u.team_id
+             FROM tenant_memberships tm JOIN users u ON u.id = tm.user_id
+             WHERE tm.tenant_id = ? AND tm.user_id = ? LIMIT 1`, [tenantId, userId]))[0]);
+          if (!membership) throw Object.assign(new Error("成员不存在或不属于当前公司"), { status: 404 });
+          // 前端要求输入姓名二次确认；后端再核一次，不能只靠界面挡
+          if (String(payload.confirmName || "").trim() !== String(membership.name || "").trim()) {
+            throw Object.assign(new Error("删除确认姓名不一致，请重新输入成员姓名"), { status: 400 });
+          }
+
+          // 平台运维身份是全局的，不能靠删公司成员顺手带走
+          const operator = one<any>((await connection.query(`SELECT id FROM platform_operators WHERE user_id = ? LIMIT 1`, [userId]))[0]);
+          if (operator) throw Object.assign(new Error("该成员同时是平台运维账号，请先在平台运维中解除后再删除"), { status: 409 });
+
+          // 待处理审批任务：删了会留下指向不存在成员的待办，谁也没法处理
+          const pending = one<any>((await connection.query(
+            `SELECT COUNT(*) AS count FROM approval_tasks WHERE tenant_id = ? AND assignee_membership_id = ? AND status = 'pending'`,
+            [tenantId, membership.id]))[0]);
+          if (Number(pending?.count || 0) > 0) {
+            throw Object.assign(new Error(`该成员还有 ${Number(pending?.count)} 个待处理审批任务，请先转交后再删除`), { status: 409 });
+          }
+
+          // 最后一个管理员删掉之后没人能再进成员管理，整个公司会锁死
+          const adminCount = one<any>((await connection.query(
+            `SELECT COUNT(DISTINCT tm.user_id) AS count
+             FROM tenant_memberships tm
+             JOIN member_role_assignments mra ON mra.tenant_id = tm.tenant_id AND mra.membership_id = tm.id AND mra.status = 'active'
+             JOIN roles r ON r.tenant_id = mra.tenant_id AND r.id = mra.role_id
+             WHERE tm.tenant_id = ? AND tm.status = 'active' AND r.code = 'legacy_admin'`, [tenantId]))[0]);
+          const selfIsAdmin = one<any>((await connection.query(
+            `SELECT 1 FROM member_role_assignments mra
+             JOIN roles r ON r.tenant_id = mra.tenant_id AND r.id = mra.role_id
+             WHERE mra.tenant_id = ? AND mra.membership_id = ? AND mra.status = 'active' AND r.code = 'legacy_admin' LIMIT 1`,
+            [tenantId, membership.id]))[0]);
+          if (selfIsAdmin && Number(adminCount?.count || 0) <= 1) {
+            throw Object.assign(new Error("这是公司最后一个管理员，请先指定另一位管理员再删除"), { status: 409 });
+          }
+
+          before = { name: membership.name, email: membership.email, membershipStatus: membership.status };
+          // 先查引用再删：有引用的人不能物理删 users 行，否则文件/订单/审计全部指向一个不存在的 id
+          const references = await memberBusinessReferences(connection, userId);
+
+          await connection.query(`DELETE FROM member_permission_grants WHERE tenant_id = ? AND membership_id = ?`, [tenantId, membership.id]);
+          await connection.query(`DELETE FROM member_role_assignments WHERE tenant_id = ? AND membership_id = ?`, [tenantId, membership.id]);
+          await connection.query(`DELETE FROM organization_memberships WHERE tenant_id = ? AND membership_id = ?`, [tenantId, membership.id]);
+          await connection.query(`DELETE FROM authorization_revisions WHERE tenant_id = ? AND membership_id = ?`, [tenantId, membership.id]);
+          await connection.query(`DELETE FROM tenant_memberships WHERE tenant_id = ? AND id = ?`, [tenantId, membership.id]);
+          affected.push(membership.id); targetType = "membership"; targetId = membership.id;
+
+          // 这个人可能同时属于别的公司：那只是「移出当前公司」，账号本身还得继续能用
+          const remaining = one<any>((await connection.query(`SELECT COUNT(*) AS count FROM tenant_memberships WHERE user_id = ?`, [userId]))[0]);
+          let identity = "member-removed";
+          if (Number(remaining?.count || 0) > 0) {
+            identity = "member-removed";
+          } else if (references.length) {
+            // 有业务痕迹：把邮箱改成不可达地址释放出来，但保留一个不能登录的主体供历史记录回查
+            await connection.query(
+              `UPDATE users SET email = ?, status = 'deleted', auth_version = auth_version + 1 WHERE id = ? AND team_id = ?`,
+              [`deleted+${userId}@removed.invalid`, userId, tenantId]
+            );
+            identity = "identity-retained";
+          } else {
+            const [removedUser] = await connection.query(`DELETE FROM users WHERE id = ? AND team_id = ?`, [userId, tenantId]) as unknown as Array<{ affectedRows: number }>;
+            if (!Number(removedUser?.affectedRows || 0)) {
+              // 账号归属异常：宁可整体回滚让人看见，也不要留下「成员没了、账号还在」的半截状态
+              throw Object.assign(new Error("账号归属与当前公司不一致，已取消删除"), { status: 409 });
+            }
+            identity = "deleted";
+          }
+          after = {
+            name: membership.name,
+            email: membership.email,
+            identity,
+            emailReleased: identity !== "member-removed",
+            businessReferences: references.map((item) => item.label)
+          };
         } else if (operation === "organization.create") {
           const name = String(payload.name || "").trim(); const code = String(payload.code || name).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-"); const parentId = String(payload.parentId || "");
           if (!name || !code) throw Object.assign(new Error("组织名称和编码不能为空"), { status: 400 });

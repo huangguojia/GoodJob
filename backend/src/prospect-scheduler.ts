@@ -78,6 +78,13 @@ export class ProspectScheduler {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      // 空转短路：一条 active 排期都没有时，下面整个循环体一行也不会执行，
+      // 而 readBarrier 会重读 30 张表并把整个 store 深拷贝一遍（空闲 CPU 主因）。
+      // 排期的新增/恢复都在本进程内直接写内存，内存就是最新状态，先看内存再决定是否重载。
+      const hasActiveSchedule = this.store.prospectSchedules.some(
+        (item) => item.status === "active"
+      );
+      if (!hasActiveSchedule) return;
       await this.store.readBarrier();
       const now = this.now();
       const activeIds = this.store.prospectSchedules

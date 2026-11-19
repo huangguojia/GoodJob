@@ -9,8 +9,15 @@ import {
   deriveImapHost,
   isMailAssistAction,
   isOwnMailboxAddress,
+  journeyCounterpartAddress,
+  journeyCounterpartName,
+  threadSubjectKey,
+  threadSubjectPrefix,
   journeyStats,
+  mailAddressesIn,
   mailBodyPreview,
+  mailProbeErrorMessage,
+  mailProbeTarget,
   mailSnippet,
   MAIL_QUOTE_PREVIEW_MARK,
   MAIL_ASSIST_ACTIONS,
@@ -48,7 +55,7 @@ check("Outlook 与 Gmail 的 IMAP 主机不能靠替换前缀", () => {
 });
 
 check("未知企业邮 smtp.company.com → imap.company.com", () => {
-  assert.equal(deriveImapHost("smtp.longtec.com"), "imap.longtec.com");
+  assert.equal(deriveImapHost("smtp.demo-supplier.com"), "imap.demo-supplier.com");
 });
 
 check("主机为空或无法推导时返回空串（不瞎猜）", () => {
@@ -59,7 +66,7 @@ check("主机为空或无法推导时返回空串（不瞎猜）", () => {
 // ── 客户归属 ───────────────────────────────────────────────────────────────
 const index = buildContactIndex(
   [
-    { id: "cus_1", company: "Longtec", email: "Alice@Longtec.com" },
+    { id: "cus_1", company: "Demo Supplier", email: "Alice@Demo-Supplier.com" },
     { id: "cus_2", company: "Apex", email: "sales@apex.com" },
     { id: "cus_3", company: "Apex Branch", email: "info@apex.com" },
     { id: "cus_4", company: "Gmail Guy", email: "someone@gmail.com" }
@@ -70,7 +77,7 @@ const index = buildContactIndex(
 );
 
 check("邮箱精确匹配大小写不敏感", () => {
-  const hit = resolveMailEntity(index, "alice@longtec.com", []);
+  const hit = resolveMailEntity(index, "alice@demo-supplier.com", []);
   assert.equal(hit?.entityType, "customer");
   assert.equal(hit?.entityId, "cus_1");
   assert.equal(hit?.matchSource, "address");
@@ -92,38 +99,38 @@ check("公共邮箱域名永不按域名关联", () => {
 });
 
 check("团队内唯一域名可以弱关联并标记 source", () => {
-  const hit = resolveMailEntity(index, "purchase@longtec.com", []);
+  const hit = resolveMailEntity(index, "purchase@demo-supplier.com", []);
   assert.equal(hit?.entityId, "cus_1");
   assert.equal(hit?.matchSource, "domain");
 });
 
 check("精确邮箱优先于域名匹配", () => {
-  const hit = resolveMailEntity(index, "alice@longtec.com", ["purchase@longtec.com"]);
+  const hit = resolveMailEntity(index, "alice@demo-supplier.com", ["purchase@demo-supplier.com"]);
   assert.equal(hit?.matchSource, "address");
 });
 
 // 回归：收件箱同步只传发件人。传 to 会把每封来信都挂到「邮箱登记成我方地址」的那个主体上。
 check("收件箱归属绝不能拿我方收件地址去匹配", () => {
-  const selfIndex = buildContactIndex([], [{ id: "lead_self", company: "Self", email: "me@longtec.com" }]);
-  const wrong = resolveMailEntity(selfIndex, "buyer@nova.io", ["me@longtec.com"]);
+  const selfIndex = buildContactIndex([], [{ id: "lead_self", company: "Self", email: "me@demo-supplier.com" }]);
+  const wrong = resolveMailEntity(selfIndex, "buyer@nova.io", ["me@demo-supplier.com"]);
   assert.equal(wrong?.entityId, "lead_self");
   const right = resolveMailEntity(selfIndex, "buyer@nova.io", []);
   assert.equal(right, null);
 });
 
 // 回归：同事发来的内部邮件不属于客户旅程。我方自有地址/域名必须被排除，
-// 否则「用本公司邮箱登记的线索」会把内部通知信整批吸进去（实测 LONGTEC 线索中招）。
+// 否则「用本公司邮箱登记的线索」会把内部通知信整批吸进去（实测 DEMO SUPPLIER 线索中招）。
 check("内部同事来信不归属客户", () => {
   const own = {
-    addresses: ["huangguojia@longtec.com"],
-    domains: ["longtec.com"]
+    addresses: ["kevin@demo-supplier.com"],
+    domains: ["demo-supplier.com"]
   };
-  assert.equal(isOwnMailboxAddress(own.addresses, own.domains, "qiulixia@longtec.com"), true);
-  assert.equal(isOwnMailboxAddress(own.addresses, own.domains, "HuangGuoJia@LongTec.com"), true);
+  assert.equal(isOwnMailboxAddress(own.addresses, own.domains, "qiulixia@demo-supplier.com"), true);
+  assert.equal(isOwnMailboxAddress(own.addresses, own.domains, "Kevin@Demo-Supplier.com"), true);
   assert.equal(isOwnMailboxAddress(own.addresses, own.domains, "buyer@nova.io"), false);
   assert.equal(isOwnMailboxAddress(own.addresses, own.domains, ""), false);
   // 公共域名不在自有域名里时仍按客户处理
-  const external = { addresses: ["sales@longtec.com"], domains: ["longtec.com"] };
+  const external = { addresses: ["sales@demo-supplier.com"], domains: ["demo-supplier.com"] };
   assert.equal(isOwnMailboxAddress(external.addresses, external.domains, "someone@gmail.com"), false);
 });
 
@@ -135,14 +142,14 @@ const journeyInput = {
       createdAt: "2026-10-02T09:00:01.000Z", messageId: "<reply-1@customer.com>",
       subject: "Re: quotation", fromAddress: "buyer@nova.io", fromName: "Tom",
       entityType: "customer" as const,
-      bodyText: "Please quote 500pcs.\n\nBest regards,\nTom\n\nOn 2026-10-01 08:00, Me <me@longtec.com> wrote:\n> Quotation for you"
+      bodyText: "Please quote 500pcs.\n\nBest regards,\nTom\n\nOn 2026-10-01 08:00, Me <me@demo-supplier.com> wrote:\n> Quotation for you"
     },
     {
       id: "mail_1", direction: "outbound" as const, sentAt: "2026-10-01T08:00:00.000Z",
       createdAt: "2026-10-01T08:00:01.000Z", messageId: "<out-1@goodjob-crm.local>",
-      subject: "Quotation for you", fromAddress: "me@longtec.com", fromName: "Me",
+      subject: "Quotation for you", fromAddress: "me@demo-supplier.com", fromName: "Me",
       entityType: "customer" as const,
-      bodyText: "Dear Tom,\n\nAttached is our quotation for 500pcs.\n-- \nMe | LONGTEC"
+      bodyText: "Dear Tom,\n\nAttached is our quotation for 500pcs.\n-- \nMe | DEMO SUPPLIER"
     }
   ],
   outboundLogs: [
@@ -232,7 +239,7 @@ check("悬浮摘要切掉引用历史与签名", () => {
   assert.doesNotMatch(inbound.preview, /wrote:/);
   const sent = events.find((event) => event.source === "outbound_log")!;
   // `-- ` 之后是签名，不该顶到悬浮卡里
-  assert.doesNotMatch(sent.preview, /LONGTEC/);
+  assert.doesNotMatch(sent.preview, /DEMO SUPPLIER/);
 });
 
 check("没有原文的事件不给定位入口", () => {
@@ -253,13 +260,13 @@ check("预览：空正文、纯引用都不算内容", () => {
 
 check("预览：签名插在引用前面时，不能把整封切空", () => {
   // 个人库实测：本系统发出的回复，正文就是「-- + 签名 + 在 xx 写道：+ 客户原文」
-  const body = "--\nKevin\nhuangguojia@longtec.com\n在 2026-10-21 18:49，purchasing Sabatani <p@x.co.id> 写道：\nGood afternoon,\n\nPlease find attached our Purchase Order No. 103640/PO-SGS/26 for your review.";
+  const body = "--\nKevin\nkevin@demo-supplier.com\n在 2026-10-21 18:49，purchasing Sabatani <p@x.co.id> 写道：\nGood afternoon,\n\nPlease find attached our Purchase Order No. 103640/PO-SGS/26 for your review.";
   const preview = mailBodyPreview(body);
   assert.ok(preview.length > 0);
   // 没有新增正文 → 给引用内容，并且明确标注来源，不能冒充本次正文
   assert.ok(preview.startsWith(MAIL_QUOTE_PREVIEW_MARK));
   assert.match(preview, /Please find attached our Purchase Order/);
-  assert.doesNotMatch(preview, /huangguojia@longtec\.com/);
+  assert.doesNotMatch(preview, /kevin@demo-supplier\.com/);
 });
 
 check("预览：正文够像正文时，不去拿引用充数", () => {
@@ -540,6 +547,141 @@ check("千人千面：正文为空 = 全新开发信模式，规则与改写模�
   // 主题输出格式约束 + 语言跟随
   assert.ok(injected.includes("Subject: <主题>"));
   assert.ok(buildMailPersonalizePrompt({ to: "a@b.com", content: "Bonjour", lang: "en" }).includes("英文"));
+});
+
+// ── 「测试连接」：联网前的参数收敛 ────────────────────────────────────────
+check("测试连接：465 走隐式 SSL，IMAP 按 SMTP 主机推导且默认 993 加密", () => {
+  const target = mailProbeTarget({ email: "Sales@Example.COM", password: "authcode", smtpHost: "smtp.exmail.qq.com", smtpPort: 465 });
+  assert.equal(target.email, "sales@example.com", "邮箱要先归一化，否则 IMAP 登录会因大小写被拒");
+  assert.deepEqual(target.smtp, { host: "smtp.exmail.qq.com", port: 465, secure: true });
+  assert.deepEqual(target.imap, { host: "imap.exmail.qq.com", port: 993, secure: true, user: "sales@example.com" });
+});
+
+check("测试连接：587 必须关掉隐式 SSL（STARTTLS），143 同理", () => {
+  const target = mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", smtpPort: 587 });
+  assert.equal(target.smtp.secure, false);
+  const plain = mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", smtpPort: 587, imapPort: 143 });
+  assert.equal(plain.imap.secure, false);
+});
+
+check("测试连接：手填 IMAP 主机优先于推导（企业邮箱常见同主机）", () => {
+  const target = mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", imapHost: "mail.company.com" });
+  assert.equal(target.imap.host, "mail.company.com");
+  assert.equal(target.imap.port, 993);
+});
+
+check("测试连接：缺邮箱 / 缺授权码 / 缺 SMTP 主机都在联网前就拦住", () => {
+  assert.throws(() => mailProbeTarget({ email: "", password: "p", smtpHost: "smtp.qq.com" }), /有效的邮箱地址/u);
+  assert.throws(() => mailProbeTarget({ email: "not-an-email", password: "p", smtpHost: "smtp.qq.com" }), /有效的邮箱地址/u);
+  assert.throws(() => mailProbeTarget({ email: "a@b.com", password: "", smtpHost: "smtp.qq.com" }), /授权码/u);
+  assert.throws(() => mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "" }), /SMTP 主机/u);
+});
+
+check("测试连接：端口非法 / 推导不出 IMAP 主机时如实报错，不发请求", () => {
+  assert.throws(() => mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", smtpPort: 70000 }), /SMTP 端口/u);
+  assert.throws(() => mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", imapPort: -1 }), /IMAP 端口/u);
+  // 端口空着（0 / undefined）= 没填，落回默认值，不当作错误拦下来
+  assert.equal(mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", imapPort: 0 }).imap.port, 993);
+  assert.equal(mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "smtp.qq.com", smtpPort: 0 }).smtp.port, 465);
+  // mail.company.com 能推（同主机），裸域名不会瞎猜 —— 猜错只会让用户等超时
+  assert.throws(() => mailProbeTarget({ email: "a@b.com", password: "p", smtpHost: "company.com" }), /IMAP 主机/u);
+});
+
+check("测试连接：底层报错要翻成能照着改的话", () => {
+  const auth = Object.assign(new Error("Invalid login: 535 Login Fail"), { code: "EAUTH" });
+  assert.match(mailProbeErrorMessage(auth), /授权码/u);
+  const dns = Object.assign(new Error("getaddrinfo ENOTFOUND smtp.example.com"), { code: "ENOTFOUND" });
+  assert.match(mailProbeErrorMessage(dns), /域名解析/u);
+  const timeout = Object.assign(new Error("Connection timeout"), { code: "ETIMEDOUT" });
+  assert.match(mailProbeErrorMessage(timeout), /超时/u);
+  const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  assert.match(mailProbeErrorMessage(refused), /端口/u);
+  // 认不出来的错误不要吞掉原文（不然用户只看到「连接失败」）
+  assert.match(mailProbeErrorMessage(new Error("奇怪的错误 xyz")), /奇怪的错误 xyz/u);
+});
+
+// ── 以单封邮件生成旅程：对话对方地址 ──────────────────────────────────────
+check("来信：对话对方 = 发件人（去掉空格、统一小写）", () => {
+  const address = journeyCounterpartAddress({
+    direction: "inbound", fromAddress: " Alice@Demo-Supplier.COM ", toAddresses: ["me@demo-crm.com"]
+  }, ["me@goodjob.com"]);
+  assert.equal(address, "alice@demo-supplier.com");
+});
+
+check("去信：跳过我方地址，取第一个真实的客户收件人", () => {
+  const address = journeyCounterpartAddress({
+    direction: "outbound", fromAddress: "me@goodjob.com",
+    toAddresses: ["me@goodjob.com", "buyer@nova.io"], ccAddresses: ["boss@nova.io"]
+  }, ["me@goodjob.com"]);
+  assert.equal(address, "buyer@nova.io");
+});
+
+check("去信：只有内部同事时取不到对方（不能拿自己当对话方）", () => {
+  const address = journeyCounterpartAddress({
+    direction: "outbound", fromAddress: "me@goodjob.com", toAddresses: ["colleague@goodjob.com"]
+  }, ["me@goodjob.com", "colleague@goodjob.com"]);
+  assert.equal(address, "");
+});
+
+check("收件人只有显示名、没有地址时退到抄送，仍然取不到就返回空串", () => {
+  assert.equal(
+    journeyCounterpartAddress({ direction: "outbound", fromAddress: "me@goodjob.com", toAddresses: ["客户"], ccAddresses: ["cc@apex.com"] },
+      ["me@goodjob.com"]),
+    "cc@apex.com"
+  );
+  assert.equal(
+    journeyCounterpartAddress({ direction: "outbound", fromAddress: "me@goodjob.com", toAddresses: ["客户"] }, ["me@goodjob.com"]),
+    ""
+  );
+});
+
+check("台账 to 字段里的多个地址 / 显示名都能抽出来（用于按地址补发信事件）", () => {
+  assert.deepEqual(
+    mailAddressesIn("Alice <alice@demo-supplier.com>, sales@apex.com; alice@demo-supplier.com"),
+    ["alice@demo-supplier.com", "sales@apex.com"]
+  );
+  assert.deepEqual(mailAddressesIn("没有地址"), []);
+});
+
+// ── 旅程抬头：主体是「人」不是「那封信」 ──────────────────────────────────
+check("来信：抬头用发件人显示名（去掉首尾空白）", () => {
+  assert.equal(journeyCounterpartName({ direction: "inbound", fromName: "  Alice Chen " }), "Alice Chen");
+});
+
+check("来信没有显示名 / 去信：返回空串，让前端回落到地址而不是造假名字", () => {
+  assert.equal(journeyCounterpartName({ direction: "inbound", fromName: "" }), "");
+  assert.equal(journeyCounterpartName({ direction: "outbound", fromName: "Kevin" }), "");
+});
+
+check("显示名本身就是邮箱时不算名字（否则抬头会出现两遍同一个地址）", () => {
+  assert.equal(journeyCounterpartName({ direction: "inbound", fromName: "yws@nb-hj.com" }), "");
+  assert.equal(journeyCounterpartName({ direction: "inbound", fromName: "YWS Sales" }), "YWS Sales");
+});
+
+// ── 线程归并：回复头缺失时靠主题兜底 ──────────────────────────────────────
+check("主题归一化：剥掉多层中文/英文回复前缀并压平空白", () => {
+  assert.equal(threadSubjectKey("Re: Re: 回复： AIR新货出印尼"), "air新货出印尼");
+  assert.equal(threadSubjectKey("  回复:  Fwd:  Re[2]: Order #12 "), "order #12");
+});
+
+check("主题归一化：不同主题不会被并成一条线程", () => {
+  assert.notEqual(threadSubjectKey("Re: 询价-168"), threadSubjectKey("询价-169"));
+});
+
+check("主题归一化：只有前缀没有正文时返回空串（空主题不能互相归并）", () => {
+  assert.equal(threadSubjectKey("Re: "), "");
+  assert.equal(threadSubjectKey(""), "");
+});
+
+check("主题指纹：同一件事后来加了公司全名 / 单号，仍算同一条线程", () => {
+  const origin = threadSubjectPrefix("AIR新货出印尼收货人PT SABATANI GLOBAL SOLUSINDO--珠海// PEK-CGK");
+  const later = threadSubjectPrefix("Re: Re: AIR新货出印尼收货人PT SABATANI GLOBAL SOLUSINDO--DEMO SUPPLIER CO.,LTD// PEK-CGK//PVGAIR262349");
+  assert.equal(origin, later);
+  assert.notEqual(origin, threadSubjectPrefix("另一个订单的收货人安排"));
+});
+
+check("主题指纹：太短的主题没有区分度，不参与合并", () => {
+  assert.equal(threadSubjectPrefix("Re: hi"), "");
 });
 
 console.log(`\nmail-center-test: ${passed} 项通过`);

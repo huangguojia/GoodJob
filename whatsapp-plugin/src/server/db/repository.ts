@@ -1,5 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { isE164PhoneNumber } from "../../shared/types.js";
+
+// ── 账号列表失效信号 ─────────────────────────────────────────────────────────
+// 节奏轮询（automation-rhythm）每分钟用 listAccounts() 找 owner。空闲时这是
+// 无谓开销：轮询侧缓存 owner 列表，任何 channel_accounts 写路径 bump 一次编号。
+let channelAccountsEpoch = 0;
+
+export function getChannelAccountsEpoch() {
+  return channelAccountsEpoch;
+}
+
+function touchChannelAccountsCache() {
+  channelAccountsEpoch++;
+}
+
 import type {
   AccountStatus,
   AiProviderProfile,
@@ -743,6 +757,7 @@ export class Repository {
         dbTime(timestamp)
       ]
     );
+    touchChannelAccountsCache();
     return (await this.getAccount(id))!;
   }
 
@@ -757,8 +772,9 @@ export class Repository {
         phone=COALESCE($3, phone), qr_data_url=$4, last_error=$5, last_event_at=$6,
         last_connected_at=CASE WHEN $2='connected' THEN $6 ELSE last_connected_at END,
         updated_at=$6 WHERE id=$1`,
-      [id, status, details.phone ?? null, details.qrDataUrl ?? null, details.error ?? null, dbTime(timestamp)]
+        [id, status, details.phone ?? null, details.qrDataUrl ?? null, details.error ?? null, dbTime(timestamp)]
     );
+    touchChannelAccountsCache();
     const account = await this.getAccount(id);
     if (!account) throw new Error("Account not found");
     return account;
@@ -766,6 +782,7 @@ export class Repository {
 
   async deleteAccount(id: string): Promise<void> {
     await this.database.query("DELETE FROM channel_accounts WHERE id=$1", [id]);
+    touchChannelAccountsCache();
   }
 
   async countRoutingReferences(accountId: string): Promise<number> {

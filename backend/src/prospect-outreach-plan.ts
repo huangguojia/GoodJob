@@ -316,8 +316,6 @@ export class ProspectOutreachPlanRunner {
     this.busy = true;
     try {
       const plans = this.store.prospectOutreachPlans.filter((plan) => plan.status === "running");
-      // TEMP-PROBE 2026-09-29: 排查自动方案后台线程为何不执行（用完即删）
-      console.log(`[probe-plan] tick total=${this.store.prospectOutreachPlans.length} running=${plans.length} at=${new Date().toISOString()}`);
       for (const plan of plans) {
         try {
           await this.tick(plan);

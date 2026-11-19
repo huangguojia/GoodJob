@@ -101,6 +101,36 @@ interface PreparedConversation {
   messages: ChatMessage[];
 }
 
+/** 预览列表里的一条会话。字段全部来自本地会话库，消息正文只取「最后一条」给人确认。 */
+export interface FollowupSyncPreviewItem {
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  messageCount: number;
+  inboundCount: number;
+  outboundCount: number;
+  lastMessageAt: string;
+  /** 最后一条**客户**消息（列表里最有信息量的一行）；当天没有客户消息时为空串。 */
+  lastInbound: string;
+  /** 这条同步后会变成什么。unknown = CRM 未配置或预演失败，现场才能判断。 */
+  match: "customer" | "lead" | "ambiguous" | "unknown";
+  customerName: string;
+  note: string;
+}
+
+/** 预览结果：给扩展侧边栏画勾选列表用。 */
+export interface FollowupSyncPreview {
+  runDate: string;
+  timezone: string;
+  total: number;
+  /** CRM 不可用时的原因（非空则每条的 match 都是 unknown）。 */
+  crmNote: string;
+  items: FollowupSyncPreviewItem[];
+}
+
+/** 预览里「最后一条消息」的截断长度：一行放得下，又不至于只剩省略号。 */
+const PREVIEW_TEXT_CHARS = 140;
+
 export class FollowupSyncService {
   constructor(
     private readonly repository: Repository,
@@ -208,10 +238,107 @@ export class FollowupSyncService {
   }
 
   /**
+   * 「同步今天」的第一步：**只读**列出今天有消息的会话。
+   *
+   * 原来点一下就把当天所有会话全写进 CRM，结果只有一句「写入跟进 3 · 新线索 2」——
+   * 用户既没机会看清是哪几条，也没机会只要其中几条。这里先把「要同步什么」摊开，
+   * 写入交给 `run(..., { conversationIds })`。
+   *
+   * 真正调 CRM 的只有一次（批量问「这些号码各自会变成客户还是线索」），
+   * CRM 不可达时不阻断预览 —— 列表照样能勾，`match` 记 unknown 让界面说清楚。
+   */
+  async preview(ownerUserId: string): Promise<FollowupSyncPreview> {
+    const settings = await this.repository.getAutomationSettings(ownerUserId);
+    const runDate = localDate(settings.timezone, this.clock());
+    const conversations = (await this.repository.listAutomationConversations(ownerUserId)).slice(0, MAX_CONVERSATIONS_PER_RUN);
+    const items: FollowupSyncPreviewItem[] = [];
+    for (const conversation of conversations) {
+      const messages = selectDayMessages(await this.repository.listMessages(conversation.id, ownerUserId), settings.timezone, runDate);
+      if (!messages.length) continue;
+      const ordered = [...messages].sort((left, right) => new Date(left.occurredAt).getTime() - new Date(right.occurredAt).getTime());
+      const inbound = ordered.filter((message) => message.direction === "inbound");
+      const lastInbound = String(inbound.at(-1)?.body ?? "").trim();
+      items.push({
+        conversationId: this.conversationKey(conversation),
+        contactName: conversation.contactName || conversation.contactPhone,
+        contactPhone: conversation.contactPhone,
+        messageCount: ordered.length,
+        inboundCount: inbound.length,
+        outboundCount: ordered.length - inbound.length,
+        lastMessageAt: ordered.at(-1)?.occurredAt ?? "",
+        lastInbound: lastInbound.length > PREVIEW_TEXT_CHARS ? `${lastInbound.slice(0, PREVIEW_TEXT_CHARS)}…` : lastInbound,
+        match: "unknown",
+        customerName: "",
+        note: ""
+      });
+    }
+    if (!items.length) return { runDate, timezone: settings.timezone, total: 0, crmNote: "", items };
+    const matched = await this.matchInCrm(ownerUserId, runDate, items);
+    return { runDate, timezone: settings.timezone, total: items.length, crmNote: matched.crmNote, items: matched.items };
+  }
+
+  /**
+   * 批量问 CRM：这些号码各自会写成客户跟进、新线索，还是因歧义跳过。
+   *
+   * 失败**不抛**：预演挂了不该让人连列表都看不到。fallback 是把每条的 match 记成
+   * unknown 并附上原因 —— 同步时 CRM 还会自己判断一次，不是猜。
+   */
+  private async matchInCrm(
+    ownerUserId: string,
+    runDate: string,
+    items: FollowupSyncPreviewItem[]
+  ): Promise<{ items: FollowupSyncPreviewItem[]; crmNote: string }> {
+    if (!this.crmJwtSecret) {
+      return { items: items.map((item) => ({ ...item, note: "CRM 未配置签名密钥，无法预判" })), crmNote: "CRM 服务签名密钥未配置，无法预判客户/线索" };
+    }
+    try {
+      const response = await fetch(`${this.crmBaseUrl}/api/whatsapp/followup-sync/preview`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${crmIdentityToken(this.crmJwtSecret, ownerUserId)}` },
+        body: JSON.stringify({
+          runDate,
+          conversations: items.map((item) => ({
+            conversationId: item.conversationId,
+            contactName: item.contactName,
+            contactPhone: item.contactPhone
+          }))
+        }),
+        signal: AbortSignal.timeout(30_000)
+      });
+      const data = (await response.json().catch(() => ({}))) as { items?: Array<Record<string, unknown>>; message?: string };
+      if (!response.ok) throw new Error(typeof data.message === "string" ? data.message : `HTTP ${response.status}`);
+      const byId = new Map((data.items ?? []).map((row) => [String(row.conversationId ?? ""), row]));
+      return {
+        items: items.map((item) => {
+          const row = byId.get(item.conversationId);
+          if (!row) return { ...item, note: "CRM 没返回这条的判断，同步时现场判断" };
+          const match = row.match === "customer" || row.match === "lead" || row.match === "ambiguous" ? row.match : "unknown";
+          return {
+            ...item,
+            match,
+            customerName: String(row.customerName ?? ""),
+            note: String(row.note ?? "")
+          };
+        }),
+        crmNote: ""
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "预演失败";
+      return {
+        items: items.map((item) => ({ ...item, note: "CRM 暂时连不上，同步时现场判断" })),
+        crmNote: `CRM 预演失败（${message}），同步时会由 CRM 现场判断`
+      };
+    }
+  }
+
+  /**
    * 跑一次同步。**永不因为单个会话失败而整轮失败** ——
    * 一个号码写崩了不该让另外二十个客户的跟进也丢掉。失败逐条记进明细，整轮状态置 `partial`。
+   *
+   * `options.conversationIds` 非空时只同步这些会话（侧边栏勾选列表用）；不传 = 今天全部，
+   * 定时任务走这条。先按勾选过滤再截断上限，所以勾选的会话不会被 30 个的名额挤掉。
    */
-  async run(ownerUserId: string, options: { trigger: "scheduled" | "manual" }): Promise<FollowupSyncRunResult> {
+  async run(ownerUserId: string, options: { trigger: "scheduled" | "manual"; conversationIds?: string[] }): Promise<FollowupSyncRunResult> {
     const settings = await this.repository.getAutomationSettings(ownerUserId);
     const now = this.clock();
     const runDate = localDate(settings.timezone, now);
@@ -219,7 +346,12 @@ export class FollowupSyncService {
     const failures: string[] = [];
     try {
       const libraryConversations = await this.repository.listAutomationConversations(ownerUserId);
-      const conversations = libraryConversations.slice(0, MAX_CONVERSATIONS_PER_RUN);
+      const only = new Set((options.conversationIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean));
+      // 先按勾选过滤再截断：勾中的会话不该被「最多 30 个」的名额挤掉。
+      const wanted = only.size
+        ? libraryConversations.filter((conversation) => only.has(this.conversationKey(conversation)))
+        : libraryConversations;
+      const conversations = wanted.slice(0, MAX_CONVERSATIONS_PER_RUN);
       // 先把「今天有对话」的会话连消息一起挑出来，再决定要不要连 CRM。
       // 一个消息都没有的日子不该产生任何 CRM 请求，也不该建线索。
       const prepared: PreparedConversation[] = [];
@@ -331,7 +463,9 @@ export class FollowupSyncService {
       // 「扫描 0 个会话；更新 0 条」的记录完全无法自查。
       const summary = outcomes.length
         ? this.describe(result, status, failures.length, pendingCount, curationReason)
-        : libraryConversations.length === 0
+        : only.size && !wanted.length
+          ? `勾选的 ${only.size} 个会话在插件库里找不到，可能已被删除或换了会话 id`
+          : libraryConversations.length === 0
           ? "插件库里还没有任何 WhatsApp 会话，没有可归纳的内容（网页版的聊天要先送进插件库：侧边栏「同步今天 → CRM」会自动带上当前打开的会话，或在插件控制台手动导入）"
           : `插件库里的 ${libraryConversations.length} 个会话在 ${runDate} 当天都没有可归纳的消息`;
       await this.repository.updateFollowupSyncRun(run.id, {

@@ -361,16 +361,6 @@ export function projectProspectLiveEvents(
     .map((event, index) => ({ ...event, sequence: index + 1 }));
 }
 
-export function prospectLiveEventsAfter(
-  events: ProspectLiveEvent[],
-  lastEventId: string
-) {
-  if (!lastEventId) return events;
-  const index = events.findIndex((event) => event.id === lastEventId);
-  if (index < 0) return events;
-  return events.slice(index + 1);
-}
-
 interface MemoryFeedState {
   nextOffset: number;
   offsets: Map<string, number>;

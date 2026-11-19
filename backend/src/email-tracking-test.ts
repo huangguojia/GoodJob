@@ -60,19 +60,19 @@ check(verifyOpenToken(openToken, openSig) === "gj-open-1@x", "open 令牌往返�
 check(verifyOpenToken(openToken, "deadbeefdeadbeefdeadbeefdeadbeef") === "", "open 签名错误时拒绝");
 
 // ── 3. 点击链接改写与验签 ─────────────────────────────────────
-const click = buildClickTrackingUrl(mid, "https://longtec.com/products?a=1");
+const click = buildClickTrackingUrl(mid, "https://demo-supplier.com/products?a=1");
 check(click.startsWith("https://crm.example.com/api/email/track/click/"), "点击 URL 指向追踪路由");
 const verified = verifyClickToken(
   click.split("/click/")[1]!.split("?")[0]!,
   new URL(click).searchParams.get("u")!,
   new URL(click).searchParams.get("s")!
 );
-check(verified?.messageId === "gj-open-1@x" && verified?.targetUrl === "https://longtec.com/products?a=1", "点击令牌往返还原目标");
+check(verified?.messageId === "gj-open-1@x" && verified?.targetUrl === "https://demo-supplier.com/products?a=1", "点击令牌往返还原目标");
 check(buildClickTrackingUrl(mid, "javascript:alert(1)") === "javascript:alert(1)", "非 http(s) 目标不改写");
 
 // ── 4. 正文转追踪 HTML ────────────────────────────────────────
 const html = buildTrackedEmailHtml(
-  "Hello!\nVisit https://longtec.com/price or https://longtec.com/catalog\nThanks",
+  "Hello!\nVisit https://demo-supplier.com/price or https://demo-supplier.com/catalog\nThanks",
   mid
 );
 check(!!html && typeof html === "object", "开启追踪时返回 HTML 结构");

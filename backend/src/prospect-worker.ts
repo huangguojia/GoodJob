@@ -27,6 +27,12 @@ export interface ProspectWorkerOptions {
   prospectCoverageSecret?: string;
   workerId?: string;
   pollMs?: number;
+  /**
+   * 空闲退避上限。连续没有可执行任务时，轮询间隔从 pollMs 起逐步加倍到这个上限；
+   * 一旦执行到任务或被 wakeNow() 唤醒（新建/变更运行时会调用），立即回到 pollMs。
+   * 设成与 pollMs 相同即关闭退避。
+   */
+  idleMaxPollMs?: number;
   leaseMs?: number;
   deadlineMs?: number;
   concurrency?: number;
@@ -68,6 +74,9 @@ export class ProspectWorker {
   private readonly kernel: ProspectExecutionKernel;
   private readonly candidatePipeline: ProspectCandidatePipeline;
   private readonly pollMs: number;
+  private readonly idleMaxPollMs: number;
+  /** 所有并发循环共享：连续空转的轮询次数，任一循环执行到任务即清零 */
+  private idleStreak = 0;
   private readonly heartbeatMs: number;
   private readonly concurrency: number;
   private readonly contactEnrichmentScanMs: number;
@@ -90,6 +99,9 @@ export class ProspectWorker {
     this.store = options.store;
     this.dispatcher = options.dispatcher;
     this.pollMs = Math.max(100, positiveInteger(options.pollMs, 1_000));
+    // 空闲时每次轮询都要在数据库事务里重读执行状态（MySQL 下即「加锁 + 全量重读 + 写回」），
+    // 不退避的话 3 个并发循环每秒 6 次，长期空转占用 CPU；默认最多退避到 15 秒。
+    this.idleMaxPollMs = Math.max(this.pollMs, positiveInteger(options.idleMaxPollMs, 15_000));
     this.concurrency = Math.max(1, Math.min(
       8,
       positiveInteger(options.concurrency, 3)
@@ -152,10 +164,17 @@ export class ProspectWorker {
   }
 
   wakeNow() {
+    this.idleStreak = 0;
     for (const wake of [...this.sleepers]) wake();
   }
 
-  private async sleep() {
+  /** 当前空闲等待时长：每个并发循环都空转一轮记一级，逐级加倍，封顶 idleMaxPollMs */
+  idleDelayMs() {
+    const level = Math.min(16, Math.floor(this.idleStreak / this.concurrency));
+    return Math.min(this.idleMaxPollMs, this.pollMs * 2 ** level);
+  }
+
+  private async sleep(delayMs = this.pollMs) {
     if (!this.running) return;
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -168,7 +187,7 @@ export class ProspectWorker {
         resolve();
       };
       this.sleepers.add(wake);
-      timer = setTimeout(wake, this.pollMs);
+      timer = setTimeout(wake, delayMs);
       if (!this.running) wake();
     });
   }
@@ -300,8 +319,14 @@ export class ProspectWorker {
       } catch (error) {
         this.logFailure("worker_cycle_failed", {}, error);
       }
-      if (worked) await this.notifyStateChanged();
-      if (!worked) await this.sleep();
+      if (worked) {
+        this.idleStreak = 0;
+        await this.notifyStateChanged();
+      } else {
+        const delay = this.idleDelayMs();
+        this.idleStreak = Math.min(this.idleStreak + 1, 1_000);
+        await this.sleep(delay);
+      }
     }
   }
 

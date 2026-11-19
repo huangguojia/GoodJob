@@ -445,9 +445,11 @@ function requestBodyFor(method: HttpMethod, path: string) {
             properties: {
               researchSource: { type: "string", enum: ["crm", "ai", "cli"], description: "默认背调来源：crm=只分析 CRM 已有证据，ai=调用已配置的模型 API，cli=交给本机 WorkBuddy/Codex CLI 联网调研。" },
               emailSource: { type: "string", enum: ["template", "ai", "cli"], description: "默认开发信来源：template=规则模板，ai=调用已配置的模型 API，cli=交给本机 CLI 撰写。" },
-              cliAdapter: { type: "string", enum: ["workbuddy", "codex"], description: "走 CLI 时使用哪个命令行 agent。" },
+              cliAdapter: { type: "string", enum: ["workbuddy", "codex"], description: "走 CLI 时首选哪个命令行 agent；执行机上首选的不可用、另一个可用时自动改用另一个。" },
               cliModel: { type: "string", description: "走 CLI 时使用的模型 ID（如 deepseek-v4.1-flash、deep-model、glm-5.3）。留空 = 跟随 CLI 自带默认。注意：CLI 自带的默认由**当前登录账号**决定（实测见过 fast-model、也见过 hy4-preview-f），换账号会变；系统出厂默认已固定为 deepseek-v4.1-flash，一般无需改动。可选清单见 GET 接口返回的 cliModels。" },
               cliEffort: { type: "string", enum: ["minimal", "low", "medium", "high", "xhigh", "max"], description: "走 CLI 时的思考档位；留空 = 跟随 CLI 默认。" },
+              codexModel: { type: "string", maxLength: 64, description: "选用 Codex CLI 时使用的模型（Codex 自己的命名，出厂默认 gpt-5.6-sol）。留空 = 跟随本机 ~/.codex/config.toml；只接受字母数字与 . _ : -。cliModel 只用于 WorkBuddy CLI。" },
+              codexEffort: { type: "string", enum: ["", "minimal", "low", "medium", "high"], description: "选用 Codex CLI 时的思考档位；留空 = 跟随 Codex 默认。" },
               cliWorkspace: { type: "string", maxLength: 1000, description: "CLI 执行的工作目录，必须是该 Runner 已授权的绝对路径；留空则用 Runner 的第一个授权目录。" },
               cliTimeoutSeconds: { type: "integer", minimum: 60, maximum: 86400, description: "单次 CLI 任务最长执行时间（秒），最长 24 小时。" },
               runnerId: { type: "string", maxLength: 80, description: "指定 Runner；留空表示自动选择一台在线且具备该 CLI 能力的机器。" }

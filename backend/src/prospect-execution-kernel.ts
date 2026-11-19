@@ -2613,6 +2613,15 @@ export class ProspectExecutionKernel {
 
   async recoverExpiredLeases(now = new Date().toISOString()) {
     this.assertStarted();
+    // 空闲短路：没有过期租约时不做任何写事务。否则每个轮询周期都会
+    // 「加锁 + 全量重读执行状态 + 深拷贝整个 store + 写回」，纯空转。
+    const nowTime = validIso(now);
+    const hasExpired = this.store.prospectExecutionLeases.some((lease) =>
+      lease.status === "active"
+      && this.isRunAllowed(lease.runId)
+      && validIso(lease.expiresAt) <= nowTime
+    );
+    if (!hasExpired) return 0;
     return persistMutation(this.store, () => {
       const before = snapshot(this.store);
       const recovered = this.recoverLeasesInMutation(now, false);
@@ -2623,12 +2632,9 @@ export class ProspectExecutionKernel {
     });
   }
 
-  async claimNext(now = new Date().toISOString()) {
-    this.assertStarted();
-    validIso(now);
-    return persistMutation(this.store, () => {
-      const before = snapshot(this.store);
-      const candidates = this.store.prospectRunQueueChildBindings
+  /** 纯内存预筛：不写库即可判断本轮是否有可领取的候选。 */
+  private claimableCandidates(now: string) {
+    return this.store.prospectRunQueueChildBindings
         .map((binding) => {
           const run = this.store.prospectSearchRuns.find((item) =>
             item.id === binding.runId
@@ -2681,6 +2687,16 @@ export class ProspectExecutionKernel {
             || left.shard.position - right.shard.position
             || left.job.id.localeCompare(right.job.id);
         });
+  }
+
+  async claimNext(now = new Date().toISOString()) {
+    this.assertStarted();
+    validIso(now);
+    // 空闲短路：没有可领取的候选时不进事务，避免每个轮询周期都全量重读 + 深拷贝。
+    if (!this.claimableCandidates(now).length) return null;
+    return persistMutation(this.store, () => {
+      const before = snapshot(this.store);
+      const candidates = this.claimableCandidates(now);
       for (const selected of candidates) {
         if (selected.run.status !== "queued" && selected.run.status !== "running") {
           continue;

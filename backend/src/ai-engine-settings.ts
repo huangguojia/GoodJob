@@ -71,6 +71,21 @@ export const AI_ENGINE_CLI_MODEL_IDS = new Set(AI_ENGINE_CLI_MODELS.map((item) =
  */
 export const AI_ENGINE_CLI_MODEL_DEFAULT = "deepseek-v4.1-flash";
 
+// ---------------------------------------------------------------------------
+// Codex CLI 的模型（2026-11-05 用户指定默认 gpt-5.6-sol）
+//
+// WorkBuddy 与 Codex 的模型命名完全不同，必须分开存：选了 Codex 时用 codexModel，
+// 选了 WorkBuddy 时用 cliModel。Codex 模型名随版本变化，所以除了下面的候选，
+// 也接受符合安全字符规则的自定义名（Runner 侧按同样的规则再挡一道）。
+// ---------------------------------------------------------------------------
+export const AI_ENGINE_CODEX_MODELS: AiEngineCliModelOption[] = [
+  { id: "gpt-5.6-sol", label: "gpt-5.6-sol · 系统默认", note: "团队指定的 Codex 默认模型；未配置时即用它" }
+];
+export const AI_ENGINE_CODEX_MODEL_DEFAULT = "gpt-5.6-sol";
+export const AI_ENGINE_CODEX_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
+/** Codex 支持的思考档位；CRM 里更高的 xhigh / max 在 Runner 侧按 high 执行 */
+export const AI_ENGINE_CODEX_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+
 /** 思考档位（与 Runner 的 EFFORT_LEVELS 一致）；留空 = 跟随 CLI 默认 */
 export const AI_ENGINE_CLI_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -82,10 +97,6 @@ export const aiEngineCliEffortLabels: Record<string, string> = {
   xhigh: "xhigh · 很深入",
   max: "max · 最深（最慢）"
 };
-
-export function aiEngineCliModelLabel(id: string) {
-  return AI_ENGINE_CLI_MODELS.find((item) => item.id === id)?.label || id;
-}
 
 export interface TeamAiEngineSettings {
   teamId: string;
@@ -103,6 +114,10 @@ export interface TeamAiEngineSettings {
   cliModel: string;
   /** 走 CLI 时的思考档位（minimal…max）。留空 = 跟随 CLI 默认 */
   cliEffort: string;
+  /** 选用 Codex CLI 时的模型（Codex 自己的命名）。留空 = 跟随本机 ~/.codex/config.toml */
+  codexModel: string;
+  /** 选用 Codex CLI 时的思考档位（minimal / low / medium / high）。留空 = 跟随 Codex 默认 */
+  codexEffort: string;
   /** 走 CLI 时在哪个工作目录里执行（必须是 Runner 已授权的目录） */
   cliWorkspace: string;
   /** 走 CLI 时的最长执行时间（秒） */
@@ -152,6 +167,8 @@ export function defaultTeamAiEngineSettings(teamId: string): TeamAiEngineSetting
     // 出厂默认模型：显式指定，避免落到 CLI 那档随登录账号变化的默认（见文件头说明）
     cliModel: AI_ENGINE_CLI_MODEL_DEFAULT,
     cliEffort: "",
+    codexModel: AI_ENGINE_CODEX_MODEL_DEFAULT,
+    codexEffort: "",
     cliWorkspace: "",
     cliTimeoutSeconds: AI_ENGINE_CLI_TIMEOUT_DEFAULT,
     runnerId: "",
@@ -188,6 +205,16 @@ export function sanitizeTeamAiEngineSettings(
   const cliEffort = !cliEffortRaw || (AI_ENGINE_CLI_EFFORTS as readonly string[]).includes(cliEffortRaw)
     ? cliEffortRaw
     : fallback.cliEffort;
+  // Codex 模型：空串 = 跟随 Codex 本机配置；非空必须符合安全字符规则（会作为 -m 参数传给 CLI）。
+  // 老数据没有这个字段时落到出厂默认 gpt-5.6-sol。
+  const codexModelRaw = typeof raw.codexModel === "string" ? raw.codexModel.trim() : (fallback.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT);
+  const codexModel = !codexModelRaw || AI_ENGINE_CODEX_MODEL_PATTERN.test(codexModelRaw)
+    ? codexModelRaw
+    : (fallback.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT);
+  const codexEffortRaw = typeof raw.codexEffort === "string" ? raw.codexEffort.trim().toLowerCase() : (fallback.codexEffort ?? "");
+  const codexEffort = !codexEffortRaw || (AI_ENGINE_CODEX_EFFORTS as readonly string[]).includes(codexEffortRaw)
+    ? codexEffortRaw
+    : (fallback.codexEffort ?? "");
   const cliWorkspace = typeof raw.cliWorkspace === "string"
     ? raw.cliWorkspace.trim().slice(0, 1000)
     : fallback.cliWorkspace;
@@ -202,12 +229,30 @@ export function sanitizeTeamAiEngineSettings(
     cliAdapter,
     cliModel,
     cliEffort,
+    codexModel,
+    codexEffort,
     cliWorkspace,
     cliTimeoutSeconds,
     runnerId,
     updatedBy: typeof raw.updatedBy === "string" ? raw.updatedBy.slice(0, 64) : fallback.updatedBy,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt.slice(0, 40) : fallback.updatedAt
   };
+}
+
+/**
+ * 本次实际选用的 CLI 对应的模型 / 思考档位。
+ * WorkBuddy 与 Codex 的模型命名互不相通，所以必须按「实际派给哪个 CLI」取值，
+ * 不能把 WorkBuddy 的 deepseek-v4.1-flash 之类传给 Codex。
+ */
+export function engineCliProfile(settings: TeamAiEngineSettings, adapter: AiEngineAdapter): { model: string; effort: string } {
+  return adapter === "codex"
+    ? { model: settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT, effort: settings.codexEffort ?? "" }
+    : { model: settings.cliModel, effort: settings.cliEffort };
+}
+
+/** 另一个 CLI（首选的 CLI 在执行机上不可用时自动改用它） */
+export function otherAiEngineAdapter(adapter: AiEngineAdapter): AiEngineAdapter {
+  return adapter === "codex" ? "workbuddy" : "codex";
 }
 
 export async function readTeamAiEngineSettings(teamId: string): Promise<TeamAiEngineSettings> {
