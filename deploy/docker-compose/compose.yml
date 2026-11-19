@@ -197,6 +197,7 @@ services:
       - private
     volumes:
       - uploads_data:/app/uploads
+      - ${GOODJOB_SHARED_DIR}/private:/app/backend/.data/private
     expose:
       - "4188"
     depends_on:
