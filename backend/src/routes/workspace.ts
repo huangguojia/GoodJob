@@ -7,8 +7,8 @@
 import type { Express } from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { canSeeOwner, canSeePersonalData, hasIamPermission, publicUser, requireAuth } from "../auth.js";
-import { type PeerRelation, type PlanTask, type PlanTemplate, type Reminder, type SessionUser } from "../types.js";
+import { canSeeOwner, canSeePersonalData, hasIamPermission, isPlatformIdentity, publicUser, requireAuth } from "../auth.js";
+import { type Peer, type PeerRelation, type PlanTask, type PlanTemplate, type Reminder, type SessionUser } from "../types.js";
 import { getStore } from "../store.js";
 import { isPublicCustomer } from "../customer-public-pool.js";
 import {
@@ -197,6 +197,42 @@ const planTemplateSchema = z.object({
 // Peers (同行管理) — 互补 / 竞争 / 互相推荐
 // ---------------------------------------------------------------------------
 const peerRelationsSchema = z.array(z.enum(["互补", "竞争", "互相推荐"])).max(3).default([]);
+
+/**
+ * 同行共享池。
+ *
+ * 与客户公池不同：同行是「关系网络资料」，推送共享**不改变归属**，
+ * 原记录仍在自己的同行池里，只是多了一个 shared 标记让全公司都能看到。
+ * 别人要用就「收录」一份到自己名下，双方各自维护。
+ */
+function isSharedPeer(peer: Pick<Peer, "poolStatus">) {
+  return peer.poolStatus === "shared";
+}
+
+/** 自己名下的同行人人可推；推别人的要有 peer.pool.share（主管及以上）。 */
+function canSharePeer(user: SessionUser, peer: Pick<Peer, "ownerId" | "teamId">) {
+  if (!canSeeOwner(user, peer.ownerId, peer.teamId)) return false;
+  return peer.ownerId === user.id || hasIamPermission(user, "peer.pool.share");
+}
+
+function visiblePeersFor(user: SessionUser) {
+  return getStore().peers.filter((item) => canSeeOwner(user, item.ownerId, item.teamId));
+}
+
+/** 共享池对全公司可见，不再按 teamId 过滤；平台身份不参与业务数据。 */
+function sharedPeersFor(user: SessionUser) {
+  if (isPlatformIdentity(user)) return [];
+  return getStore().peers.filter((item) => isSharedPeer(item));
+}
+
+function peerPoolCounts(user: SessionUser) {
+  const visible = visiblePeersFor(user);
+  return {
+    mineCount: visible.length,
+    sharedCount: sharedPeersFor(user).length,
+    sharedByMeCount: visible.filter((item) => isSharedPeer(item) && item.sharedBy === user.id).length
+  };
+}
 
 function reminderRuleTitle(ruleType = "quote_no_reply") {
   const map: Record<string, string> = {
@@ -1230,9 +1266,9 @@ export function registerWorkspaceRoutes(app: Express) {
   }));
 
   app.get("/api/peers", requireAuth, (req, res) => {
-    const { peers } = getStore();
-    const scoped = peers.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
-    res.json({ peers: scoped });
+    const query = z.object({ scope: z.enum(["mine", "shared"]).default("mine") }).parse(req.query);
+    const peers = query.scope === "shared" ? sharedPeersFor(req.user!) : visiblePeersFor(req.user!);
+    res.json({ peers, scope: query.scope, ...peerPoolCounts(req.user!) });
   });
 
   app.post("/api/peers", requireAuth, asyncRoute(async (req, res) => {
@@ -1339,6 +1375,131 @@ export function registerWorkspaceRoutes(app: Express) {
       skipped,
       peers: store.peers.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId))
     });
+  }));
+
+  // 单条推送：把一条同行推到全公司共享池（不改归属）
+  app.post("/api/peers/:id/share", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({ reason: z.string().trim().max(500).default("") }).parse(req.body ?? {});
+    const store = getStore();
+    const peer = store.peers.find((item) => item.id === req.params.id);
+    if (!peer || !canSeeOwner(req.user!, peer.ownerId, peer.teamId)) {
+      res.status(404).json({ message: "同行不存在或无权访问" });
+      return;
+    }
+    if (!canSharePeer(req.user!, peer)) {
+      res.status(403).json({ message: "只能推送自己名下的同行，或由主管推送团队成员名下的同行", errorCode: "PEER_SHARE_FORBIDDEN" });
+      return;
+    }
+    if (isSharedPeer(peer)) {
+      res.status(409).json({ message: "该同行已在共享池中", errorCode: "PEER_ALREADY_SHARED" });
+      return;
+    }
+    const now = new Date().toISOString();
+    Object.assign(peer, {
+      poolStatus: "shared" as const,
+      sharedBy: req.user!.id,
+      sharedAt: now,
+      shareReason: body.reason,
+      sharedFromTeamId: peer.teamId,
+      updatedAt: now
+    });
+    await store.persist();
+    res.json({ peer, ...peerPoolCounts(req.user!) });
+  }));
+
+  // 整池 / 批量推送：all=true 表示把「我的同行」里还没共享的全部推上去
+  app.post("/api/peers/share-bulk", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({
+      ids: z.array(z.string().trim().min(1).max(64)).max(500).default([]),
+      all: z.boolean().default(false),
+      reason: z.string().trim().max(500).default("")
+    }).parse(req.body ?? {});
+    if (!body.all && body.ids.length === 0) {
+      res.status(400).json({ message: "请选择要推送的同行，或使用整池推送" });
+      return;
+    }
+    const store = getStore();
+    const visible = visiblePeersFor(req.user!);
+    const targetIds = body.all ? visible.map((item) => item.id) : body.ids;
+    const now = new Date().toISOString();
+    const pushed: string[] = [];
+    const skipped: Array<{ id: string; company: string; reason: string }> = [];
+    for (const id of targetIds) {
+      const peer = store.peers.find((item) => item.id === id);
+      if (!peer || !canSeeOwner(req.user!, peer.ownerId, peer.teamId)) {
+        skipped.push({ id, company: "", reason: "不存在或无权访问" });
+        continue;
+      }
+      if (isSharedPeer(peer)) {
+        skipped.push({ id, company: peer.company, reason: "已在共享池中" });
+        continue;
+      }
+      if (!canSharePeer(req.user!, peer)) {
+        skipped.push({ id, company: peer.company, reason: "无权推送他人名下的同行" });
+        continue;
+      }
+      Object.assign(peer, {
+        poolStatus: "shared" as const,
+        sharedBy: req.user!.id,
+        sharedAt: now,
+        shareReason: body.reason,
+        sharedFromTeamId: peer.teamId,
+        updatedAt: now
+      });
+      pushed.push(peer.id);
+    }
+    if (pushed.length) await store.persist();
+    res.json({ pushedCount: pushed.length, pushedIds: pushed, skipped, ...peerPoolCounts(req.user!) });
+  }));
+
+  // 收录：从共享池复制一份到自己名下（原记录保留，双方各自维护）
+  app.post("/api/peers/:id/adopt", requireAuth, asyncRoute(async (req, res) => {
+    const store = getStore();
+    const source = store.peers.find((item) => item.id === req.params.id);
+    if (!source || !isSharedPeer(source)) {
+      res.status(404).json({ message: "共享池里没有这条同行，可能已被原主人撤回", errorCode: "PEER_NOT_IN_SHARED_POOL" });
+      return;
+    }
+    const duplicate = store.peers.find((item) =>
+      item.teamId === req.user!.teamId
+      && entityDuplicateKey(item.company, item.country) === entityDuplicateKey(source.company, source.country)
+    );
+    if (duplicate) {
+      res.status(409).json({
+        message: `你的同行列表里已有「${duplicate.company}」（${duplicate.country || "国家未知"}），无需重复收录`,
+        errorCode: "PEER_DUPLICATE",
+        existingId: duplicate.id
+      });
+      return;
+    }
+    const now = new Date().toISOString();
+    const adopted: Peer = {
+      id: `peer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      company: source.company,
+      country: source.country,
+      industry: source.industry,
+      relations: [...source.relations],
+      contact: source.contact,
+      phone: source.phone,
+      email: source.email,
+      wechat: source.wechat,
+      website: source.website,
+      remark: source.remark,
+      source: source.source,
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      poolStatus: "private",
+      sharedBy: "",
+      sharedAt: "",
+      shareReason: "",
+      sharedFromTeamId: "",
+      adoptedFromPeerId: source.id,
+      createdAt: now,
+      updatedAt: now
+    };
+    store.peers.unshift(adopted);
+    await store.persist();
+    res.json({ peer: adopted, peers: visiblePeersFor(req.user!), ...peerPoolCounts(req.user!) });
   }));
 
   app.patch("/api/peers/:id", requireAuth, asyncRoute(async (req, res) => {

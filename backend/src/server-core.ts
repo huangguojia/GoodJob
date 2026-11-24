@@ -100,13 +100,25 @@ import {
 import "./ai-engine-settings.js"; // 保持模块加载顺序与拆分前一致
 import { aiEngineAdapterLabel, clampAiEngineTimeout, engineCliProfile, readTeamAiEngineSettings, RESEARCH_ENGINE_SOURCES, resolveEngineSource } from "./ai-engine-settings.js";
 import "./ai-engine-prompts.js"; // 保持模块加载顺序与拆分前一致
-import { acquisitionExtractedContacts, acquisitionPrimaryContact, applyResearchEnginePatch, buildEmailCliPrompt, buildResearchCliPrompt, type EngineAcquisitionCompany, extractAcquisitionFindings, extractEngineJson, normalizeAcquisitionCompanies, normalizeEmailPatch, normalizeTenderReport, type TenderDailyReport } from "./ai-engine-prompts.js";
+import { acquisitionExtractedContacts, acquisitionPrimaryContact, applyResearchEnginePatch, buildEmailCliPrompt, buildResearchCliPrompt, type EngineAcquisitionCompany, extractAcquisitionFindings, extractEngineJson, normalizeAcquisitionCompanies, normalizeEmailPatch, normalizeKeyPeople, normalizeTenderReport, type ResearchKeyPerson, type TenderDailyReport } from "./ai-engine-prompts.js";
 import { getAiEngineJobRepository, type AiEngineJob } from "./ai-engine-jobs.js";
 import "./ai-engine-service.js"; // 保持模块加载顺序与拆分前一致
 import { cliTaskDone, engineInlineWaitMilliseconds, EngineUnavailableError, enqueueEngineCliTask, pickEngineRunner, readEngineCliTask, waitForEngineCliTask } from "./ai-engine-service.js";
 import { archiveMessageToSentFolder } from "./sent-folder-archive.js";
 import "./sender-mailbox.js"; // 保持模块加载顺序与拆分前一致
 import { getSenderMailboxRepository, pickSenderMailbox, senderMailboxOverrides } from "./sender-mailbox.js";
+import { emitCrmEvent } from "./crm-events.js";
+import {
+  buildOutreachSummaryEmail,
+  collectOutreachSummaryGroups,
+  readOutreachSummarySettings,
+  readOutreachSummaryState,
+  renderOutreachSummaryWorkbook,
+  summaryFileName,
+  writeOutreachSummaryState,
+  type OutreachSummaryDelivery,
+  type SummaryEntityDetail
+} from "./outreach-send-summary.js";
 import "./supplier-repository.js"; // 保持模块加载顺序与拆分前一致
 import { getSupplierRepository } from "./supplier-repository.js";
 import "./mail-center.js"; // 保持模块加载顺序与拆分前一致
@@ -119,7 +131,7 @@ import "./file-share.js"; // 保持模块加载顺序与拆分前一致
 import "./file-bundle.js"; // 保持模块加载顺序与拆分前一致
 import "./cli-ai.js"; // 保持模块加载顺序与拆分前一致
 import type { BackgroundResearchRecord } from "./outreach-journey.js";
-import { type OutboundEmailLog, type OutreachSequence, type OutreachSequenceStepSnapshot, type OutreachStageKey, type ProspectOutreachBatch, type ProspectOutreachBatchItem, type ProspectOutreachBatchPolicy } from "./types.js";
+import { type OutboundEmailLog, type OutreachSequence, type OutreachSequenceStepSnapshot, type OutreachStageKey, type ProspectOutreachBatch, type ProspectOutreachBatchItem, type ProspectOutreachBatchPolicy, type ProspectOutreachPlan } from "./types.js";
 import "./customer-maintenance.js"; // 保持模块加载顺序与拆分前一致
 import { controlCustomerMaintenanceWatch, createCustomerMaintenanceWatch, CustomerMaintenanceRunner, listCustomerMaintenanceWatches, previewCustomerMaintenance } from "./customer-maintenance.js";
 import "./credential-security.js"; // 保持模块加载顺序与拆分前一致
@@ -299,14 +311,26 @@ const allowedOrigins = new Set((process.env.CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean));
+/**
+ * 浏览器扩展的来源必须单独认。
+ *
+ * Chrome MV3 扩展的 fetch 固定带 `chrome-extension://<32 位 a-p 字母>` 作 Origin —— 它既不是
+ * 本站域名，也不在 CORS_ORIGINS 里。如果只按白名单一刀切，**线上部署**的 CRM 会把插件登录
+ * 直接 403「不允许的请求来源」；而本机自测时 NODE_ENV != production 走的是宽松分支，发现不了。
+ *
+ * 放行它是安全的：网页会话 cookie 是 httpOnly + SameSite=strict，扩展根本带不过去，
+ * 插件用的是登录响应体里那枚 Bearer（`client: "plugin"`，一个月有效），没令牌照样 401。
+ * 也就是说这里放宽的只是「拿得到拿不到响应」，不是「进不进得来」。
+ * 形状校验保留：32 位且只含 a-p —— 不是扩展来源的字符串仍然要拒。
+ */
+const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 function originAllowed(origin?: string) {
   if (!origin || allowedOrigins.has(origin)) return true;
+  // 扩展来源在任何环境都放行：dev 是本机插件，prod 是已部署 CRM 上的插件
+  if (EXTENSION_ORIGIN.test(origin)) return true;
   if (process.env.NODE_ENV === "production") return false;
-  // 本机工具来源：网页页面走 http://127.0.0.1|localhost:<port>；
-  // 浏览器扩展（MV3 service worker 的 fetch 固定带 chrome-extension://<32位id>）同属本机工具，
-  // 不放行的话扩展侧「登录 CRM」会被 403「不允许的请求来源」卡死。id 只可能是 a-p 的小写字母。
-  return /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin)
-    || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+  // 本机网页来源：http://127.0.0.1|localhost:<port>
+  return /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin);
 }
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -339,6 +363,10 @@ const jsonBodyOptions = {
   verify(req: Request, _res: Response, buffer: Buffer) {
     if (String(req.url || "").startsWith("/api/integrations/webhooks/")) {
       (req as typeof req & { integrationRawBody?: Buffer }).integrationRawBody = Buffer.from(buffer);
+    }
+    // Meta Webhook 签名是对原始请求体算的，解析成 JSON 之后就验不了了
+    if (String(req.url || "").startsWith("/api/social/meta/webhook/")) {
+      (req as typeof req & { socialRawBody?: Buffer }).socialRawBody = Buffer.from(buffer);
     }
     if (String(req.url || "").split("?")[0] === "/api/website-leads") {
       (req as typeof req & { websiteLeadRawBody?: Buffer }).websiteLeadRawBody = Buffer.from(buffer);
@@ -396,6 +424,13 @@ function iamBusinessPermission(req: Request) {
     if (method === "DELETE") return "customer.delete";
     if (method === "POST" && /^\/api\/customers\/?$/u.test(pathName)) return "customer.create";
     return "customer.update";
+  }
+  if (pathName.startsWith("/api/packaging-plans")) {
+    if (pathName.includes("/bulk-delete")) return "packaging.delete";
+    if (method === "GET") return "packaging.read";
+    if (method === "DELETE") return "packaging.delete";
+    if (method === "POST" && /^\/api\/packaging-plans\/?$/u.test(pathName)) return "packaging.create";
+    return "packaging.update";
   }
   if (pathName.startsWith("/api/suppliers")) {
     if (pathName.includes("/bulk-delete")) return "supplier.delete";
@@ -1739,11 +1774,13 @@ export function customerWithPipeline(customer: Customer, viewer?: SessionUser) {
     pendingIntelligence,
     pendingIntelligenceCount: pendingIntelligence.length
   };
-  // WhatsApp 号码和绑定状态属于个人账号数据，不随团队客户列表暴露给管理员或同事。
-  if (!viewer || viewer.id !== customer.ownerId) {
-    delete (response as Partial<typeof response>).whatsapp;
-    delete (response as Partial<typeof response>).whatsappPhone;
-  }
+  // 这里的 whatsapp / whatsappPhone 都是**客户自己**的号码（whatsappPhone 只是把 WhatsApp
+  // 绑定里的来电号码补进来做兜底），和 email / phone 同级，属于客户资料而不是业务员的个人账号。
+  // 因此凡是有权查看这个客户的人（管理员、同团队主管、共享池接手人）都能看到，不做字段裁剪。
+  //
+  // 历史坑（3.5.7 及以前）：这里曾经 `delete whatsapp / whatsappPhone`，注释把客户号码误当成
+  // 「个人账号数据」。后果有两个：一是业务员登记的号码在管理员端整条消失；二是管理员打开编辑弹窗
+  // 时输入框是空的，随手保存其它字段就会把业务员登记的号码 PATCH 成空串（写库前是 Object.assign）。
   return response;
 }
 
@@ -2140,6 +2177,8 @@ interface BackgroundResearchPayload {
   opportunities: string[];
   risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
   contacts: Array<{ channel: string; value: string }>;
+  /** 关键人（姓名、岗位、邮箱）：候选池已抽到的具名联系人 + 引擎背调补充 */
+  keyPeople: ResearchKeyPerson[];
   sources: BackgroundResearchSource[];
   sourceChecks: BackgroundResearchProviderCheck[];
   nextAction: string;
@@ -2429,6 +2468,9 @@ export async function buildBackgroundResearch(
     opportunities,
     risks,
     contacts: usefulContacts,
+    keyPeople: normalizeKeyPeople(candidates.flatMap((item) => (item.extractedContacts || [])
+      .filter((contact) => contact.kind === "person")
+      .map((contact) => ({ name: contact.name, title: contact.title, email: contact.emails?.[0] || "", phone: contact.phones?.[0] || "", sourceUrl: contact.evidenceUrl || "" })))),
     sources,
     sourceChecks,
     nextAction,
@@ -6046,11 +6088,17 @@ export function persistProviderOpportunities(
     unchangedCount: 0,
     excludedCount: 0
   };
+  // 逐项状态：调用方需要知道「哪些是本轮真正新增/有新证据的」，否则把整份返回当成本轮候选
+  // 会把历史候选再送去背调、写信（2026-11-22 把查重名录移出提示词后尤为关键）。
+  const newIds = new Set<string>();
+  const changedIds = new Set<string>();
+  const unchangedIds = new Set<string>();
   const persistedOpportunities = opportunities.map((item) => {
     withProspectVerificationReport(item);
     const existing = store.websiteOpportunities.find((row) => isSameProviderOpportunity(row, item));
     if (!existing) {
       store.websiteOpportunities.unshift(item);
+      newIds.add(item.id);
       incrementalStats.newCount += 1;
       if (providerEvidenceSources(item.sourceEvidence).size > 1) {
         incrementalStats.multiSourceMergedCount += 1;
@@ -6069,6 +6117,10 @@ export function persistProviderOpportunities(
     const detailsUpdated = providerOpportunityDetailsChanged(existing, item);
     if (evidenceUpdated) incrementalStats.evidenceUpdatedCount += 1;
     else if (existing.status !== "excluded") incrementalStats.unchangedCount += 1;
+    if (existing.status !== "excluded") {
+      if (evidenceUpdated || detailsUpdated) changedIds.add(existing.id);
+      else unchangedIds.add(existing.id);
+    }
     if (mergedEvidenceSources.size > existingEvidenceSources.size) {
       incrementalStats.multiSourceMergedCount += 1;
     }
@@ -6136,7 +6188,7 @@ export function persistProviderOpportunities(
     if (reportNeedsRefresh) withProspectVerificationReport(existing);
     return existing;
   });
-  return { opportunities: persistedOpportunities, incrementalStats };
+  return { opportunities: persistedOpportunities, incrementalStats, newIds, changedIds, unchangedIds };
 }
 
 export function readProviderConnectionConfiguration(connection?: ProviderConnection) {
@@ -7083,6 +7135,8 @@ export async function startServer() {
   };
   const prospectOutreachBatchRunner = new ProspectOutreachBatchRunner(store, prospectOutreachBatchRuntime, Number(process.env.PROSPECT_OUTREACH_BATCH_POLL_MS || 10_000));
   prospectOutreachBatchRunner.start();
+  // 开发信发送总结：批次发完后按发件邮箱各生成一份 Excel 发回自己（幂等，失败重试）
+  startOutreachSummarySweeper();
   // 自动发送方案后台线程：复用同一套发送 runtime，按方案配置持续取人投递。
   // 第四个参数是「阶段感知成稿」运行时——方案入场时按目标自己的阶段 + 背调写信。
   // 方案可以属于任何业务员，所以运行时按 owner 缓存（同一 owner 复用同一份身份与来源缓存）。
@@ -7283,4 +7337,331 @@ export async function startServer() {
   };
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));
+}
+
+// ---------------------------------------------------------------------------
+// 开发信发送总结：一轮开发信发完，按「实际发件邮箱」各生成一份 Excel 发回自己
+// ---------------------------------------------------------------------------
+
+let outreachSummarySweeping = false;
+let outreachSummarySweeperTimer: NodeJS.Timeout | null = null;
+/** 每个批次的下次检查时间：避免失败/节流中的批次每分钟重算一遍（含逐家背调查库） */
+const outreachSummaryRetryAt = new Map<string, number>();
+/** 已彻底完成（全部 sent / 达到重试上限 / 无任何发出记录）的终态批次，O(1) 跳过避免周期性查库 */
+const outreachSummaryDoneIds = new Set<string>();
+
+export interface OutreachSummaryRunResult {
+  batchId: string;
+  deliveries: OutreachSummaryDelivery[];
+  groups: Array<{ senderEmail: string; customers: number; letters: number }>;
+  /** 本次真正发出去的数量（0 = 这批早就发过了） */
+  sentNow: number;
+  message: string;
+}
+
+function summaryEntityDetailOf(
+  store: ReturnType<typeof getStore>,
+  kind: "candidate" | "lead" | "customer",
+  entityId: string
+): SummaryEntityDetail | null {
+  if (kind === "lead") {
+    const lead = store.leads.find((row) => row.id === entityId && !row.deletedAt);
+    if (!lead) return null;
+    return {
+      company: lead.company,
+      country: lead.country,
+      website: lead.sourceUrl || "",
+      business: lead.intent || lead.remark || "",
+      contact: lead.contact,
+      contactInfo: [lead.email, lead.phone, lead.wechat].filter(Boolean).join(" / "),
+      description: lead.inquiryContent || lead.remark || "",
+      source: lead.sourceChannel || lead.source || ""
+    };
+  }
+  if (kind === "customer") {
+    const customer = store.customers.find((row) => row.id === entityId);
+    if (!customer) return null;
+    return {
+      company: customer.companyFullName || customer.company,
+      country: customer.country,
+      website: "",
+      business: customer.stage || "",
+      contact: customer.contact || customer.documentContact || "",
+      contactInfo: [customer.phone, customer.whatsapp, customer.wechat].filter(Boolean).join(" / "),
+      description: customer.otherNotes || "",
+      source: customer.source || ""
+    };
+  }
+  const candidate = store.websiteOpportunities.find((row) => row.id === entityId);
+  if (!candidate) return null;
+  return {
+    company: candidate.company,
+    country: candidate.country,
+    website: candidate.website,
+    business: candidate.business,
+    contact: candidate.contact,
+    contactInfo: candidate.contactInfo,
+    description: candidate.description,
+    source: candidate.sourceLabel || candidate.source || ""
+  };
+}
+
+/** 背调留档的 entity_type 有 prospect / prospect_candidate 两种历史写法，都查一遍 */
+async function loadSummaryResearchPayload(teamId: string, kind: "candidate" | "lead" | "customer", entityId: string) {
+  const repository = getBackgroundResearchRepository();
+  if (!repository) return null;
+  const entityTypes = kind === "candidate" ? ["prospect", "prospect_candidate"] : [kind];
+  for (const entityType of entityTypes) {
+    try {
+      const rows = await repository.list(teamId, entityType, entityId, 1);
+      const record = rows[0];
+      if (!record) continue;
+      try {
+        return JSON.parse(record.payloadJson || "{}") as unknown;
+      } catch {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * 给一个批次的每个发件邮箱各发一份总结。
+ * - force=false（自动触发）：受团队开关控制，已成功发过的邮箱直接跳过（幂等）
+ * - force=true（人工点按钮）：忽略开关，重新生成并重发
+ */
+export async function sendOutreachSummaryForBatch(
+  batch: ProspectOutreachBatch,
+  options: { force?: boolean; onlyEmail?: string; teamLogs?: OutboundEmailLog[] } = {}
+): Promise<OutreachSummaryRunResult> {
+  const store = getStore();
+  if (!options.force) {
+    const settings = await readOutreachSummarySettings(batch.teamId);
+    if (!settings.autoSend) {
+      return { batchId: batch.id, deliveries: [], groups: [], sentNow: 0, message: "团队已关闭自动发送总结" };
+    }
+  }
+  const owner = store.users.find((row) => row.id === batch.ownerId && row.teamId === batch.teamId);
+  if (!owner) {
+    return { batchId: batch.id, deliveries: [], groups: [], sentNow: 0, message: "批次负责人不存在，无法生成总结" };
+  }
+  const mailboxRepository = getSenderMailboxRepository();
+  const mailboxes = mailboxRepository
+    ? await mailboxRepository.list(owner.id, owner.teamId).catch(() => [])
+    : [];
+  const mailboxByEmail = new Map(mailboxes.map((row) => [row.email.trim().toLowerCase(), row]));
+
+  const groups = await collectOutreachSummaryGroups({
+    batch,
+    logs: options.teamLogs ?? store.outboundEmailLogs.filter((log) => log.teamId === batch.teamId),
+    primarySenderEmail: owner.outboundEmail || owner.email,
+    ownerName: owner.name,
+    mailboxLabelFor: (email) => mailboxByEmail.get(email.trim().toLowerCase())?.label || "",
+    loadEntity: async (kind, entityId) => summaryEntityDetailOf(store, kind, entityId),
+    loadResearch: async (kind, entityId) => loadSummaryResearchPayload(batch.teamId, kind, entityId)
+  });
+  if (!groups.length) {
+    return { batchId: batch.id, deliveries: [], groups: [], sentNow: 0, message: "这批还没有成功发出的邮件，没有可总结的内容" };
+  }
+
+  const state = await readOutreachSummaryState(batch.teamId, batch.id);
+  const deliveries = [...state.deliveries];
+  const results: Array<{ senderEmail: string; customers: number; letters: number }> = [];
+  let sentNow = 0;
+
+  for (const group of groups) {
+    const emailKey = group.senderEmail.trim().toLowerCase();
+    if (options.onlyEmail && emailKey !== options.onlyEmail.trim().toLowerCase()) continue;
+    const previousIndex = deliveries.findIndex((row) => row.senderEmail.trim().toLowerCase() === emailKey);
+    const previous = previousIndex >= 0 ? deliveries[previousIndex] : undefined;
+    if (!options.force && previous) {
+      if (previous.status === "sent") {
+        results.push({ senderEmail: group.senderEmail, customers: group.totals.customers, letters: group.totals.letters });
+        continue;
+      }
+      if (previous.attempts >= 3) {
+        results.push({ senderEmail: group.senderEmail, customers: group.totals.customers, letters: group.totals.letters });
+        continue;
+      }
+    }
+
+    const generatedAt = new Date().toISOString();
+    const fileName = summaryFileName(group.senderEmail, batch.id);
+    const content = buildOutreachSummaryEmail({ batch, group, ownerName: owner.name, fileName, generatedAt });
+    let delivery: OutreachSummaryDelivery;
+    try {
+      const workbook = renderOutreachSummaryWorkbook({ batch, group, ownerName: owner.name, generatedAt });
+      if (workbook.byteLength > 20 * 1024 * 1024) {
+        throw new Error(`附件 ${(workbook.byteLength / 1024 / 1024).toFixed(1)}MB，超过单封邮件建议上限，请拆批发送`);
+      }
+      const mailbox = mailboxByEmail.get(emailKey);
+      // 用这台邮箱自己的 SMTP 发给自己：总结落在它自己的收件箱与已发送里，谁发的一目了然
+      const sender = mailbox ? { ...owner, ...senderMailboxOverrides(mailbox) } : owner;
+      const info = await sendOutboundEmail(sender, {
+        to: group.senderEmail,
+        subject: content.subject,
+        body: content.text,
+        html: content.html,
+        htmlAlways: true,
+        appendOptOut: false,
+        attachments: [{
+          filename: fileName,
+          content: workbook,
+          contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }]
+      });
+      sentNow += 1;
+      delivery = {
+        senderEmail: group.senderEmail,
+        status: "sent",
+        at: new Date().toISOString(),
+        fileName,
+        messageId: String(info?.messageId || ""),
+        error: "",
+        attempts: (previous?.attempts || 0) + 1,
+        customers: group.totals.customers,
+        letters: group.totals.letters
+      };
+    } catch (error) {
+      delivery = {
+        senderEmail: group.senderEmail,
+        status: "failed",
+        at: new Date().toISOString(),
+        fileName,
+        messageId: "",
+        error: error instanceof Error ? error.message : "总结邮件发送失败",
+        attempts: (previous?.attempts || 0) + 1,
+        customers: group.totals.customers,
+        letters: group.totals.letters
+      };
+    }
+    if (previousIndex >= 0) deliveries[previousIndex] = delivery;
+    else deliveries.push(delivery);
+    results.push({ senderEmail: group.senderEmail, customers: group.totals.customers, letters: group.totals.letters });
+    try {
+      await writeOutreachSummaryState(batch.teamId, batch.id, { batchId: batch.id, updatedAt: delivery.at, deliveries });
+    } catch (error) {
+      console.warn(`[outreach-summary] 保存总结发送状态失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const sent = deliveries.filter((row) => row.status === "sent").length;
+  const failed = deliveries.filter((row) => row.status === "failed").length;
+  const message = sent || failed
+    ? `总结已发给 ${sent} 个发件邮箱${failed ? `，${failed} 个失败` : ""}`
+    : "没有需要发送的邮箱";
+  return { batchId: batch.id, deliveries, groups: results, sentNow, message };
+}
+
+/** 自动发送方案跑完也按「一轮获客」对待：转成批次形态复用同一套总结逻辑 */
+function summaryBatchViewOfPlan(plan: ProspectOutreachPlan): ProspectOutreachBatch {
+  return {
+    id: plan.id,
+    ownerId: plan.ownerId,
+    teamId: plan.teamId,
+    status: "completed",
+    targetType: plan.items[0]?.entityType === "lead" ? "lead" : "candidate",
+    policy: plan.policy,
+    items: plan.items,
+    counts: { total: plan.items.length, frozen: plan.items.length, skipped: 0 },
+    frozenPayload: null,
+    frozenHash: "",
+    approvedBy: plan.ownerId,
+    approvedAt: plan.createdAt,
+    pauseReason: "",
+    nextSendAt: "",
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt
+  };
+}
+
+/** 扫描已完成批次/方案；失败的下个周期自动重试（同一邮箱最多 3 次） */
+export async function sweepOutreachSummaries() {
+  if (outreachSummarySweeping) return;
+  outreachSummarySweeping = true;
+  try {
+    const store = getStore();
+    const now = Date.now();
+    const pending: Array<{ batch: ProspectOutreachBatch; label: string }> = [];
+    for (const batch of store.prospectOutreachBatches) {
+      if (batch.status !== "completed" || outreachSummaryDoneIds.has(batch.id)) continue;
+      if (!batch.items.some((item) => item.steps.some((step) => step.status === "sent"))) {
+        outreachSummaryDoneIds.add(batch.id);
+        continue;
+      }
+      if (now < (outreachSummaryRetryAt.get(batch.id) || 0)) continue;
+      pending.push({ batch, label: `批次 ${batch.id.slice(-8)}` });
+    }
+    for (const plan of store.prospectOutreachPlans) {
+      if (plan.status !== "completed" || outreachSummaryDoneIds.has(plan.id)) continue;
+      if (!plan.items.some((item) => item.steps.some((step) => step.status === "sent"))) {
+        outreachSummaryDoneIds.add(plan.id);
+        continue;
+      }
+      if (now < (outreachSummaryRetryAt.get(plan.id) || 0)) continue;
+      pending.push({ batch: summaryBatchViewOfPlan(plan), label: `方案「${plan.name || plan.id.slice(-8)}」` });
+    }
+    if (!pending.length) return;
+
+    // 仅在存在待处理批次时按 teamId 预分组一次日志，避免 N 个批次重复全表扫描 outboundEmailLogs
+    const logsByTeam = new Map<string, typeof store.outboundEmailLogs>();
+    for (const { batch } of pending) {
+      if (!logsByTeam.has(batch.teamId)) {
+        logsByTeam.set(batch.teamId, store.outboundEmailLogs.filter((log) => log.teamId === batch.teamId));
+      }
+    }
+
+    for (const { batch, label } of pending) {
+      // 先按 10 分钟节流占位：失败都不会每分钟重算
+      outreachSummaryRetryAt.set(batch.id, Date.now() + 10 * 60_000);
+      const state = await readOutreachSummaryState(batch.teamId, batch.id);
+      const exhausted = state.deliveries.length > 0
+        && state.deliveries.every((row) => row.status === "sent" || row.attempts >= 3);
+      if (exhausted) {
+        outreachSummaryDoneIds.add(batch.id);
+        outreachSummaryRetryAt.delete(batch.id);
+        continue;
+      }
+      const result = await sendOutreachSummaryForBatch(batch, { teamLogs: logsByTeam.get(batch.teamId) });
+      if (result.deliveries.length > 0 && result.deliveries.every((row) => row.status === "sent" || row.attempts >= 3)) {
+        outreachSummaryDoneIds.add(batch.id);
+        outreachSummaryRetryAt.delete(batch.id);
+      } else if (!result.groups.length && result.message === "这批还没有成功发出的邮件，没有可总结的内容") {
+        outreachSummaryDoneIds.add(batch.id);
+        outreachSummaryRetryAt.delete(batch.id);
+      }
+      if (result.deliveries.some((row) => row.status === "sent")) {
+        // 推送一条企业微信通知：总结已发到各发件邮箱（失败也一并说清）
+        emitCrmEvent({
+          type: "outreach.summary",
+          teamId: batch.teamId,
+          ownerId: batch.ownerId,
+          batchId: batch.id,
+          batchLabel: label,
+          deliveries: result.deliveries.length,
+          sentEmails: result.deliveries.filter((row) => row.status === "sent").length,
+          failedEmails: result.deliveries.filter((row) => row.status === "failed").length,
+          customers: result.deliveries.reduce((sum, row) => sum + row.customers, 0),
+          letters: result.deliveries.reduce((sum, row) => sum + row.letters, 0),
+          occurredAt: new Date().toISOString()
+        });
+      }
+    }
+  } catch (error) {
+    console.warn(`[outreach-summary] 扫描失败：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    outreachSummarySweeping = false;
+  }
+}
+
+/** 60 秒一轮：批次刚变成 completed 就发，失败下轮重试；进程内单飞，不阻塞其它定时任务 */
+export function startOutreachSummarySweeper() {
+  if (outreachSummarySweeperTimer) return;
+  const intervalMs = Math.max(15_000, Number(process.env.OUTREACH_SUMMARY_POLL_MS || 60_000));
+  outreachSummarySweeperTimer = setInterval(() => void sweepOutreachSummaries(), intervalMs);
+  outreachSummarySweeperTimer.unref?.();
+  setTimeout(() => void sweepOutreachSummaries(), 20_000).unref?.();
 }

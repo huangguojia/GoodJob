@@ -438,6 +438,8 @@ export interface User {
   avatar: string;
   status: "active" | "disabled";
   authVersion?: number;
+  /** 手机号（手机号注册时写入；邮箱注册的用户通常为空） */
+  phone?: string;
   /** 账号有效期截止时间（ISO 字符串；空 = 永久有效）。过期后登录与既有会话都会被拒。 */
   expiresAt?: string;
   outboundEmail?: string;
@@ -739,6 +741,7 @@ export interface Customer {
   defaultPortDischarge: string;
   defaultIncoterm: string;
   defaultPaymentTerm: string;
+  /** owned=有归属；public=团队公池 */
   poolStatus?: "owned" | "public";
   previousOwnerId?: string;
   releasedBy?: string;
@@ -4114,10 +4117,26 @@ export interface Product {
   descriptionZh: string;
   descriptionEn: string;
   tags: string[];
-  packLength?: number;
-  packWidth?: number;
-  packHeight?: number;
+  /** 内部货号 / SKU 编码。留空时视为用 model 当编码，不强制填。 */
+  sku?: string;
+  /** 材质，PI / CI 的商品描述常用（如 SUS304、ABS）。 */
+  material?: string;
+  /** 颜色，用于 PI / CI 的商品描述与客户选色。 */
+  color?: string;
+  /** 产品本体尺寸，自由文本（如 φ100×250 mm），与包装尺寸分开记。 */
+  sizeSpec?: string;
+  /** 单件净重 kg（N.W.），报关 / 提单必填项。 */
+  netWeight?: number;
+  /** 单件毛重 kg（G.W.），装柜与运费按它算。 */
   packWeight?: number;
+  /** 外箱长 cm。 */
+  packLength?: number;
+  /** 外箱宽 cm。 */
+  packWidth?: number;
+  /** 外箱高 cm。 */
+  packHeight?: number;
+  /** 每箱装箱数（pcs/ctn），装柜量与订舱用。 */
+  unitsPerCarton?: number;
   imageUrl: string;
   ownerId: string;
   teamId: string;
@@ -4352,6 +4371,8 @@ export interface Deal {
   archivedAt?: string;
   /** 成交后自动生成的订单 id（补偿锚点：为空即「成交未建单」）。 */
   orderId?: string;
+  /** 关联的包装方案 id（packaging_plans.id）；为空表示尚未选定 */
+  packagingPlanId?: string;
 }
 
 export type DealEventType = "created" | "updated" | "stage" | "follow_up" | "quote" | "sample" | "negotiation" | "payment" | "document" | "won" | "lost" | "archived" | "restored";
@@ -4654,6 +4675,48 @@ export interface TradeDocumentSendRecord {
   createdAt: string;
 }
 
+/** 定制C（湛蓝制式）单据的补充字段。缺省值一律按空串/0 处理，历史单据不需要迁移数据。 */
+export interface TradeDocumentTemplateData {
+  /** 客户订单号（参考件的 PEDIDO Nº / ORDER NO.） */
+  orderNo?: string;
+  /** 客户采购参考号（PURCHASE REF.） */
+  purchaseRef?: string;
+  buyerPhone?: string;
+  buyerEmail?: string;
+  buyerTaxNo?: string;
+  /** 独立收货方地址：为空时沿用买方地址 */
+  consigneeAddress?: string;
+  /** 交期，例如「定金到账后 45 天」 */
+  deliveryTime?: string;
+  /** 定金比例（百分比，0~100） */
+  depositPercent?: number;
+  /** 整单折扣金额（正数，从合计里减） */
+  discount?: number;
+  /** 运输唛头用：逐件包装信息 */
+  packages?: TradeDocumentPackage[];
+  /** 选用的包装方案 id（只记引用；包装件本体逐件落在 packages） */
+  packagingPlanId?: string;
+  /** 包装方案名称快照：方案库删除后单据仍显示当初的名字 */
+  packagingPlanName?: string;
+}
+
+/** 一个实体包装件：运输唛头按这个列表逐箱出一张唛头。 */
+export interface TradeDocumentPackage {
+  id: string;
+  /** 包装类型 / 归属设备，例如「主机框架 / Main frame」 */
+  label?: string;
+  /** 箱内物品说明 */
+  contents?: string;
+  /** 设备型号 + 件号，例如「JW-T7 PRO #1」 */
+  model?: string;
+  netWeight?: number;
+  grossWeight?: number;
+  /** 外尺寸，例如「420 × 220 × 260 CM」 */
+  dimensions?: string;
+  /** 该包装件的目的地，留空沿用目的港 */
+  destination?: string;
+}
+
 export interface TradeDocument {
   id: string;
   customerId: string;
@@ -4666,7 +4729,7 @@ export interface TradeDocument {
   importAnalysisId?: string;
   importSourceFileName?: string;
   importSourceSha256?: string;
-  type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
+  type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS";
   title: string;
   number: string;
   issueDate: string;
@@ -4691,7 +4754,13 @@ export interface TradeDocument {
   bankInfo: string;
   notes: string;
   language: "EN" | "ES" | "RU" | "AR" | "ZH";
-  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec" | "custom-b";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec" | "custom-b" | "custom-c";
+  /**
+   * 定制C 的补充字段（湛蓝制式单据）。
+   * 只有一个 JSON 列承载，避免为每家客户的制式单据往 trade_documents 上加一排空列；
+   * 标准字段（买方/卖方/条款/明细）仍然走原有列，这里只放参考件多出来的格子。
+   */
+  templateData?: TradeDocumentTemplateData;
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;
@@ -4834,6 +4903,20 @@ export interface Peer {
   source: string;
   ownerId: string;
   teamId: string;
+  /**
+   * 同行池状态：
+   * - private：只在自己的「我的同行」池里（默认）
+   * - shared：已推送到全公司共享池，归属与 teamId 都不变，只是对所有人可见
+   */
+  poolStatus?: "private" | "shared";
+  /** 推送人 id */
+  sharedBy?: string;
+  sharedAt?: string;
+  shareReason?: string;
+  /** 推送时所在团队，用于共享池展示来源（teamId 不因推送改变） */
+  sharedFromTeamId?: string;
+  /** 从共享池收录时记录来源同行 id，便于溯源；自己新建的为空 */
+  adoptedFromPeerId?: string;
   createdAt: string;
   updatedAt: string;
 }

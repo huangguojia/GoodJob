@@ -467,16 +467,20 @@ export class IntegrationControlPlaneService {
       }
       throw cause;
     }
-    const reviewers = await this.permissionHolders("platform.integration.connector.review");
-    await Promise.all(reviewers.map((reviewer) => this.createNotification({
-      recipientId: reviewer.id,
-      teamId: reviewer.teamId,
-      subject: `私有连接器待审核：${connector.name}`,
-      content: `团队 ${teamId} 提交了 ${connector.name}。系统仅保存 Manifest 与端点配置，不下载或运行第三方连接器代码。`,
-      relatedType: "integration_connector",
-      relatedId: connector.id
-    })));
-    return { connector: { ...connector, manifestJson: undefined }, review };
+    // 本机个人业务版（2026-11-17 用户明确）：私有 MCP 连接器提交后不再等待平台审核——
+    // 原流程要求平台身份（iamSource=platform / super_admin）审批，本机日常账号是 admin，
+    // 提交即永久卡死在 review，连接都建不了。现改为提交即自动放行（连接器直接 active 可连接），
+    // 审核记录保留留痕（reviewer=提交人）。工具执行仍需逐项人工审核，外发安全边界不变。
+    const decision = await this.repository.decideConnectorReview(
+      connector.id,
+      actor.id,
+      "approved",
+      "自动放行：本机部署私有 MCP 提交后无需审核，直接创建连接并测试"
+    );
+    return {
+      connector: { ...decision.connector, manifestJson: undefined },
+      review: decision.review
+    };
   }
 
   async connectorReviews(actor: SessionUser, status = "") {

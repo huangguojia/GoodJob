@@ -6,7 +6,7 @@
  */
 import * as XLSX from "xlsx";
 import {
-  DOCUMENT_LOGO_INLINE_KEYS, activateNavView, closeModal, openModal, saveTradeDocument, state,
+  DOCUMENT_LOGO_INLINE_KEYS, activateNavView, closeModal, confirmAction, openModal, saveTradeDocument, state,
   tradeDocumentOcrProvider
 } from "../prototype-api";
 import {
@@ -15,8 +15,9 @@ import {
   type DocumentLogoPlacements, type DocumentSignature, type DocumentStamp, type ImportExportJob, type Product,
   type QuoteHistoryItem, type QuoteHistoryRecord, type QuoteHistoryResponse, type QuoteProductAnalysisRow,
   type TradeDocument, type TradeDocumentAudit, type TradeDocumentHistoryResponse, type TradeDocumentImportAnalysis,
-  type TradeDocumentImportDraft, type TradeDocumentItem, type TradeDocumentRecognitionTemplate,
-  type TradeDocumentSendRecord, documentLogoPlacementKey
+  type TradeDocumentImportDraft, type TradeDocumentItem, type TradeDocumentPackage, type TradeDocumentRecognitionTemplate,
+  type TradeDocumentSendRecord, type TradeDocumentTemplateData, documentLogoPlacementKey,
+  packagingPlanSummary, type PackagingPlan
 } from "./models";
 import { refreshDashboardOnly } from "./dashboard";
 import { normalizeWhatsAppPhone, renderCustomers } from "./customers";
@@ -29,6 +30,7 @@ import {
   sellerProfileMatchReason
 } from "./deals";
 import { renderTopbarStats } from "./navigation";
+import { ensurePackagingPlansLoaded, openPackagingPlanPicker, packagingPlanById } from "./packaging-plans";
 
 export function renderJobs(jobs: ImportExportJob[]) {
   const tbody = qs<HTMLElement>("#imports tbody");
@@ -64,13 +66,13 @@ export function todayDateInput() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function defaultTradeDocument(type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" = "PI"): TradeDocument {
+export function defaultTradeDocument(type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS" = "PI"): TradeDocument {
   const date = todayDateInput();
   const docTypeNames: Record<string, string> = {
     PI: "新建形式发票 PI", CI: "新建商业发票 CI", PO: "新建采购订单 Purchase Order", CUSTOMS: "新建报关资料",
     PL: "新建装箱单 Packing List", CONTRACT: "新建销售合同 Sales Contract",
     QUOTATION: "新建报价单 Quotation", COO: "新建原产地证 Certificate of Origin",
-    SHIPPING: "新建装运通知 Shipping Advice"
+    SHIPPING: "新建装运通知 Shipping Advice", MARKS: "新建运输唛头 Shipping Marks"
   };
   const profile = state.documentDefaultProfile;
   const sellerProfile = matchedSellerProfile(undefined, profile?.currency || "USD", type);
@@ -159,7 +161,7 @@ export function renderTradeDocuments(documents: TradeDocument[]) {
 }
 
 export function documentTypeLabel(type: string) {
-  return ({ PI: "形式发票", CI: "商业发票", PO: "采购订单", CUSTOMS: "报关资料", PL: "装箱单", CONTRACT: "销售合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知" } as Record<string, string>)[type] || type;
+  return ({ PI: "形式发票", CI: "商业发票", PO: "采购订单", CUSTOMS: "报关资料", PL: "装箱单", CONTRACT: "销售合同", QUOTATION: "报价单", COO: "原产地证", SHIPPING: "装运通知", MARKS: "运输唛头" } as Record<string, string>)[type] || type;
 }
 
 export interface AdvancedDocumentTemplate {
@@ -678,7 +680,7 @@ export function openDocumentAssetManager(assets: DocumentAssetsResponse) {
     openDocumentAssetManager(next);
   };
   const openLetterhead = (asset?: DocumentLetterhead) => {
-    const documentTypes: TradeDocument["type"][] = ["PI", "CI", "PO", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "CUSTOMS"];
+    const documentTypes: TradeDocument["type"][] = ["PI", "CI", "PO", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS", "CUSTOMS"];
     // 每个模板各记一套 Logo 位置与大小：没单独调过的模板先沿用通用值（打开就与现在看到的一致）
     const logoTemplateSlots: DocumentLogoPlacementSlot[] = DOCUMENT_LOGO_TEMPLATE_SLOTS.map((slot) => ({
       ...slot,
@@ -801,7 +803,9 @@ function documentConversionTargets(type: TradeDocument["type"]) {
     PL: ["CI", "CUSTOMS"],
     CUSTOMS: ["CI", "PL"],
     COO: ["CUSTOMS"],
-    SHIPPING: ["CI", "CUSTOMS"]
+    SHIPPING: ["CI", "CUSTOMS"],
+    // 运输唛头是包装件标签，不参与单据互转
+    MARKS: []
   };
   return map[type] || [];
 }
@@ -1251,13 +1255,16 @@ function collectDocumentDefaultProfile(): DocumentDefaultProfile {
 function renderDocumentDefaultsPreview(profile = collectDocumentDefaultProfile()) {
   const box = qs<HTMLElement>("#documentDefaultsPreview");
   if (!box) return;
-  const letterhead = state.documentAssets.letterheads.find((item) => item.id === profile.letterheadId);
+  const selectedLetterhead = state.documentAssets.letterheads.find((item) => item.id === profile.letterheadId);
+  // 档案和填的卖方公司不是同一家时，不拿它的 Logo / 公司名来凑
+  const letterhead = selectedLetterhead && companyNamesMatch(selectedLetterhead.companyName || "", profile.seller || "") ? selectedLetterhead : undefined;
   const stamp = state.documentAssets.stamps.find((item) => item.id === profile.stampId);
   const signature = state.documentAssets.signatures.find((item) => item.id === profile.signatureId);
   const contact = [profile.sellerContact, profile.sellerPhone, profile.sellerEmail].filter(Boolean).join(" · ");
-  const fallbackMark = [...(profile.seller || letterhead?.companyName || "GJ").trim()].slice(0, 2).join("").toUpperCase() || "GJ";
+  // 色块兜底文字也取自卖方公司名，不再硬编码系统缩写（以前没有卖方时会印出 "GJ"）。
+  const fallbackMark = [...(profile.seller || letterhead?.companyName || "").trim()].slice(0, 2).join("").toUpperCase();
   const mark = [...(profile.brandMarkText || "").trim()].slice(0, 8).join("").toUpperCase() || fallbackMark;
-  box.innerHTML = `<div class="document-default-preview-sheet"><header><div class="document-default-preview-brand"><span class="document-default-preview-mark">${escapeHtml(mark)}</span><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div></div><small>${escapeHtml(profile.language)} · ${escapeHtml(profile.templateStyle)}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><p>${escapeHtml(profile.bankInfo ? `Bank: ${profile.bankInfo}` : "银行资料未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
+  box.innerHTML = `<div class="document-default-preview-sheet"><header><div class="document-default-preview-brand"><span class="document-default-preview-mark">${escapeHtml(mark)}</span><div>${letterhead?.logoUrl ? `<img src="${escapeHtml(letterhead.logoUrl)}" alt="" style="width:74px;height:30px;object-fit:contain;object-position:left center;">` : ""}<b>${escapeHtml(profile.seller || letterhead?.companyName || "未配置公司名称")}</b><span>${escapeHtml(profile.sellerAddress || letterhead?.address || "公司地址将在此显示")}</span></div></div><small>${escapeHtml(profile.language)} · ${escapeHtml(docTemplateLabel(profile.templateStyle))}</small></header><p>${escapeHtml(contact || "联系人、电话、邮箱")}${profile.sellerWebsite ? `<br>${escapeHtml(profile.sellerWebsite)}` : ""}${profile.sellerTaxNo ? `<br>Tax No. ${escapeHtml(profile.sellerTaxNo)}` : ""}</p><dl><div><dt>Currency</dt><dd>${escapeHtml(profile.currency)}</dd></div><div><dt>Incoterm</dt><dd>${escapeHtml(profile.incoterm)}</dd></div><div><dt>Shipping</dt><dd>${escapeHtml(profile.shippingMethod)}</dd></div><div><dt>Port</dt><dd>${escapeHtml(profile.portLoading || "-")}</dd></div></dl><p>${escapeHtml(profile.paymentTerm || "付款条款未配置")}</p><p>${escapeHtml(profile.bankInfo ? `Bank: ${profile.bankInfo}` : "银行资料未配置")}</p><div class="document-default-preview-assets">${stamp ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="印章">` : ""}${signature ? `<img data-signature src="${escapeHtml(signature.imageUrl)}" alt="签名">` : ""}${!stamp && !signature ? `<small>当前未选择印章与签名</small>` : ""}</div></div>`;
 }
 
 function renderSellerProfilesInDefaults(assets = state.documentAssets) {
@@ -1405,7 +1412,7 @@ function renderDocumentHistory(documents: TradeDocument[]) {
   rows.innerHTML = documents.length ? documents.map((document) => {
     const customer = state.customers.find((item) => item.id === document.customerId);
     const deal = state.deals.find((item) => item.id === document.dealId);
-    const amountText = ["PL", "COO", "SHIPPING", "CUSTOMS"].includes(document.type) ? "-" : formatDocumentMoney(documentTotal(document), document.currency);
+    const amountText = ["PL", "COO", "SHIPPING", "CUSTOMS", "MARKS"].includes(document.type) ? "-" : formatDocumentMoney(documentTotal(document), document.currency);
     return `<tr><td><div class="document-history-title"><b>${escapeHtml(document.title)}</b><span>${escapeHtml(document.number)} · v${document.revision || 1}</span>${document.derivedFromDocumentId ? `<small>由 ${escapeHtml(document.derivedFromType || "源单据")} 转换</small>` : ""}</div></td><td><div class="document-history-title"><b>${escapeHtml(customer?.company || document.buyer || "未关联客户")}</b><span>${escapeHtml(deal?.title || "未关联商机")}</span></div></td><td>${escapeHtml(documentTypeLabel(document.type))}</td><td>${escapeHtml(amountText)}</td><td>${badge(documentStatusText(document.status), document.status === "approved" || document.status === "exported" ? "green" : document.status === "rejected" ? "red" : document.status === "pending_approval" ? "amber" : "blue")}</td><td>${escapeHtml(document.issueDate || "-")}</td><td>${escapeHtml(formatDateTime(document.updatedAt))}</td><td><button class="btn" type="button" data-document-history-open="${escapeHtml(document.id)}">打开</button></td></tr>`;
   }).join("") : `<tr><td colspan="8" class="empty-cell">没有符合条件的历史单据</td></tr>`;
   qsa<HTMLButtonElement>("[data-document-history-open]", rows).forEach((button) => button.addEventListener("click", () => {
@@ -1692,7 +1699,16 @@ export function fillDocumentEditor(document: TradeDocument) {
     docValidityInput: document.validityDate,
     docPaymentInput: document.paymentTerm,
     docBankInput: document.bankInfo,
-    docNotesInput: document.notes
+    docNotesInput: document.notes,
+    docOrderNoInput: document.templateData?.orderNo || "",
+    docPurchaseRefInput: document.templateData?.purchaseRef || "",
+    docBuyerPhoneInput: document.templateData?.buyerPhone || "",
+    docBuyerEmailInput: document.templateData?.buyerEmail || "",
+    docBuyerTaxNoInput: document.templateData?.buyerTaxNo || "",
+    docConsigneeAddressInput: document.templateData?.consigneeAddress || "",
+    docDeliveryTimeInput: document.templateData?.deliveryTime || "",
+    docDepositPercentInput: document.templateData?.depositPercent ? String(document.templateData.depositPercent) : "",
+    docDiscountInput: document.templateData?.discount ? String(document.templateData.discount) : ""
   };
   const shippingCost = document.items.find((item) => item.lineType === "shipping_cost")?.unitPrice || 0;
   values.docShippingCostInput = shippingCost ? String(shippingCost) : "";
@@ -1701,6 +1717,9 @@ export function fillDocumentEditor(document: TradeDocument) {
     if (input) input.value = value || "";
   });
   renderDocumentItems(document.items);
+  renderDocumentPackages(document.templateData?.packages || []);
+  syncDocumentPackagingPlan(document.templateData?.packagingPlanId || "", document.templateData?.packagingPlanName || "");
+  syncCustomCFieldsVisibility();
   syncShippingCostLabel();
   renderDocThemeSwatches(document.templateStyle);
   renderDocumentPreview(collectDocumentDraft());
@@ -1820,7 +1839,15 @@ function renderDocumentWorkflow(document: TradeDocument) {
   if (signatureInput) signatureInput.value = document.signatureId || "";
   const selectedProfile = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
   const matchHint = qs<HTMLElement>("#docSellerMatchHint");
-  if (matchHint) matchHint.textContent = selectedProfile ? `当前卖方 · ${selectedProfile.name}` : "使用团队兜底卖方资料";
+  if (matchHint) {
+    // 档案和卖方公司不是同一家时要说清楚：Logo 不会被用上，免得用户以为印的是别人家的东西
+    const mismatched = selectedProfile && !companyNamesMatch(selectedProfile.companyName || "", document.seller || "");
+    matchHint.textContent = !selectedProfile
+      ? "使用团队兜底卖方资料"
+      : mismatched
+        ? `档案「${selectedProfile.name}」与卖方公司不是同一家，这张单据不会用它的 Logo`
+        : `当前卖方 · ${selectedProfile.name}`;
+  }
   const status = qs<HTMLElement>("#docStatusBadge");
   if (status) status.textContent = `${documentStatusText(document.status)} · v${document.revision || 1}`;
   const locked = document.status === "approved" || document.status === "exported";
@@ -1975,15 +2002,15 @@ export async function createDocumentRevision() {
   toast(`已创建 v${result.document.revision} 新版本`);
 }
 
-export function setDocumentType(type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING") {
+export function setDocumentType(type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS") {
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.docType === type);
   });
 }
 
-export function currentDocumentType(): "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" {
+export function currentDocumentType(): "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS" {
   const activeButton = qs<HTMLButtonElement>("#documentTypeTabs button.active");
-  const docType = activeButton?.dataset.docType as "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | undefined;
+  const docType = activeButton?.dataset.docType as "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS" | undefined;
   return docType || "PI";
 }
 
@@ -2000,6 +2027,7 @@ function renderDocumentItems(items: TradeDocumentItem[]) {
       <label data-doc-size="product-select"><span>产品库</span><select data-doc-product-select>${productOptions(item.productId || "")}</select></label>
       <label data-doc-size="name"><span>品名</span><input data-doc-field="product" value="${escapeHtml(item.product)}"></label>
       <label data-doc-size="model"><span>型号</span><input data-doc-field="model" value="${escapeHtml(item.model)}"></label>
+      <label data-doc-size="model"><span>货号 SKU</span><input data-doc-field="sku" value="${escapeHtml(item.sku || "")}"></label>
       <label data-doc-size="material"><span>材质 Material</span><input data-doc-field="material" value="${escapeHtml(item.material || "")}"></label>
       <label data-doc-size="finish"><span>后处理 Finish</span><input data-doc-field="finish" value="${escapeHtml(item.finish || "")}"></label>
       <label data-doc-size="code"><span>HS Code</span><input data-doc-field="hsCode" value="${escapeHtml(item.hsCode)}"></label>
@@ -2058,6 +2086,7 @@ function collectDocumentItems(): TradeDocumentItem[] {
       imageUrl: row.dataset.imageUrl || "",
       product: field("product"),
       model: field("model"),
+      sku: field("sku"),
       material: field("material"),
       finish: field("finish"),
       hsCode: field("hsCode"),
@@ -2071,8 +2100,297 @@ function collectDocumentItems(): TradeDocumentItem[] {
   });
 }
 
-function shippingCostLabel(language = qs<HTMLSelectElement>("#docLanguageInput")?.value || "EN") {
-  return ({
+/* ---------- 定制C：包装件（运输唛头的逐箱数据） ---------- */
+
+function emptyDocumentPackage(id: string): TradeDocumentPackage {
+  return { id, label: "", contents: "", model: "", netWeight: 0, grossWeight: 0, dimensions: "", destination: "" };
+}
+
+export function renderDocumentPackages(packages: TradeDocumentPackage[]) {
+  const box = qs<HTMLElement>("#documentPackagesEditor");
+  if (!box) return;
+  const list = packages.length ? packages : [emptyDocumentPackage(`pkg_${Date.now()}`)];
+  box.innerHTML = list.map((pkg, index) => `
+    <div class="doc-package-row" data-doc-package="${escapeHtml(pkg.id || `pkg_${index + 1}`)}">
+      <span class="doc-package-index">${index + 1}</span>
+      <label><span>包装类型 / 归属设备</span><input data-pkg-field="label" value="${escapeHtml(pkg.label || "")}" placeholder="主机框架 / Main frame"></label>
+      <label><span>箱内物品</span><input data-pkg-field="contents" value="${escapeHtml(pkg.contents || "")}" placeholder="可选，补充说明"></label>
+      <label><span>型号 / 件号</span><input data-pkg-field="model" value="${escapeHtml(pkg.model || "")}" placeholder="JW-T7 PRO #1"></label>
+      <label><span>净重 kg</span><input data-pkg-field="netWeight" type="number" min="0" step="0.01" value="${Number(pkg.netWeight || 0)}"></label>
+      <label><span>毛重 kg</span><input data-pkg-field="grossWeight" type="number" min="0" step="0.01" value="${Number(pkg.grossWeight || 0)}"></label>
+      <label><span>外尺寸 cm</span><input data-pkg-field="dimensions" value="${escapeHtml(pkg.dimensions || "")}" placeholder="420 × 220 × 260 CM"></label>
+      <label><span>目的地</span><input data-pkg-field="destination" value="${escapeHtml(pkg.destination || "")}" placeholder="留空沿用目的港"></label>
+      <div class="doc-package-actions">
+        <button class="btn" type="button" data-pkg-action="duplicate">复制</button>
+        <button class="btn" type="button" data-pkg-action="remove">删除</button>
+      </div>
+    </div>`).join("");
+  qsa<HTMLButtonElement>("[data-pkg-action]", box).forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest<HTMLElement>(".doc-package-row");
+      const current = collectDocumentPackages();
+      const index = qsa<HTMLElement>(".doc-package-row", box).indexOf(row as HTMLElement);
+      if (index < 0) return;
+      if (button.dataset.pkgAction === "remove") {
+        if (current.length <= 1) {
+          renderDocumentPackages([emptyDocumentPackage(`pkg_${Date.now()}`)]);
+        } else {
+          renderDocumentPackages(current.filter((_, at) => at !== index));
+        }
+      } else {
+        const copy = { ...current[index], id: `pkg_${Date.now()}` };
+        const next = [...current];
+        next.splice(index + 1, 0, copy);
+        renderDocumentPackages(next);
+      }
+      renderDocumentPreview(collectDocumentDraft());
+    });
+  });
+}
+
+function collectDocumentPackages(): TradeDocumentPackage[] {
+  const rows = qsa<HTMLElement>("#documentPackagesEditor .doc-package-row").map((row, index) => {
+    const field = (name: string) => row.querySelector<HTMLInputElement>(`[data-pkg-field="${name}"]`)?.value.trim() || "";
+    const numberField = (name: string) => Number(row.querySelector<HTMLInputElement>(`[data-pkg-field="${name}"]`)?.value || 0);
+    return {
+      id: row.dataset.docPackage || `pkg_${index + 1}`,
+      label: field("label"),
+      contents: field("contents"),
+      model: field("model"),
+      netWeight: numberField("netWeight"),
+      grossWeight: numberField("grossWeight"),
+      dimensions: field("dimensions"),
+      destination: field("destination")
+    };
+  });
+  // 编辑器为了好输入总会留一行空壳；一个字没填的空壳不该写进 templateData
+  return rows.filter((pkg) =>
+    Boolean(pkg.label || pkg.contents || pkg.model || pkg.dimensions || pkg.destination)
+    || Number(pkg.netWeight || 0) > 0
+    || Number(pkg.grossWeight || 0) > 0
+  );
+}
+
+/* ---------- 定制C：包装方案（左侧明细按定制C 蓝白口径显示） ----------
+ *
+ * 为什么方案 id/name 存在 DOM dataset 而不是 state：
+ * 单据编辑区是单实例，dataset 跟着编辑区一起被 fillDocumentEditor 覆盖，
+ * 不会出现「切了单据、state 里还留着上一张的方案」这种错位；
+ * 而且 collectDocumentTemplateData 读它时不需要再传一遍参数。
+ */
+
+function documentPlanBlock() {
+  return qs<HTMLElement>("#docPackagingPlanBlock");
+}
+
+function documentPlanIdentity() {
+  const block = documentPlanBlock();
+  if (!block) return { id: "", name: "" };
+  return { id: block.dataset.planId || "", name: block.dataset.planName || "" };
+}
+
+/**
+ * 同步左侧「包装方案」摘要。
+ * 方案已被删除时仍显示快照名 —— 单据上的包装件是当初带进来的真实数据，
+ * 不能因为方案库被清理就让用户以为没选过方案。
+ */
+/** 左侧方案明细「等方案库加载完再补渲染」的一次性闸门：防止微任务自我重渲染死循环 */
+let documentPlanRetryId = "";
+
+export function renderDocumentPackagingPlanSummary() {
+  const host = qs<HTMLElement>("#docPackagingPlanSummary");
+  const hint = qs<HTMLElement>("#docPackagingPlanHint");
+  const clear = qs<HTMLButtonElement>("#docClearPackagingPlanButton");
+  const { id, name } = documentPlanIdentity();
+  if (clear) clear.hidden = !id;
+  if (!host || !hint) return;
+  if (!id) {
+    host.hidden = true;
+    host.innerHTML = "";
+    hint.textContent = "从方案库带入一套包装件；带进来后仍可逐件改";
+    return;
+  }
+  const plan = packagingPlanById(id);
+  const title = plan?.name || name || "已选包装方案";
+  if (!plan) {
+    // 方案库还没加载完（或方案已删除）：只给快照名，不编造件数与重量
+    host.hidden = false;
+    host.innerHTML = `<div class="doc-plan-summary-head"><b>${escapeHtml(title)}</b><span>方案明细已带入下方「包装件」</span></div>`;
+    hint.textContent = "已从方案库带入，可逐件修改";
+    // 只在「还没加载过」时补一次；方案确实被删掉时再挂 .then 会无限自我重渲染。
+    if (!state.packagingPlansLoaded && documentPlanRetryId !== id) {
+      documentPlanRetryId = id;
+      void ensurePackagingPlansLoaded().then(() => {
+        if (documentPlanIdentity().id === id) renderDocumentPackagingPlanSummary();
+      });
+    }
+    return;
+  }
+  const stats = packagingPlanSummary(plan);
+  const rows = plan.items.map((item, index) => `<tr>
+    <td>${index + 1}</td>
+    <td>${escapeHtml(item.label || "—")}${item.model ? `<small>${escapeHtml(item.model)}</small>` : ""}</td>
+    <td>${escapeHtml(item.contents || "—")}</td>
+    <td>${item.lengthCm && item.widthCm && item.heightCm ? `${item.lengthCm}×${item.widthCm}×${item.heightCm}` : "—"}</td>
+    <td>${item.netWeightKg || 0} / ${item.grossWeightKg || 0}</td>
+  </tr>`).join("");
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="doc-plan-summary-head">
+      <b>${escapeHtml(plan.name)}</b>
+      <span>${plan.code ? `${escapeHtml(plan.code)} · ` : ""}${stats.packages} 件${stats.grossWeightKg > 0 ? ` · 毛重 ${stats.grossWeightKg} kg` : ""}${stats.volumeCbm > 0 ? ` · ${stats.volumeCbm} m³` : ""}</span>
+      <em>已带入下方包装件</em>
+    </div>
+    ${rows ? `<table class="doc-plan-table">
+      <thead><tr><th style="width:26px">#</th><th>包装类型 / 归属设备</th><th>箱内物品</th><th style="width:96px">外尺寸 cm</th><th style="width:78px">净 / 毛 kg</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>` : `<div class="doc-plan-summary-head"><span>这个方案还没有包装件</span></div>`}
+  `;
+  hint.textContent = "已从方案库带入，可逐件修改";
+}
+
+/** 记录当前单据选中的方案（编辑器与预览同源） */
+export function syncDocumentPackagingPlan(planId: string, planName = "") {
+  const block = documentPlanBlock();
+  if (!block) return;
+  block.dataset.planId = planId;
+  block.dataset.planName = planName;
+  renderDocumentPackagingPlanSummary();
+}
+
+/** 把方案的包装件带进单据编辑器（覆盖现有行；调用前由选择器确认过） */
+export function applyPackagingPlanToDocument(plan: PackagingPlan) {
+  const packages: TradeDocumentPackage[] = plan.items.map((item, index) => ({
+    id: `pkg_${Date.now()}_${index + 1}`,
+    label: item.label,
+    contents: item.contents,
+    model: item.model,
+    netWeight: Number(item.netWeightKg || 0),
+    grossWeight: Number(item.grossWeightKg || 0),
+    dimensions: item.lengthCm && item.widthCm && item.heightCm
+      ? `${item.lengthCm} × ${item.widthCm} × ${item.heightCm} CM`
+      : "",
+    destination: ""
+  }));
+  renderDocumentPackages(packages);
+  syncDocumentPackagingPlan(plan.id, plan.name);
+  renderDocumentPreview(collectDocumentDraft());
+  toast(`已带入「${plan.name}」的 ${packages.length} 个包装件`);
+}
+
+/** 打开方案选择器；选中即覆盖包装件，取消则保持原样 */
+export function pickDocumentPackagingPlan() {
+  const current = documentPlanIdentity().id;
+  void ensurePackagingPlansLoaded();
+  openPackagingPlanPicker({
+    selectedId: current,
+    title: "选择包装方案",
+    onSelect: (plan) => {
+      if (!plan) return;
+      const existing = collectDocumentPackages();
+      if (existing.length) {
+        const stats = packagingPlanSummary(plan);
+        void confirmReplaceDocumentPackages(plan, stats.packages).then((ok) => {
+          if (ok) applyPackagingPlanToDocument(plan);
+        });
+        return;
+      }
+      applyPackagingPlanToDocument(plan);
+    }
+  });
+}
+
+/** 覆盖已有包装件前确认：这些行可能是手工敲的，不能静默丢掉 */
+function confirmReplaceDocumentPackages(plan: PackagingPlan, count: number) {
+  return confirmAction({
+    title: "替换现有包装件",
+    message: `当前单据已经有包装件，换成「${plan.name}」的 ${count} 件？`,
+    detail: plan.name,
+    detailLabel: "本次选用",
+    consequences: ["当前编辑区里的包装件会被方案明细整体替换", "单据编号、金额与其它字段不受影响"],
+    confirmLabel: "替换包装件"
+  });
+}
+
+export function clearDocumentPackagingPlan() {
+  syncDocumentPackagingPlan("", "");
+  toast("已解除包装方案关联，包装件保持当前内容");
+}
+
+function collectDocumentTemplateData(): TradeDocumentTemplateData {
+  const value = (id: string) => qs<HTMLInputElement>(`#${id}`)?.value.trim() || "";
+  const numberValue = (id: string) => Number(qs<HTMLInputElement>(`#${id}`)?.value || 0);
+  return {
+    orderNo: value("docOrderNoInput"),
+    purchaseRef: value("docPurchaseRefInput"),
+    buyerPhone: value("docBuyerPhoneInput"),
+    buyerEmail: value("docBuyerEmailInput"),
+    buyerTaxNo: value("docBuyerTaxNoInput"),
+    consigneeAddress: value("docConsigneeAddressInput"),
+    deliveryTime: value("docDeliveryTimeInput"),
+    depositPercent: numberValue("docDepositPercentInput"),
+    discount: numberValue("docDiscountInput"),
+    packages: collectDocumentPackages(),
+    packagingPlanId: documentPlanIdentity().id,
+    packagingPlanName: documentPlanIdentity().name
+  };
+}
+
+export function addDocumentPackage() {
+  renderDocumentPackages([...collectDocumentPackages(), emptyDocumentPackage(`pkg_${Date.now()}`)]);
+  renderDocumentPreview(collectDocumentDraft());
+}
+
+/** 按明细的箱数批量生成包装件：型号取「型号 #件号」，毛重用重量kg 均摊。 */
+export function fillDocumentPackagesFromItems() {
+  const items = collectDocumentItems().filter((item) => item.product || item.model);
+  const generated: TradeDocumentPackage[] = [];
+  items.forEach((item) => {
+    const count = Math.max(1, Math.round(item.packageCount || 1));
+    const netEach = item.weightKg ? Math.round((item.weightKg / count) * 100) / 100 : 0;
+    for (let index = 1; index <= count; index++) {
+      generated.push({
+        id: `pkg_${Date.now()}_${generated.length}`,
+        label: item.product,
+        contents: "",
+        model: `${item.model || item.product}${count > 1 ? ` #${index}` : ""}`,
+        netWeight: netEach,
+        grossWeight: netEach,
+        dimensions: "",
+        destination: ""
+      });
+    }
+  });
+  if (!generated.length) {
+    toast("明细里没有可生成包装件的商品", "error");
+    return;
+  }
+  renderDocumentPackages(generated);
+  renderDocumentPreview(collectDocumentDraft());
+  toast(`已按明细生成 ${generated.length} 个包装件`);
+}
+
+/** 切到定制C 时自动展开补充字段，其它模板保持收起。 */
+export function syncCustomCFieldsVisibility() {
+  const box = qs<HTMLDetailsElement>("#docCustomCFields");
+  if (!box) return;
+  const selected = qs<HTMLSelectElement>("#docTemplateInput")?.value === "custom-c";
+  box.open = selected;
+  // 包装方案是定制C 专属：别的模板连入口都不出现，免得选了却没有版式承接
+  const planBlock = qs<HTMLElement>("#docPackagingPlanBlock");
+  if (planBlock) planBlock.hidden = !selected;
+}
+
+/** 定制C 只画得动这五类单据，其余类型退回经典版式，界面上要说清楚，别让人以为模板丢了。 */
+const CUSTOM_C_COVERED_TYPES = ["QUOTATION", "PI", "CONTRACT", "CI", "MARKS"];
+
+function syncCustomCCoverageHint(document: TradeDocument) {
+  const hint = qs<HTMLElement>("#docTemplateCoverageHint");
+  if (!hint) return;
+  hint.hidden = !(document.templateStyle === "custom-c" && !CUSTOM_C_COVERED_TYPES.includes(document.type));
+}
+
+function shippingCostLabel(language = qs<HTMLSelectElement>("#docLanguageInput")?.value || "EN") {  return ({
     EN: "Shipping Cost",
     ES: "Coste de envío",
     RU: "Стоимость доставки",
@@ -2141,6 +2459,7 @@ export function collectDocumentDraft(): TradeDocument {
     bankInfo: qs<HTMLTextAreaElement>("#docBankInput")?.value.trim() || "",
     notes: qs<HTMLTextAreaElement>("#docNotesInput")?.value.trim() || "",
     templateStyle: (qs<HTMLSelectElement>("#docTemplateInput")?.value as TradeDocument["templateStyle"]) || (qs<HTMLSelectElement>("#docThemeInput")?.value as TradeDocument["templateStyle"]) || "rose",
+    templateData: collectDocumentTemplateData(),
     language: (qs<HTMLSelectElement>("#docLanguageInput")?.value as TradeDocument["language"]) || "EN",
     status: existing?.status || "draft",
     audits: existing?.audits || [],
@@ -2269,11 +2588,74 @@ const DOC_THEMES: Record<string, { primary: string; light: string; text: string 
   compact: { primary: "#6b7280", light: "#f3f4f6", text: "#1e293b" },
   longtec: { primary: "#111111", light: "#d9fbfb", text: "#111111" },
   // 定制B 是黑白制式单据（不跟随主题色），这里只用于兜底取色
-  "custom-b": { primary: "#111111", light: "#ededed", text: "#111111" }
+  "custom-b": { primary: "#111111", light: "#ededed", text: "#111111" },
+  // 定制C（湛蓝制式）同样固定配色，色板只做兜底
+  "custom-c": { primary: "#1d4ed8", light: "#eff6ff", text: "#1b2736" }
 };
 
 /** 定制模板自带固定配色，色板只做兜底，不能把用户的模板选择覆盖掉 */
-export const DOC_PINNED_TEMPLATE_STYLES = new Set<string>(["longtec", "custom-b"]);
+export const DOC_PINNED_TEMPLATE_STYLES = new Set<string>(["longtec", "custom-b", "custom-c"]);
+
+/**
+ * 模板在界面上的名字。
+ * 模板键沿用历史值（存量单据里存的是 longtec），但界面一律显示中性的「定制A」，
+ * 不把任何公司名当成模板名露给用户 —— 单据上的公司名只来自卖方档案。
+ */
+export const DOC_TEMPLATE_LABELS: Record<string, string> = {
+  rose: "Rose 玫红",
+  indigo: "Indigo 深靛蓝",
+  emerald: "Emerald 翡翠绿",
+  slate: "Slate 石板灰",
+  amber: "Amber 琥珀金",
+  executive: "Executive 高级汇报风",
+  classic: "Classic 经典贸易风",
+  compact: "Compact 紧凑清关风",
+  longtec: "定制A",
+  "custom-b": "定制B",
+  "custom-c": "定制C"
+};
+
+export function docTemplateLabel(style: string): string {
+  return DOC_TEMPLATE_LABELS[style] || style;
+}
+
+/**
+ * 单据抬头只认「属于当前卖方公司」的那份档案。
+ * 档案名和单据上的卖方公司对不上时（比如单据拷了模板、档案还挂着别人家的资料），
+ * 宁可不放 Logo，也不把别人家的 Logo 印到这张单据上；此时再按公司名去找同一家的档案。
+ */
+function normalizeCompanyName(value: string) {
+  return (value || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gu, " ").trim();
+}
+
+/** 同名或简称包含都算同一家；"ECORE" 和 "JET WASH" 不算。 */
+function companyNamesMatch(left: string, right: string) {
+  const a = normalizeCompanyName(left);
+  const b = normalizeCompanyName(right);
+  if (!a || !b) return true;
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return shorter.length >= 4 && longer.includes(shorter);
+}
+
+function documentLetterheadFor(document: TradeDocument) {
+  if (!document.letterheadId) return undefined;
+  const selected = state.documentAssets.letterheads.find((item) => item.id === document.letterheadId);
+  if (!selected) return undefined;
+  const seller = (document.seller || "").trim();
+  if (!seller) return selected;
+  if (companyNamesMatch(selected.companyName || "", seller)) return selected;
+  return state.documentAssets.letterheads.find((item) => item.enabled && companyNamesMatch(item.companyName || "", seller));
+}
+
+/** 抬头 Logo 取当前卖方档案；档案对不上时连快照一起丢掉，不印别人的 Logo。 */
+function documentLogoFor(document: TradeDocument) {
+  const letterhead = documentLetterheadFor(document);
+  if (letterhead) return letterhead.logoUrl || "";
+  const snapshot = document.letterheadSnapshot;
+  if (!snapshot) return "";
+  return companyNamesMatch(snapshot.companyName || "", document.seller) ? (snapshot.logoUrl || "") : "";
+}
 
 function docLabel(document: TradeDocument, key: string): string {
   const lang = document.language || "EN";
@@ -2288,6 +2670,7 @@ function docTypeTitle(document: TradeDocument): string {
 export function renderDocumentPreview(document: TradeDocument) {
   // 一行式 Logo 调节器跟预览同源：预览画哪套值，这里就显示哪套（放在早返回之前保证每种模板都同步）
   syncDocumentLogoInline(document);
+  syncCustomCCoverageHint(document);
   const preview = qs<HTMLElement>("#documentPreview");
   if (!preview) return;
 
@@ -2299,6 +2682,17 @@ export function renderDocumentPreview(document: TradeDocument) {
 
   if (document.type === "PI" && document.templateStyle === "longtec") {
     renderLongtecPiPreview(document, preview);
+    return;
+  }
+
+  // 定制C（湛蓝制式）：报价单 / 形式发票 / 销售合同 / 商业发票 共用一套骨架
+  if (document.templateStyle === "custom-c" && ["QUOTATION", "PI", "CONTRACT", "CI"].includes(document.type)) {
+    renderCustomCDocumentPreview(document, preview);
+    return;
+  }
+
+  if (document.templateStyle === "custom-c" && document.type === "MARKS") {
+    renderCustomCMarksPreview(document, preview);
     return;
   }
 
@@ -2314,21 +2708,24 @@ export function renderDocumentPreview(document: TradeDocument) {
 
   const lang = document.language || "EN";
   const isRTL = lang === "AR";
-  const theme = DOC_THEMES[document.templateStyle] || DOC_THEMES.rose;
+  // 定制C 的样式只覆盖它自己那五类单据；PO / PL / COO / SHIPPING 套定制C 会把通用版式压坏
+  // （表格被 794px 容器挤成竖排、页脚被 overflow:hidden 截断），这些类型退回经典版式渲染。
+  const genericStyle = document.templateStyle === "custom-c" ? "classic" : document.templateStyle;
+  const theme = DOC_THEMES[genericStyle] || DOC_THEMES.rose;
   const total = documentTotal(document);
   const totalWeight = document.items.reduce((s, i) => s + (i.weightKg || 0), 0);
   const totalPkgs = document.items.reduce((s, i) => s + (i.packageCount || 0), 0);
   const title = docTypeTitle(document);
 
-  preview.className = `doc-paper ${document.templateStyle}`;
+  preview.className = `doc-paper ${genericStyle}`;
   preview.style.setProperty("--doc-primary", theme.primary);
   preview.style.setProperty("--doc-light", theme.light);
   preview.style.setProperty("--doc-text", theme.text);
   preview.dir = isRTL ? "rtl" : "ltr";
 
   // 不同单据类型的表格列
-  const showPrices = !["PL", "COO", "SHIPPING"].includes(document.type);
-  const showWeight = ["PL", "CI", "CUSTOMS", "COO", "SHIPPING"].includes(document.type);
+  const showPrices = !["PL", "COO", "SHIPPING", "MARKS"].includes(document.type);
+  const showWeight = ["PL", "CI", "CUSTOMS", "COO", "SHIPPING", "MARKS"].includes(document.type);
   const showOrigin = ["CI", "COO", "CUSTOMS"].includes(document.type);
   const showMaterial = document.items.some((item) => Boolean(item.material?.trim()));
   const showFinish = document.items.some((item) => Boolean(item.finish?.trim()));
@@ -2518,7 +2915,7 @@ function renderLongtecPiPreview(document: TradeDocument, preview: HTMLElement) {
   const accent = themeId === "longtec" ? "#111111" : theme.primary;
   const title = docTypeTitle(document).toUpperCase();
   // 顶部抬头优先取左侧选中的卖方公司档案（letterhead）的英文全称
-  const headerLetterhead = document.letterheadId ? state.documentAssets.letterheads.find((item) => item.id === document.letterheadId) : undefined;
+  const headerLetterhead = documentLetterheadFor(document);
   const headerCompany = headerLetterhead?.companyName || document.seller || "—";
   const sellerContact = [document.sellerContact, document.sellerPhone, document.sellerEmail, document.sellerWebsite].filter(Boolean).join(" · ");
   const delivery = [document.shippingMethod, document.portLoading && `${label("portLoading", "From")}: ${document.portLoading}`, document.portDischarge && `${label("portDischarge", "To")}: ${document.portDischarge}`].filter(Boolean).join(" · ");
@@ -2629,13 +3026,11 @@ function renderCustomBPiPreview(document: TradeDocument, preview: HTMLElement) {
   const L = (key: string) => docLabel(document, key);
   const money = (value: number) => formatLongtecMoney(value, document.currency);
 
-  const letterhead = document.letterheadId
-    ? state.documentAssets.letterheads.find((item) => item.id === document.letterheadId)
-    : undefined;
+  const letterhead = documentLetterheadFor(document);
   // 已经选了卖方档案时，Logo 只认这份档案（档案没上传就是没有），
   // 否则换档案后还会沿用上一家的 logo；没选档案的老单据才回落到保存时的快照。
-  const logoUrl = letterhead ? (letterhead.logoUrl || "") : (document.letterheadSnapshot?.logoUrl || "");
-  const company = letterhead?.companyName || document.letterheadSnapshot?.companyName || document.seller || "—";
+  const logoUrl = documentLogoFor(document);
+  const company = document.seller || letterhead?.companyName || document.letterheadSnapshot?.companyName || "—";
   const brandText = [...(document.brandMarkText || document.seller || "").trim()].slice(0, 14).join("").toUpperCase() || "—";
   // 「卖方公司」里为定制B · PI 单独调好的位置与大小在这里生效（没调过沿用通用值，未调整时默认版式不变）
   const logoStyle = documentLogoPlacementStyle(documentLogoPlacementFor(letterhead, document.letterheadSnapshot, "PI"), "right");
@@ -2775,10 +3170,8 @@ function renderCustomBPoPreview(document: TradeDocument, preview: HTMLElement) {
   const isRTL = (document.language || "EN") === "AR";
   const money = (value: number) => formatLongtecMoney(value, document.currency);
 
-  const letterhead = document.letterheadId
-    ? state.documentAssets.letterheads.find((item) => item.id === document.letterheadId)
-    : undefined;
-  const logoUrl = letterhead ? (letterhead.logoUrl || "") : (document.letterheadSnapshot?.logoUrl || "");
+  const letterhead = documentLetterheadFor(document);
+  const logoUrl = documentLogoFor(document);
   const buyerCompany = document.buyer
     || letterhead?.companyName
     || document.letterheadSnapshot?.companyName
@@ -2911,6 +3304,371 @@ function renderCustomBPoPreview(document: TradeDocument, preview: HTMLElement) {
 
   const meta = qs<HTMLElement>("#docPreviewMeta");
   if (meta) meta.textContent = `PO · ${document.number} · ${money(total)}`;
+}
+
+/* ============================================================================
+ * 定制C（湛蓝制式）
+ * ----------------------------------------------------------------------------
+ * 参考件是 2026-11 客户给的「JET WASH 外贸单证助手」六种单据：报价单 / 形式发票 /
+ * 销售合同 / 商业发票 / 装箱单 / 运输唛头。这里按参考件 1:1 还原前四种与唛头
+ * （装箱单暂不动）。版式骨架全部一致，差异只有：
+ *   ① 标题；② 商用发票多一张「收货方」卡；③ 形式发票多一段银行信息；
+ *   ④ 唛头是逐箱一张的双列卡片。
+ * 配色固定蓝色制式，不跟主题色板走；新增字段全部来自 templateData。
+ * ========================================================================== */
+
+const CUSTOM_C_TITLES: Record<string, string> = {
+  QUOTATION: "QUOTATION",
+  PI: "PROFORMA INVOICE",
+  CONTRACT: "SALES CONTRACT",
+  CI: "COMMERCIAL INVOICE",
+  MARKS: "SHIPPING MARKS"
+};
+
+/** ZH 一律出「英文 / 中文」双语标签，与参考件一致；其它语言出对应单语。 */
+const CUSTOM_C_TEXT: Record<string, Record<string, string>> = {
+  EN: {
+    buyerCard: "BUYER", consigneeCard: "CONSIGNEE",
+    date: "DATE", orderNo: "ORDER NO.", documentNo: "DOCUMENT NO.", purchaseRef: "PURCHASE REF.",
+    rowCompany: "COMPANY NAME", rowName: "NAME", rowPhone: "PHONE", rowAddress: "ADDRESS", rowEmail: "EMAIL", rowTax: "TAX ID",
+    thNo: "#", thDesc: "DESCRIPTION", thModel: "MODEL", thQty: "QTY.", thPrice: "UNIT PRICE", thAmount: "AMOUNT",
+    paymentTerms: "PAYMENT TERMS", delivery: "DELIVERY",
+    subtotal: "SUBTOTAL", freight: "FREIGHT", discount: "DISCOUNT", total: "TOTAL PAYABLE", deposit: "DEPOSIT", balance: "BALANCE",
+    bankDetails: "BANK DETAILS", bankDemo: "DEMO DATA / 演示数据",
+    sellerSignature: "SELLER SIGNATURE", buyerSignature: "BUYER",
+    order: "ORDER", madeIn: "MADE IN CHINA", netWeight: "N.W.", grossWeight: "G.W.", measure: "MEAS",
+    packagesNote: "{count} package(s) numbered in this shipment",
+    draftMark: "DRAFT · 草稿", pendingMark: "PENDING · 待审批", rejectedMark: "REJECTED · 已驳回",
+    sku: "SKU"
+  },
+  ZH: {
+    buyerCard: "BUYER / 买方", consigneeCard: "CONSIGNEE / 收货方",
+    date: "DATE / 日期", orderNo: "ORDER NO. / 订单号", documentNo: "DOCUMENT NO. / 单据编号", purchaseRef: "PURCHASE REF. / 采购参考",
+    rowCompany: "COMPANY NAME / 公司名称", rowName: "NAME / 姓名", rowPhone: "PHONE / 电话", rowAddress: "ADDRESS / 地址", rowEmail: "EMAIL / 邮箱", rowTax: "TAX ID / 税号",
+    thNo: "#", thDesc: "DESCRIPTION / 品名", thModel: "MODEL / 型号", thQty: "QTY. / 数量", thPrice: "UNIT PRICE / 单价", thAmount: "AMOUNT / 金额",
+    paymentTerms: "PAYMENT TERMS / 付款条件", delivery: "DELIVERY / 交期",
+    subtotal: "SUBTOTAL / 小计", freight: "FREIGHT / 运费", discount: "DISCOUNT / 折扣", total: "TOTAL PAYABLE / 应付合计", deposit: "DEPOSIT / 定金", balance: "BALANCE / 尾款",
+    bankDetails: "BANK DETAILS / 银行信息", bankDemo: "DEMO DATA / 演示数据",
+    sellerSignature: "SELLER SIGNATURE / 卖方签字", buyerSignature: "BUYER / 买方",
+    order: "ORDER / 订单号", madeIn: "MADE IN CHINA / 中国制造", netWeight: "N.W. / 净重", grossWeight: "G.W. / 毛重", measure: "MEAS / 外尺寸",
+    packagesNote: "整批 {count} 个实体包装件统一编号",
+    draftMark: "DRAFT · 草稿", pendingMark: "PENDING · 待审批", rejectedMark: "REJECTED · 已驳回",
+    sku: "SKU / 货号"
+  }
+};
+
+function customCText(document: TradeDocument) {
+  const table = CUSTOM_C_TEXT[document.language === "ZH" ? "ZH" : "EN"] || CUSTOM_C_TEXT.EN;
+  return (key: string) => String(table[key] ?? CUSTOM_C_TEXT.EN[key] ?? key);
+}
+
+function customCMoney(value: number, currency: string) {
+  return `${currency || "USD"} ${value.toFixed(2)}`;
+}
+
+function customCTotalMoney(value: number, currency: string) {
+  return `${currency || "USD"} ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** 银行信息是自由文本；能拆成「标签: 值」的行按参考件两栏排，拆不出的整行铺满。 */
+function customCBankLines(bankInfo: string) {
+  return (bankInfo || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const matched = /^([^:：]{2,60})[:：]\s*(.+)$/.exec(line);
+      return matched
+        ? { label: matched[1].trim(), value: matched[2].trim() }
+        : { label: "", value: line };
+    });
+}
+
+/** 参考件的标志是「JET + WASH」双色字：按最后一个空格切成两段上色。 */
+function customCLogoParts(text: string) {
+  const value = (text || "").trim().toUpperCase();
+  if (!value) return { head: "", tail: "" };
+  const spaceAt = value.lastIndexOf(" ");
+  if (spaceAt > 0 && spaceAt < value.length - 1) {
+    return { head: value.slice(0, spaceAt), tail: value.slice(spaceAt + 1) };
+  }
+  const cut = Math.ceil([...value].length / 2);
+  const chars = [...value];
+  return { head: chars.slice(0, cut).join(""), tail: chars.slice(cut).join("") };
+}
+
+function customCLogoHtml(document: TradeDocument, logoUrl: string, brandText: string) {
+  if (logoUrl) return `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brandText || "logo")}">`;
+  const parts = customCLogoParts(brandText);
+  return `${escapeHtml(parts.head)}<span>${escapeHtml(parts.tail)}</span>`;
+}
+
+function customCWatermark(document: TradeDocument) {
+  const T = customCText(document);
+  if (document.status === "approved" || document.status === "exported") return "";
+  const label = document.status === "pending_approval"
+    ? T("pendingMark")
+    : document.status === "rejected"
+      ? T("rejectedMark")
+      : T("draftMark");
+  return `<div class="cc-watermark" style="--cc-wm-label: '${label.replace(/'/g, "\\'")}';"></div>`;
+}
+
+/** 报价单 / 形式发票 / 销售合同 / 商业发票 共用的版式。 */
+function renderCustomCDocumentPreview(document: TradeDocument, preview: HTMLElement) {
+  const T = customCText(document);
+  const extra = document.templateData || {};
+  const currency = document.currency || "USD";
+  const productItems = document.items.filter((item) => item.lineType !== "shipping_cost");
+  const shippingItems = document.items.filter((item) => item.lineType === "shipping_cost");
+  const subtotal = productItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const freight = shippingItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
+  const discount = Math.max(0, Number(extra.discount || 0));
+  const total = subtotal + freight - discount;
+  const depositPercent = Math.max(0, Math.min(100, Number(extra.depositPercent || 0)));
+  const deposit = total * depositPercent / 100;
+
+  const letterhead = documentLetterheadFor(document);
+  const logoUrl = documentLogoFor(document);
+  const company = document.seller || letterhead?.companyName || document.letterheadSnapshot?.companyName || "—";
+  const brandText = [...(document.brandMarkText || document.seller || "").trim()].slice(0, 8).join("") || "—";
+
+  const headerContact = [document.sellerContact, document.sellerPhone, document.sellerEmail].filter(Boolean).join(" · ");
+  const buyerRows: [string, string][] = [
+    [T("rowCompany"), document.buyer || ""],
+    [T("rowName"), document.buyerContact || ""],
+    [T("rowPhone"), extra.buyerPhone || ""],
+    [T("rowAddress"), document.buyerAddress || ""],
+    [T("rowEmail"), extra.buyerEmail || ""],
+    [T("rowTax"), extra.buyerTaxNo || ""]
+  ];
+  const consigneeRows: [string, string][] = [
+    [T("rowCompany"), document.buyer || ""],
+    [T("rowAddress"), extra.consigneeAddress || document.buyerAddress || ""]
+  ];
+  // 参考件的事实栏只用西文标签（DATA / PEDIDO Nº / DOCUMENT NO. / PURCHASE REF.），
+  // 不做中英双语 —— 双语会把「DOCUMENT NO. / 单据编号」挤成两行。
+  const factsRows: [string, string][] = [
+    ["DATE", document.issueDate || ""],
+    ["ORDER NO.", extra.orderNo || ""],
+    ["DOCUMENT NO.", document.number || ""],
+    ["PURCHASE REF.", extra.purchaseRef || ""]
+  ];
+  const detailRows = (rows: [string, string][]) => `
+    <div class="cc-lines">${rows.map(([label, value]) => `<p><span>${escapeHtml(label)}</span><b>${escapeHtml(value || "—")}</b></p>`).join("")}</div>`;
+
+  const itemRows = productItems.map((item, index) => {
+    const sku = item.sku ? `<small>${escapeHtml(T("sku"))}: ${escapeHtml(item.sku)}</small>` : "";
+    return `<tr>
+      <td class="cc-num">${index + 1}</td>
+      <td><b>${escapeHtml(documentItemDisplayName(document, item) || "—")}</b>${sku}</td>
+      <td>${escapeHtml(item.model || "—")}</td>
+      <td>${escapeHtml(`${Number(item.quantity || 0)} ${item.unit || ""}`.trim())}</td>
+      <td>${customCMoney(Number(item.unitPrice || 0), currency)}</td>
+      <td>${customCMoney(Number(item.quantity || 0) * Number(item.unitPrice || 0), currency)}</td>
+    </tr>`;
+  }).join("");
+
+  const deliveryLines = [
+    extra.deliveryTime || "",
+    [document.incoterm, document.portDischarge].filter(Boolean).join(" ")
+  ].filter(Boolean).map((line) => escapeHtml(line)).join("<br>");
+
+  const totalRows: string[] = [
+    `<p><span>${escapeHtml(T("subtotal"))}</span><b>${customCTotalMoney(subtotal, currency)}</b></p>`
+  ];
+  if (freight > 0) totalRows.push(`<p><span>${escapeHtml(T("freight"))}</span><b>${customCTotalMoney(freight, currency)}</b></p>`);
+  if (discount > 0) totalRows.push(`<p><span>${escapeHtml(T("discount"))}</span><b>−${customCTotalMoney(discount, currency)}</b></p>`);
+  totalRows.push(`<p class="cc-grand"><span>${escapeHtml(T("total"))}</span><b>${customCTotalMoney(total, currency)}</b></p>`);
+  if (depositPercent > 0) {
+    totalRows.push(`<p><span>${escapeHtml(T("deposit"))}</span><b>${customCTotalMoney(deposit, currency)}</b></p>`);
+    totalRows.push(`<p><span>${escapeHtml(T("balance"))}</span><b>${customCTotalMoney(total - deposit, currency)}</b></p>`);
+  }
+
+  const bankLines = customCBankLines(document.bankInfo);
+  // 参考件只有形式发票带银行信息区，商用发票没有这一段
+  const bankBlock = document.type !== "PI" ? "" : `
+    <div class="cc-bank">
+      <b>${escapeHtml(T("bankDetails"))}<em>${escapeHtml(T("bankDemo"))}</em></b>
+      ${bankLines.length
+        ? `<div class="cc-bank-lines">${bankLines.map((line) => line.label
+          ? `<p><span>${escapeHtml(line.label)}</span><strong>${escapeHtml(line.value)}</strong></p>`
+          : `<p class="is-wide"><strong>${escapeHtml(line.value)}</strong></p>`).join("")}</div>`
+        : `<p class="cc-bank-text">${escapeHtml(document.bankInfo || "—")}</p>`}
+    </div>`;
+
+  const stamp = state.documentAssets.stamps.find((item) => item.id === document.stampId);
+  const signature = state.documentAssets.signatures.find((item) => item.id === document.signatureId);
+  const signImages = `${signature?.imageUrl ? `<img src="${escapeHtml(signature.imageUrl)}" alt="${escapeHtml(signature.name || "signature")}">` : ""}${stamp?.imageUrl ? `<img src="${escapeHtml(stamp.imageUrl)}" alt="${escapeHtml(stamp.name || "stamp")}">` : ""}`;
+
+  preview.className = "doc-paper custom-c";
+  preview.dir = document.language === "AR" ? "rtl" : "ltr";
+  preview.style.setProperty("--cc-wm-mark", `'${brandText.replace(/'/g, "\\'")}'`);
+  preview.innerHTML = `
+    ${customCWatermark(document)}
+    <div class="cc-head">
+      <div class="cc-logo">${customCLogoHtml(document, logoUrl, brandText)}</div>
+      <div>
+        <b>${escapeHtml(company)}</b>
+        ${document.sellerAddress ? `<p>${escapeHtml(document.sellerAddress)}</p>` : ""}
+        ${headerContact ? `<p>${escapeHtml(headerContact)}</p>` : ""}
+      </div>
+    </div>
+    <h1>${escapeHtml(CUSTOM_C_TITLES[document.type] || document.title || "DOCUMENT")}</h1>
+    <div class="cc-meta${["PI", "CI"].includes(document.type) ? " is-three" : ""}">
+      <div><span>${escapeHtml(T("buyerCard"))}</span>${detailRows(buyerRows)}</div>
+      ${["PI", "CI"].includes(document.type) ? `<div><span>${escapeHtml(T("consigneeCard"))}</span>${detailRows(consigneeRows)}</div>` : ""}
+      <div class="cc-facts"><span>${escapeHtml(T("documentNo"))}</span>${detailRows(factsRows)}</div>
+    </div>
+    <table class="cc-table">
+      <thead><tr>
+        <th>${escapeHtml(T("thNo"))}</th>
+        <th>${escapeHtml(T("thDesc"))}</th>
+        <th>${escapeHtml(T("thModel"))}</th>
+        <th>${escapeHtml(T("thQty"))}</th>
+        <th>${escapeHtml(T("thPrice"))}</th>
+        <th>${escapeHtml(T("thAmount"))}</th>
+      </tr></thead>
+      <tbody>${itemRows || `<tr class="cc-empty"><td colspan="6">—</td></tr>`}${shippingItems.map((item) => `<tr>
+        <td class="cc-num"></td>
+        <td><b>${escapeHtml(documentItemDisplayName(document, item) || docLabel(document, "shippingCost"))}</b></td>
+        <td></td><td></td><td></td>
+        <td>${customCMoney(Number(item.quantity || 0) * Number(item.unitPrice || 0), currency)}</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <div class="cc-summary">
+      <div class="cc-terms">
+        <b>${escapeHtml(T("paymentTerms"))}</b>
+        <p>${escapeHtml(document.paymentTerm || "—")}</p>
+        <b>${escapeHtml(T("delivery"))}</b>
+        <p>${deliveryLines || "—"}</p>
+      </div>
+      <div class="cc-totals">${totalRows.join("")}</div>
+    </div>
+    ${bankBlock}
+    <div class="cc-sign">
+      <div>${signImages}<span>${escapeHtml(T("sellerSignature"))}</span></div>
+      <div><span>${escapeHtml(`${T("buyerSignature")}${document.buyerContact ? ` / ${document.buyerContact}` : ""}`)}</span></div>
+    </div>
+    <footer>
+      <span>${escapeHtml(brandText)} · ${escapeHtml(document.number || "")} · v${document.revision || 1}</span>
+      <span>Page 1 / 1</span>
+    </footer>
+  `;
+
+  const meta = qs<HTMLElement>("#docPreviewMeta");
+  if (meta) meta.textContent = `${document.type} · ${document.number} · ${customCTotalMoney(total, currency)}`;
+}
+
+/** 运输唛头：逐箱一张双列卡片，编号 N/总数。 */
+function renderCustomCMarksPreview(document: TradeDocument, preview: HTMLElement) {
+  const T = customCText(document);
+  const extra = document.templateData || {};
+  const packages = (extra.packages || []).length
+    ? extra.packages!
+    : [{ id: "pkg_1", label: "", contents: "", model: "", netWeight: 0, grossWeight: 0, dimensions: "", destination: "" }];
+  const total = packages.length;
+  const letterhead = documentLetterheadFor(document);
+  const logoUrl = documentLogoFor(document);
+  const company = document.seller || letterhead?.companyName || document.letterheadSnapshot?.companyName || "—";
+  const brandText = [...(document.brandMarkText || document.seller || "").trim()].slice(0, 8).join("") || "—";
+  const headerContact = [document.sellerContact, document.sellerPhone, document.sellerEmail].filter(Boolean).join(" · ");
+  const destination = (value?: string) => (value || document.portDischarge || "").toUpperCase();
+
+  preview.className = "doc-paper custom-c";
+  preview.dir = document.language === "AR" ? "rtl" : "ltr";
+  preview.style.setProperty("--cc-wm-mark", `'${brandText.replace(/'/g, "\\'")}'`);
+  preview.innerHTML = `
+    ${customCWatermark(document)}
+    <div class="cc-head">
+      <div class="cc-logo">${customCLogoHtml(document, logoUrl, brandText)}</div>
+      <div>
+        <b>${escapeHtml(company)}</b>
+        ${document.sellerAddress ? `<p>${escapeHtml(document.sellerAddress)}</p>` : ""}
+        ${headerContact ? `<p>${escapeHtml(headerContact)}</p>` : ""}
+      </div>
+    </div>
+    <h1>${escapeHtml(CUSTOM_C_TITLES.MARKS)}</h1>
+    <p class="cc-marknote">${escapeHtml(T("packagesNote").replace("{count}", String(total)))}</p>
+    <div class="cc-marks">
+      ${packages.map((pkg, index) => `
+        <div class="cc-mark">
+          <div class="cc-logo">${customCLogoHtml(document, logoUrl, brandText)}</div>
+          <h2>${escapeHtml(document.buyer || "—")}</h2>
+          <p>ORDER: <b>${escapeHtml(extra.orderNo || document.number || "")}</b></p>
+          <strong>${index + 1}/${total}</strong>
+          <p>${escapeHtml(destination(pkg.destination) || "—")}</p>
+          <hr>
+          ${pkg.label || pkg.contents ? `<p><b>${escapeHtml(pkg.label || pkg.contents || "")}</b></p>` : ""}
+          ${pkg.model ? `<p>${escapeHtml(pkg.model)}</p>` : ""}
+          <p>${escapeHtml(`N.W. ${Number(pkg.netWeight || 0)} KGS · G.W. ${Number(pkg.grossWeight || 0)} KGS`)}</p>
+          ${pkg.dimensions ? `<p dir="ltr">${escapeHtml(`MEAS: ${pkg.dimensions}`)}</p>` : ""}
+          <h3>MADE IN CHINA</h3>
+        </div>`).join("")}
+    </div>
+    <footer>
+      <span>${escapeHtml(brandText)} · ${escapeHtml(document.number || "")} · v${document.revision || 1}</span>
+      <span>Page 1 / 1</span>
+    </footer>
+  `;
+
+  const meta = qs<HTMLElement>("#docPreviewMeta");
+  if (meta) meta.textContent = `MARKS · ${document.number} · ${total} 件`;
+}
+
+/**
+ * 唛头一页排 2×2。包装件到了 5 个，第三行正好跨在 PDF 的单页切割线（1123px）上，
+ * 导出的第二页会是一张被拦腰截断的唛头。导出前按**导出副本 794px 宽的真实排版**
+ * 把跨线的整行顶到下一页边界（插一个撑高块），让切割线落在两行之间。
+ * 只作用于导出副本：实时预览保持原始排版，不长出一段莫名其妙的白。
+ */
+function applyMarksPageBreaks(scope: HTMLElement) {
+  const PAGE = 1123;
+  const grid = scope.querySelector<HTMLElement>(".cc-marks");
+  if (!grid) return;
+  const cards = [...grid.querySelectorAll<HTMLElement>(".cc-mark")];
+  if (cards.length < 3) return;
+  const rowGap = Number.parseFloat(getComputedStyle(grid).rowGap || "0") || 0;
+  // 先按初始位置认出每一行的首张卡片，后面插入撑高块会让坐标整体下移，行身份不能变了再找
+  const rows: HTMLElement[] = [];
+  let lastTop = Number.NaN;
+  for (const card of cards) {
+    const top = card.getBoundingClientRect().top - scope.getBoundingClientRect().top;
+    if (Number.isNaN(lastTop) || top - lastTop > 1) {
+      rows.push(card);
+      lastTop = top;
+    }
+  }
+  for (const card of rows) {
+    const box = card.getBoundingClientRect();
+    const top = box.top - scope.getBoundingClientRect().top;
+    const bottom = top + box.height;
+    if (box.height >= PAGE) return;                       // 单张就超过一页，插什么也救不了
+    const boundary = (Math.floor(top / PAGE) + 1) * PAGE;
+    if (bottom <= boundary) continue;                     // 这一行没跨线
+    const spacer = document.createElement("div");
+    spacer.className = "cc-mark-pagebreak";
+    spacer.style.gridColumn = "1 / -1";
+    // 留 2px 余量：一页在 794px 宽下是 1122.9px，正好贴着边界会漏出上一张的下边框
+    spacer.style.height = `${Math.max(0, boundary - top - rowGap + 2)}px`;
+    card.parentElement?.insertBefore(spacer, card);
+  }
+  const footerPage = scope.querySelector<HTMLElement>(":scope > footer span:last-child");
+  if (footerPage) {
+    const pages = Math.max(1, Math.ceil((scope.getBoundingClientRect().height - 1) / PAGE));
+    const footer = footerPage.closest("footer") as HTMLElement | null;
+    // 页脚是绝对定位在纸尾的，多页时只有最后一页有；前面每页补一份，页码才不会只写 1/N
+    for (let page = 1; footer && page < pages; page += 1) {
+      const clone = footer.cloneNode(true) as HTMLElement;
+      clone.classList.add("cc-footer-repeat");
+      clone.style.top = `${page * PAGE - 26}px`;
+      clone.style.bottom = "auto";
+      const label = clone.querySelector("span:last-child");
+      if (label) label.textContent = `Page ${page} / ${pages}`;
+      scope.appendChild(clone);
+    }
+    footerPage.textContent = `Page ${pages} / ${pages}`;
+  }
 }
 
 function renderCustomsDocumentPreview(document: TradeDocument, preview: HTMLElement) {
@@ -3414,6 +4172,9 @@ async function downloadDocumentPdf(preview: HTMLElement, fileName: string) {
     captureHost.appendChild(capture);
     document.body.appendChild(captureHost);
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    // 唛头 5 个包装件时第三行正好压在单页切割线上；导出前按这份 794px 副本的真实排版
+    // 把跨线的整行顶到下一页边界，否则第二页会是一张被拦腰截断的唛头。
+    if (capture.querySelector(".cc-marks")) applyMarksPageBreaks(capture);
     const captureHeight = Math.max(capture.scrollHeight, Math.ceil(capture.getBoundingClientRect().height), capture.clientHeight);
     const dataUrl = await toPng(capture, {
       width: captureWidth,

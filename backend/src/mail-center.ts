@@ -5,6 +5,7 @@ import nodemailer from "nodemailer";
 import { decryptMailCredential } from "./credential-security.js";
 import { bumpMailboxSyncCache, getMailboxSyncEpoch } from "./sender-mailbox.js";
 import type { SenderMailbox } from "./types.js";
+import { emitCrmEvent } from "./crm-events.js";
 
 // ---------------------------------------------------------------------------
 // 邮件中心：把「账号自己的收件箱」变成 CRM 里可检索、可按客户聚合的数据。
@@ -1450,6 +1451,10 @@ export class MailCenterSyncService {
                   // 自己发出的信不存在「未读」：已发送里的 \\Seen 也不代表客户读过
                   readAt: isSent || seen ? sentAt : ""
                 });
+                // 来信回复了我们发出的某封信：交给推送中心认领（匹配开发信台账、记回信、推企业微信）
+                if (!isSent && inReplyTo) {
+                  emitCrmEvent({ type: "mail.inbound", teamId, ownerId, messageId, inReplyTo, from: fromAddress, subject: String(parsed?.subject || envelope.subject || ""), snippet: snippet.slice(0, 300), occurredAt: sentAt });
+                }
                 summary.saved += 1;
                 folderSaved += 1;
                 if (hit) summary.matched += 1;

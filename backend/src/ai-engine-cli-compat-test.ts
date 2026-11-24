@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AI_ENGINE_CODEX_MODEL_DEFAULT,
+  AI_ENGINE_MUSE_MODEL_DEFAULT,
+  aiEngineFallbackAdapters,
   defaultTeamAiEngineSettings,
   engineCliProfile,
   otherAiEngineAdapter,
@@ -136,6 +138,62 @@ process.stdin.on("end", () => {
   assert.ok(call.argv.indexOf('model_reasoning_effort="low"') < execAt, "总结类任务默认 low 档位");
   await assert.rejects(runCliSummary("FAIL", { adapter: "codex", binary: fake, timeoutMs: 15_000 }), /Authentication required/u);
   await assert.rejects(runCliSummary("x", { adapter: "codex", binary: path.join(dir, "missing-codex"), timeoutMs: 15_000 }), /Codex CLI 不存在/u);
+}
+
+
+// ---- Muse Code（Meta 的 muse CLI）：第三个 CLI 适配器 ----
+{
+  const defaults = defaultTeamAiEngineSettings("t1");
+  assert.equal(defaults.museModel, AI_ENGINE_MUSE_MODEL_DEFAULT);
+  assert.equal(AI_ENGINE_MUSE_MODEL_DEFAULT, "muse-spark-1.3");
+  // 老数据（没有 museModel 字段）读出时补默认，且不影响其它 CLI 的模型
+  const legacy = sanitizeTeamAiEngineSettings("t1", { cliAdapter: "codex", cliModel: "deep-model", codexModel: "gpt-5.6-sol" } as never, defaults);
+  assert.equal(legacy.museModel, "muse-spark-1.3");
+  assert.equal(legacy.codexModel, "gpt-5.6-sol");
+  const custom = sanitizeTeamAiEngineSettings("t1", { museModel: "muse-wonder-1.0" } as never, defaults);
+  assert.equal(custom.museModel, "muse-wonder-1.0", "Muse 模型名随版本变化，安全字符内可保存");
+  const bad = sanitizeTeamAiEngineSettings("t1", { museModel: "x; rm -rf /" } as never, custom);
+  assert.equal(bad.museModel, "muse-wonder-1.0", "非法模型名回落到上一次的值");
+  assert.equal(sanitizeTeamAiEngineSettings("t1", { museModel: "" } as never, custom).museModel, "", "空串 = 跟随 Muse 账号默认");
+
+  // 模型按实际派给的 CLI 取；Muse 没有思考档位
+  const settings = { ...defaults, cliModel: "deepseek-v4.1-flash", cliEffort: "xhigh", codexModel: "gpt-5.6-sol", codexEffort: "medium", museModel: "muse-spark-1.3" };
+  assert.deepEqual(engineCliProfile(settings, "muse"), { model: "muse-spark-1.3", effort: "" });
+  assert.equal(engineCliProfile(settings, "workbuddy").model, "deepseek-v4.1-flash", "Muse 的模型不得串到 WorkBuddy");
+
+  // 替换顺序：WorkBuddy / Codex 互为第一替补，Muse 排在其后（历史行为不变）
+  assert.deepEqual(aiEngineFallbackAdapters("workbuddy"), ["codex", "muse"]);
+  assert.deepEqual(aiEngineFallbackAdapters("codex"), ["workbuddy", "muse"]);
+  assert.deepEqual(aiEngineFallbackAdapters("muse"), ["workbuddy", "codex"]);
+  assert.equal(otherAiEngineAdapter("codex"), "workbuddy", "历史语义：Codex 的第一替补仍是 WorkBuddy");
+
+  // 选机器：只装 Muse 的执行机在首选 Muse 时必须被选中
+  const actor = { id: "u1", teamId: "t1" } as SessionUser;
+  const runner = (id: string, capabilities: string[], online = true) => ({
+    id, ownerId: "u1", displayName: id, online, capabilities, workspaces: ["/work"],
+    workbuddyVersion: capabilities.includes("workbuddy") ? "wb 1.0" : "",
+    codexVersion: capabilities.includes("codex") ? "codex 1.0" : "",
+    museVersion: capabilities.includes("muse") ? "Muse Code 1.4.23" : "",
+    lastError: ""
+  });
+  const base = defaultTeamAiEngineSettings("t1");
+  const museOnly = chooseEngineRunner([runner("r-muse", ["muse"])], actor, { ...base, cliAdapter: "muse" });
+  assert.equal(museOnly.adapter, "muse");
+  assert.equal(museOnly.cliVersion, "Muse Code 1.4.23", "版本要如实带出，便于界面显示");
+  const museMissing = chooseEngineRunner([runner("r-wb", ["workbuddy"])], actor, { ...base, cliAdapter: "muse" });
+  assert.equal(museMissing.adapter, "workbuddy", "只装了 WorkBuddy 时自动改用它，而不是直接报错");
+
+  // 故障话术：Muse 的登录/网络提示不能照抄 WorkBuddy 的 ~/.codebuddy
+  const auth = classifyEngineCliIssue("401 unauthorized: api key invalid", "muse");
+  assert.equal(auth.code, "cli_auth_required");
+  assert.match(auth.command, /muse auth set/u);
+  const network = classifyEngineCliIssue("getaddrinfo ENOTFOUND api.meta.ai", "muse");
+  assert.equal(network.code, "cli_network");
+  assert.match(network.command, /GOODJOB_MUSE_PROXY/u);
+
+  // 直连通道：首选 Muse 没装时按替补顺序落到真正装着的那个
+  assert.equal(resolveDirectCliAdapter("muse", (adapter) => adapter === "codex"), "codex");
+  assert.equal(resolveDirectCliAdapter("muse", () => false), "muse", "都没装按首选，随后如实报错");
 }
 
 console.log(JSON.stringify({ ok: true, checked: "ai-engine-cli-compat" }, null, 2));

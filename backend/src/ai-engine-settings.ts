@@ -18,7 +18,7 @@ import { getAppSetting, setAppSetting } from "./app-settings.js";
 
 export type ResearchEngineSource = "crm" | "ai" | "cli";
 export type EmailEngineSource = "template" | "ai" | "cli";
-export type AiEngineAdapter = "workbuddy" | "codex";
+export type AiEngineAdapter = "workbuddy" | "codex" | "muse";
 
 // ---------------------------------------------------------------------------
 // CLI 模型与思考档位
@@ -86,6 +86,21 @@ export const AI_ENGINE_CODEX_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$
 /** Codex 支持的思考档位；CRM 里更高的 xhigh / max 在 Runner 侧按 high 执行 */
 export const AI_ENGINE_CODEX_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 
+// ---------------------------------------------------------------------------
+// Muse Code（Meta 的 `muse` CLI）
+//
+// 第三个执行引擎，与 WorkBuddy / Codex 并列。模型命名是 Meta 自己的一套：
+//   muse-spark-1.3（默认，成本低）/ muse-wonder-1.0（最强，适合长任务）
+// 官方 CLI 的模型名随版本变化，所以除了候选清单也接受安全字符内的自定义名。
+// Muse 没有与 WorkBuddy「思考档位」一一对应的参数，因此只存模型、不存档位。
+// ---------------------------------------------------------------------------
+export const AI_ENGINE_MUSE_MODELS: AiEngineCliModelOption[] = [
+  { id: "muse-spark-1.3", label: "muse-spark-1.3 · 系统默认", note: "Meta 通用档：快、便宜，背调与开发信足够" },
+  { id: "muse-wonder-1.0", label: "muse-wonder-1.0（预览）", note: "Meta 最强档：长任务、复杂判断更稳，速度较慢" }
+];
+export const AI_ENGINE_MUSE_MODEL_DEFAULT = "muse-spark-1.3";
+export const AI_ENGINE_MUSE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
+
 /** 思考档位（与 Runner 的 EFFORT_LEVELS 一致）；留空 = 跟随 CLI 默认 */
 export const AI_ENGINE_CLI_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -118,6 +133,8 @@ export interface TeamAiEngineSettings {
   codexModel: string;
   /** 选用 Codex CLI 时的思考档位（minimal / low / medium / high）。留空 = 跟随 Codex 默认 */
   codexEffort: string;
+  /** 选用 Muse Code 时的模型（Meta 的 muse-* 命名）。留空 = 跟随 Muse 账号默认 */
+  museModel: string;
   /** 走 CLI 时在哪个工作目录里执行（必须是 Runner 已授权的目录） */
   cliWorkspace: string;
   /** 走 CLI 时的最长执行时间（秒） */
@@ -130,7 +147,7 @@ export interface TeamAiEngineSettings {
 
 export const RESEARCH_ENGINE_SOURCES: ResearchEngineSource[] = ["crm", "ai", "cli"];
 export const EMAIL_ENGINE_SOURCES: EmailEngineSource[] = ["template", "ai", "cli"];
-export const AI_ENGINE_ADAPTERS: AiEngineAdapter[] = ["workbuddy", "codex"];
+export const AI_ENGINE_ADAPTERS: AiEngineAdapter[] = ["workbuddy", "codex", "muse"];
 
 /** CLI 任务的默认与边界（秒）：默认 15 分钟，最长 24 小时，与 Runner 任务上限一致 */
 export const AI_ENGINE_CLI_TIMEOUT_DEFAULT = 900;
@@ -149,7 +166,7 @@ export function aiEngineSourceLabel(source: string) {
 }
 
 export function aiEngineAdapterLabel(adapter: AiEngineAdapter) {
-  return adapter === "codex" ? "Codex CLI" : "WorkBuddy CLI";
+  return adapter === "codex" ? "Codex CLI" : adapter === "muse" ? "Muse Code" : "WorkBuddy CLI";
 }
 
 export function clampAiEngineTimeout(value: number) {
@@ -169,6 +186,7 @@ export function defaultTeamAiEngineSettings(teamId: string): TeamAiEngineSetting
     cliEffort: "",
     codexModel: AI_ENGINE_CODEX_MODEL_DEFAULT,
     codexEffort: "",
+    museModel: AI_ENGINE_MUSE_MODEL_DEFAULT,
     cliWorkspace: "",
     cliTimeoutSeconds: AI_ENGINE_CLI_TIMEOUT_DEFAULT,
     runnerId: "",
@@ -215,6 +233,11 @@ export function sanitizeTeamAiEngineSettings(
   const codexEffort = !codexEffortRaw || (AI_ENGINE_CODEX_EFFORTS as readonly string[]).includes(codexEffortRaw)
     ? codexEffortRaw
     : (fallback.codexEffort ?? "");
+  // Muse 模型：与 Codex 同样的安全字符规则（会作为 --model 传给 muse），空串 = 跟随 Muse 账号默认
+  const museModelRaw = typeof raw.museModel === "string" ? raw.museModel.trim() : (fallback.museModel ?? AI_ENGINE_MUSE_MODEL_DEFAULT);
+  const museModel = !museModelRaw || AI_ENGINE_MUSE_MODEL_PATTERN.test(museModelRaw)
+    ? museModelRaw
+    : (fallback.museModel ?? AI_ENGINE_MUSE_MODEL_DEFAULT);
   const cliWorkspace = typeof raw.cliWorkspace === "string"
     ? raw.cliWorkspace.trim().slice(0, 1000)
     : fallback.cliWorkspace;
@@ -231,6 +254,7 @@ export function sanitizeTeamAiEngineSettings(
     cliEffort,
     codexModel,
     codexEffort,
+    museModel,
     cliWorkspace,
     cliTimeoutSeconds,
     runnerId,
@@ -245,14 +269,23 @@ export function sanitizeTeamAiEngineSettings(
  * 不能把 WorkBuddy 的 deepseek-v4.1-flash 之类传给 Codex。
  */
 export function engineCliProfile(settings: TeamAiEngineSettings, adapter: AiEngineAdapter): { model: string; effort: string } {
-  return adapter === "codex"
-    ? { model: settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT, effort: settings.codexEffort ?? "" }
-    : { model: settings.cliModel, effort: settings.cliEffort };
+  if (adapter === "codex") return { model: settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT, effort: settings.codexEffort ?? "" };
+  // Muse 没有与 effort 对应的参数：档位恒为空，模型跟随团队配置
+  if (adapter === "muse") return { model: settings.museModel ?? AI_ENGINE_MUSE_MODEL_DEFAULT, effort: "" };
+  return { model: settings.cliModel, effort: settings.cliEffort };
+}
+
+/**
+ * 首选 CLI 在执行机上不可用时的替代顺序。
+ * 历史行为必须保留：WorkBuddy 与 Codex 互为第一替补（谁先装谁用），Muse 排在其后。
+ */
+export function aiEngineFallbackAdapters(preferred: AiEngineAdapter): AiEngineAdapter[] {
+  return (["workbuddy", "codex", "muse"] as AiEngineAdapter[]).filter((item) => item !== preferred);
 }
 
 /** 另一个 CLI（首选的 CLI 在执行机上不可用时自动改用它） */
 export function otherAiEngineAdapter(adapter: AiEngineAdapter): AiEngineAdapter {
-  return adapter === "codex" ? "workbuddy" : "codex";
+  return aiEngineFallbackAdapters(adapter)[0]!;
 }
 
 export async function readTeamAiEngineSettings(teamId: string): Promise<TeamAiEngineSettings> {

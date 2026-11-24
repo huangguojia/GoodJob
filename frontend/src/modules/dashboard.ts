@@ -88,7 +88,7 @@ export async function refreshAll(user: User) {
     api<{ tasks: PlanTask[] }>("/api/plan-tasks"),
     api<{ templates: PlanTemplate[] }>("/api/plan-templates"),
     api<{ competitors: Competitor[] }>("/api/competitors"),
-    api<{ peers: Peer[] }>("/api/peers"),
+    api<{ peers: Peer[]; mineCount?: number; sharedCount?: number; sharedByMeCount?: number }>("/api/peers"),
     api<{ caseStudies: CaseStudy[] }>("/api/case-studies"),
     api<{ products: CommissionProduct[]; rules: CommissionRule[]; canManage: boolean; canSelectOwner: boolean; owners: CommissionOwner[] }>("/api/commission/products"),
     api<{ records: MonthlySalesRecord[]; owners?: CommissionOwner[]; canSelectOwner?: boolean; selectedOwnerId?: string }>(`/api/commission/sales-records?month=${encodeURIComponent(state.commissionMonth)}&ownerId=${encodeURIComponent(state.selectedCommissionOwnerId || "")}`),
@@ -98,7 +98,10 @@ export async function refreshAll(user: User) {
   state.summary = summary;
   state.customers = customers.customers;
   state.publicCustomers = publicCustomers.customers;
-  state.customerPoolCounts = { mineCount: customers.mineCount, publicCount: publicCustomers.publicCount };
+  state.customerPoolCounts = {
+    mineCount: customers.mineCount,
+    publicCount: publicCustomers.publicCount
+  };
   state.leads = leadsResp.leads;
   state.leadTrash = leadTrashResp.leads;
   state.todos = todos.todos;
@@ -132,6 +135,11 @@ export async function refreshAll(user: User) {
   state.planTemplates = planTemplates.templates;
   state.competitors = competitors.competitors;
   state.peers = peers.peers;
+  state.peerPoolCounts = {
+    mineCount: peers.mineCount ?? peers.peers.length,
+    sharedCount: peers.sharedCount ?? state.peerPoolCounts.sharedCount,
+    sharedByMeCount: peers.sharedByMeCount ?? 0
+  };
   state.caseStudies = caseStudies.caseStudies;
   state.commissionProducts = commissionProducts.products;
   state.commissionRules = commissionProducts.rules;
@@ -165,7 +173,8 @@ export async function refreshAll(user: User) {
   renderCustomerPool();
   renderLeads();
   renderPipeline(deals.deals);
-  void refreshClosedDeals();
+  // 不 await 的收尾刷新：若此时正好退出登录会拿 401，兜住避免未捕获 Promise 报错
+  void refreshClosedDeals().catch(() => undefined);
   renderReminders(reminders.reminders);
   renderJobs(jobs.jobs);
   renderTradeDocuments(tradeDocs.documents);

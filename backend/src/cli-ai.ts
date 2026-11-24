@@ -5,7 +5,8 @@ import path from "node:path";
 import readline from "node:readline";
 import {
   AI_ENGINE_CODEX_MODEL_DEFAULT,
-  otherAiEngineAdapter,
+  AI_ENGINE_MUSE_MODEL_DEFAULT,
+  aiEngineFallbackAdapters,
   readTeamAiEngineSettings,
   type AiEngineAdapter
 } from "./ai-engine-settings.js";
@@ -206,7 +207,9 @@ const CHATGPT_CODEX_BINARY = "/Applications/ChatGPT.app/Contents/Resources/codex
 /** 解析 Codex 可执行文件：显式指定 > GOODJOB_CODEX_BIN > PATH 里的 codex > ChatGPT 桌面端自带 > 裸名字 */
 export function resolveCodexCliBinary(extraPath = ""): string {
   const explicit = extraPath.trim() || String(process.env.GOODJOB_CODEX_BIN || "").trim();
-  if (explicit && existsSync(explicit)) return explicit;
+  // 显式指定就以它为准：不存在时交给调用方如实报「CLI 不存在」，
+  // 否则用户把路径写错会静默跑起另一台 codex，错误信息还指向别处（2026-11-19 修）
+  if (explicit) return explicit;
   for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
     if (!directory) continue;
     const candidate = path.join(directory, "codex");
@@ -216,14 +219,48 @@ export function resolveCodexCliBinary(extraPath = ""): string {
   return "codex";
 }
 
+/** 解析 Muse Code 可执行文件：显式指定 > GOODJOB_MUSE_BIN > 安装脚本默认目录 > PATH > 裸名字 */
+export function resolveMuseCliBinary(extraPath = ""): string {
+  const explicit = extraPath.trim() || String(process.env.GOODJOB_MUSE_BIN || "").trim();
+  if (explicit && existsSync(explicit)) return explicit;
+  for (const candidate of [
+    path.join(homedir(), ".local", "bin", "muse"),
+    "/opt/homebrew/bin/muse",
+    "/usr/local/bin/muse"
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, "muse");
+    if (existsSync(candidate)) return candidate;
+  }
+  return "muse";
+}
+
+/**
+ * Muse 子进程环境：保留代理（国内访问 api.meta.ai 必需）、关掉 Contributor mode（客户资料不进训练集）、
+ * PATH 补 ~/.local/bin（launchd 启动的后端 PATH 很短）。
+ */
+function museCliEnvironment(): NodeJS.ProcessEnv {
+  const proxy = String(process.env.GOODJOB_MUSE_PROXY || "").trim();
+  return {
+    ...process.env,
+    ...(proxy ? { HTTP_PROXY: proxy, HTTPS_PROXY: proxy, ALL_PROXY: proxy, http_proxy: proxy, https_proxy: proxy, all_proxy: proxy } : {}),
+    PATH: [...new Set([path.join(homedir(), ".local", "bin"), ...String(process.env.PATH || "").split(path.delimiter)])].join(path.delimiter),
+    NO_COLOR: "1",
+    MUSE_CONTRIBUTOR_MODE: process.env.MUSE_CONTRIBUTOR_MODE ?? "0"
+  };
+}
+
 /** 这台机器上某个 CLI 是否装着（能解析到一个真实存在的可执行文件） */
 export function directCliAvailable(adapter: AiEngineAdapter): boolean {
-  const binary = adapter === "codex" ? resolveCodexCliBinary() : resolveCliBinary();
+  const binary = adapter === "codex" ? resolveCodexCliBinary() : adapter === "muse" ? resolveMuseCliBinary() : resolveCliBinary();
   return binary.includes(path.sep) && existsSync(binary);
 }
 
 /**
- * 直连通道用哪个 CLI：团队首选的装着就用它；没装但另一个装着就用另一个；
+ * 直连通道用哪个 CLI：团队首选的装着就用它；没装就按替补顺序找一个装着的；
  * 都没装按首选执行（随后会如实报「CLI 不存在」）。
  */
 export function resolveDirectCliAdapter(
@@ -231,8 +268,8 @@ export function resolveDirectCliAdapter(
   available: (adapter: AiEngineAdapter) => boolean = directCliAvailable
 ): AiEngineAdapter {
   if (available(preferred)) return preferred;
-  const other = otherAiEngineAdapter(preferred);
-  return available(other) ? other : preferred;
+  const fallback = aiEngineFallbackAdapters(preferred).find((item) => available(item));
+  return fallback || preferred;
 }
 
 /** 把 `codex exec --json` 的 JSONL 事件解析成终态 */
@@ -339,6 +376,110 @@ async function runCodexSummary(
   return { text: parsed.text, model: model || "Codex 默认模型", durationMs: Date.now() - started };
 }
 
+/**
+ * 把 `muse exec --json` 的 JSONL 事件解析成终态。
+ * Muse 的事件 schema 未完全公开：按「助手文本字段优先、未知事件忽略」的宽容策略解析，
+ * 全都认不出时由调用方回落到原始输出。
+ */
+export function parseMuseStream(lines: string[]): ParsedCliStream {
+  let text = "";
+  let streamed = "";
+  let failed = false;
+  let error = "";
+  let model = "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      payload = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      continue;
+    }
+    const type = String(payload.type || payload.event || payload.kind || "");
+    if (payload.model) model = String(payload.model);
+    if (/error|fail/iu.test(type)) {
+      const message = payload.message || (payload.error as Record<string, unknown> | undefined)?.message || payload.error;
+      if (message) { failed = true; error = String(message).slice(0, 2_000); }
+    }
+    const delta = payload.delta as Record<string, unknown> | undefined;
+    if (delta && typeof delta.text === "string") streamed += delta.text;
+    for (const source of [payload, (payload.item || {}) as Record<string, unknown>]) {
+      for (const key of ["text", "content", "output_text", "result"]) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim() && /assistant|message|completion|final|result|response/iu.test(type)) {
+          text = value;
+        }
+      }
+    }
+  }
+  return { text: text || streamed, model, failed, error };
+}
+
+/** Muse Code 版的轻量总结：`muse exec --json "<prompt>"`，一次一答，不走 Runner。 */
+async function runMuseSummary(
+  prompt: string,
+  options: { timeoutMs: number; binary?: string; model?: string }
+): Promise<CliSummaryResult> {
+  const binary = resolveMuseCliBinary(options.binary ?? "");
+  if (binary.includes(path.sep) && !existsSync(binary)) {
+    throw new Error(`本机 Muse Code 不存在（${binary}；安装：curl -fsSL https://dev.meta.ai/install.sh | bash）`);
+  }
+  const model = String(options.model || "").trim();
+  const args = ["exec", "--json"];
+  if (model) args.push("--model", model);
+  args.push(prompt);
+
+  const started = Date.now();
+  const child = spawn(binary, args, {
+    cwd: ensureWorkspace(),
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: museCliEnvironment()
+  });
+
+  const lines: string[] = [];
+  let stderr = "";
+  const output = readline.createInterface({ input: child.stdout });
+  output.on("line", (line) => { if (lines.length < 5_000) lines.push(line); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr = `${stderr}${chunk.toString("utf8")}`.slice(0, 8_000); });
+
+  let timedOut = false;
+  const kill = (): void => {
+    if (child.exitCode !== null) return;
+    child.kill("SIGTERM");
+    const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 3_000);
+    force.unref();
+  };
+  const timeout = setTimeout(() => { timedOut = true; kill(); }, options.timeoutMs);
+  timeout.unref();
+
+  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
+    child.once("error", (error) => resolve({ code: null, signal: null, error }));
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  clearTimeout(timeout);
+  output.close();
+
+  if (timedOut) throw new Error(`本机 Muse Code 执行超过 ${Math.round(options.timeoutMs / 1_000)} 秒，已停止`);
+  if (exit.error) {
+    if ((exit.error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`本机 Muse Code 不存在（未找到可执行文件 ${binary}；安装后执行 muse auth set 或 muse login）`);
+    }
+    throw new Error(`本机 Muse Code 无法启动（${binary}）：${exit.error.message}`);
+  }
+  const parsed = parseMuseStream(lines);
+  if (parsed.failed) throw new Error(redact(parsed.error || stderr.trim() || `本机 Muse Code 执行失败（退出码 ${exit.code ?? "未知"}）`));
+  if (exit.code !== 0) {
+    throw new Error(redact(stderr.trim() || `本机 Muse Code 退出码 ${exit.code ?? exit.signal ?? "未知"}`));
+  }
+  if (!parsed.text.trim()) {
+    throw new Error(redact(stderr.trim() || "本机 Muse Code 没有返回任何内容（常见原因：未登录或网络不通，先执行 muse auth set 并确认能访问 api.meta.ai）"));
+  }
+  return { text: parsed.text, model: parsed.model || model || "Muse 默认模型", durationMs: Date.now() - started };
+}
+
 export interface CliSummaryOptions {
   timeoutMs?: number;
   binary?: string;
@@ -357,11 +498,16 @@ export async function runCliSummary(prompt: string, options: CliSummaryOptions =
   let adapter: AiEngineAdapter = options.adapter ?? "workbuddy";
   let codexModel = AI_ENGINE_CODEX_MODEL_DEFAULT;
   let codexEffort = "";
+  let museModel = AI_ENGINE_MUSE_MODEL_DEFAULT;
   if (!options.adapter && options.teamId) {
     const settings = await readTeamAiEngineSettings(options.teamId);
     adapter = resolveDirectCliAdapter(settings.cliAdapter);
     codexModel = settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT;
     codexEffort = settings.codexEffort ?? "";
+    museModel = settings.museModel ?? AI_ENGINE_MUSE_MODEL_DEFAULT;
+  }
+  if (adapter === "muse") {
+    return runMuseSummary(prompt, { timeoutMs, binary: options.binary, model: museModel });
   }
   if (adapter === "codex") {
     // 总结类任务讲究快：没配思考档位时用 low

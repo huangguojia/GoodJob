@@ -42,7 +42,7 @@ type XmlApi = cheerio.CheerioAPI;
 type PlaceholderValue = string | number;
 
 const TEMPLATE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../resources/document-templates");
-const DEFAULT_LOGO_ASSET = "goodjob-default-logo.png";
+/** 单据上的一切品牌信息（Logo、公司名、地址、银行）都必须来自当前卖方档案；模板里不允许留任何内置品牌。 */
 const xmlTag = (name: string) => `x\\:${name}, ${name}`;
 const xmlNode = ($: XmlApi, name: string) => $(`x\\:${name}`).length ? `x:${name}` : name;
 const xmlAttrTag = (name: string, attribute: string) => `x\\:${name}[${attribute}], ${name}[${attribute}]`;
@@ -462,7 +462,7 @@ function addDrawingImage(
   const drawing = loadXml(files, drawingPath);
   const rels = loadXml(files, relsPath);
   const relationshipId = nextRelationshipId(rels.$);
-  const mediaName = `goodjob-${drawingNumber}-${anchor.name.replace(/[^A-Za-z0-9_-]/g, "-")}.${image.extension}`;
+  const mediaName = `doc-${drawingNumber}-${anchor.name.replace(/[^A-Za-z0-9_-]/g, "-")}.${image.extension}`;
   files[`xl/media/${mediaName}`] = image.data;
   const relationshipTag = xmlNode(rels.$, "Relationship");
   rels.$(xmlTag("Relationships")).append(rels.$(`<${relationshipTag}></${relationshipTag}>`)
@@ -530,26 +530,118 @@ function removeExistingDrawingPictures(files: Record<string, Uint8Array>, drawin
   removeDrawingPictures(files, drawingNumber, ({ row }) => beforeRow === undefined || row < beforeRow);
 }
 
-function removeLegacyTemplateBranding(templateId: string, files: Record<string, Uint8Array>) {
-  if (templateId === "packing-list-sample") {
-    removeDrawingPictures(files, 1, ({ column, description }) => column >= 20 || /logo/iu.test(description));
+/**
+ * 清掉模板自带的全部图片。
+ * 这些 xlsx 都是从参考件改的，里面还留着参考公司的 Logo、示例产品照和抬头贴图；
+ * 单据要用的 Logo / 印章 / 签名 / 商品图一律由卖方档案重新贴上去，
+ * 模板里留下任何一张都会串到别人的单据上，所以整批删除。
+ */
+function removeLegacyTemplateBranding(files: Record<string, Uint8Array>) {
+  Object.keys(files).forEach((filePath) => {
+    const match = filePath.match(/^xl\/drawings\/drawing(\d+)\.xml$/u);
+    if (!match) return;
+    removeDrawingPictures(files, Number(match[1]), () => true);
+  });
+}
+
+/** WPS 的 cellimages 部件只在 DISPIMG 公式下生效；本系统不写 DISPIMG，整块删掉，顺带清掉参考件的示例产品照。 */
+function removeWpsCellImages(files: Record<string, Uint8Array>) {
+  delete files["xl/cellimages.xml"];
+  delete files["xl/_rels/cellimages.xml.rels"];
+  const relsPath = "xl/_rels/workbook.xml.rels";
+  if (files[relsPath]) {
+    const rels = loadXml(files, relsPath);
+    rels.$(xmlTag("Relationship")).each((_, element) => {
+      const node = rels.$(element);
+      if (/cellimages\.xml/iu.test(String(node.attr("Target") || ""))) node.remove();
+    });
+    rels.save();
   }
-  if (templateId === "supplier-work-order-zh") {
-    removeDrawingPictures(files, 1, () => true);
+  const typesPath = "[Content_Types].xml";
+  if (files[typesPath]) {
+    files[typesPath] = strToU8(
+      strFromU8(files[typesPath]).replace(/<Override[^>]*PartName="\/xl\/cellimages\.xml"[^>]*\/>/gu, "")
+    );
   }
 }
 
-function sanitizeWorkbookBranding(files: Record<string, Uint8Array>) {
+/**
+ * 重建共享字符串表，只保留仍被单元格引用的条目。
+ * setText 统一写 inlineStr，模板原有的 <si> 会整批变成孤儿；
+ * 不清理的话，参考件的公司名、地址、银行、示例零件名会一直躺在导出文件里。
+ */
+function pruneUnusedSharedStrings(files: Record<string, Uint8Array>) {
+  const sharedPath = "xl/sharedStrings.xml";
+  const bytes = files[sharedPath];
+  if (!bytes) return;
+  const source = strFromU8(bytes);
+  const blocks = [...source.matchAll(/<si\b[^>]*>[\s\S]*?<\/si>|<si\b[^>]*\/>/gu)].map((match) => match[0]);
+  if (!blocks.length) return;
+  const used = new Set<number>();
+  const sheetPaths = Object.keys(files).filter((filePath) => /^xl\/worksheets\/[^/]+\.xml$/u.test(filePath));
+  const sheets = sheetPaths.map((filePath) => {
+    const sheet = loadXml(files, filePath);
+    sheet.$(xmlTag("c")).each((_, element) => {
+      const cell = sheet.$(element);
+      if (cell.attr("t") !== "s") return;
+      const index = Number(cell.children(xmlTag("v")).first().text() || "");
+      if (Number.isInteger(index) && index >= 0 && index < blocks.length) {
+        used.add(index);
+      }
+    });
+    return sheet;
+  });
+  const ordered = [...used].sort((left, right) => left - right);
+  const remap = new Map(ordered.map((index, next) => [index, next]));
+  sheets.forEach((sheet) => {
+    sheet.$(xmlTag("c")).each((_, element) => {
+      const cell = sheet.$(element);
+      if (cell.attr("t") !== "s") return;
+      const value = cell.children(xmlTag("v")).first();
+      const next = remap.get(Number(value.text() || ""));
+      if (next === undefined) {
+        cell.remove();
+        return;
+      }
+      value.text(String(next));
+    });
+    sheet.save();
+  });
+  const declaration = source.startsWith("<?xml") ? source.slice(0, source.indexOf("?>") + 2) : "";
+  const openTag = (source.match(/<sst\b[^>]*>/u)?.[0] || "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+    .replace(/count="\d+"/u, `count="${ordered.length}"`)
+    .replace(/uniqueCount="\d+"/u, `uniqueCount="${ordered.length}"`);
+  files[sharedPath] = strToU8(`${declaration}${openTag}${ordered.map((index) => blocks[index]).join("")}</sst>`);
+}
+
+/**
+ * 把参考件残留的品牌字样替换成「当前卖方公司」。
+ * 以前这里写死 GoodJob CRM，结果导出件上印的是系统名而不是用户自己的公司；
+ * 现在一律用单据的当前卖方公司名，绝不出现第三方品牌，也不留系统名。
+ * 名单里除了老参考件，还把长陆 / ECORE / JetWash 这些实际流出去过的字样一起挡住，
+ * 以后再丢新的参考件进来也不会漏。
+ */
+function sanitizeWorkbookBranding(files: Record<string, Uint8Array>, sellerName: string) {
+  const seller = sellerName.trim() || "Seller Company";
+  const sellerTitle = `${seller} Trade Document`;
+  const brandPatterns: RegExp[] = [
+    /Zhuhai\s+LONGTEC\s+(?:Industrial\s+)?Co\.,?\s*Ltd\.?/giu,
+    /LONGTEC/giu,
+    /Longtec/giu,
+    /长陆/g,
+    /ProtoTech Machining Co\., Ltd\./giu,
+    /ProtoTech/giu,
+    /©\s*2013\s+Spreadsheet123(?:\.com)?(?:\s+LTD)?(?:\.\s*All rights reserved)?/giu,
+    /Spreadsheet123(?:\.com)?(?:\s+LTD)?/giu,
+    /VNN\.R9/giu,
+    /huawei/giu,
+    /ECORE/giu,
+    /Jet\s?Wash/giu
+  ];
   Object.entries(files).forEach(([filePath, bytes]) => {
     if (!filePath.endsWith(".xml")) return;
     const source = strFromU8(bytes);
-    const sanitized = source
-      .replace(/ProtoTech Machining Co\., Ltd\./giu, "GoodJob CRM")
-      .replace(/ProtoTech/giu, "GoodJob")
-      .replace(/©\s*2013\s+Spreadsheet123(?:\.com)?(?:\s+LTD)?(?:\.\s*All rights reserved)?/giu, "Generated by GoodJob CRM")
-      .replace(/Spreadsheet123(?:\.com)?(?:\s+LTD)?/giu, "GoodJob CRM")
-      .replace(/VNN\.R9/giu, "GoodJob CRM")
-      .replace(/huawei/giu, "GoodJob CRM");
+    const sanitized = brandPatterns.reduce((text, pattern) => text.replace(pattern, seller), source);
     if (sanitized !== source) files[filePath] = strToU8(sanitized);
   });
   const corePath = "docProps/core.xml";
@@ -559,10 +651,10 @@ function sanitizeWorkbookBranding(files: Record<string, Uint8Array>) {
       const node = core.$(selector).first();
       if (node.length) node.text(value);
     };
-    setProperty("dc\\:creator, creator", "GoodJob CRM");
-    setProperty("cp\\:lastModifiedBy, lastModifiedBy", "GoodJob CRM");
-    setProperty("dc\\:title, title", "GoodJob CRM Trade Document");
-    setProperty("dc\\:description, description", "Generated by GoodJob CRM");
+    setProperty("dc\\:creator, creator", seller);
+    setProperty("cp\\:lastModifiedBy, lastModifiedBy", seller);
+    setProperty("dc\\:title, title", sellerTitle);
+    setProperty("dc\\:description, description", sellerTitle);
     core.save();
   }
 }
@@ -761,7 +853,7 @@ function addTemplateImages(
       removeExistingDrawingPictures(files, layout.drawingNumber, layout.removeHeaderPicturesBeforeRow);
       const anchor = positionedAssetAnchor(layout.logo, assets.logo, assets.logoPlacement);
       addDrawingImage(files, layout.drawingNumber, assets.logo, {
-        name: `GoodJobLetterheadLogo${layout.sheetNumber}`,
+        name: `LetterheadLogo${layout.sheetNumber}`,
         column: anchor.column, row: anchor.row,
         columnOffsetPx: anchor.columnOffsetPx, rowOffsetPx: anchor.rowOffsetPx,
         widthPx: anchor.widthPx, heightPx: anchor.heightPx
@@ -775,7 +867,7 @@ function addTemplateImages(
         if (layout.product?.rowHeightPoints) setRowHeight(files, layout.sheetNumber, layout.product.excelStartRow + index, layout.product.rowHeightPoints);
         const size = fitImage(image, layout.product!.maxWidthPx, layout.product!.maxHeightPx);
         addDrawingImage(files, layout.drawingNumber, image, {
-          name: `GoodJobProduct${index + 1}`,
+          name: `ProductImage${index + 1}`,
           column: layout.product!.column,
           row: layout.product!.startRow + index,
           columnOffsetPx: Math.max(0, Math.round((layout.product!.cellWidthPx - size.width) / 2)),
@@ -788,7 +880,7 @@ function addTemplateImages(
       const delta = layout.stamp.shiftByDelta ? (deltas[layoutIndex] || 0) : 0;
       const anchor = positionedAssetAnchor(layout.stamp, assets.stamp, assets.stampPlacement, delta);
       addDrawingImage(files, layout.drawingNumber, assets.stamp, {
-        name: `GoodJobStamp${layout.sheetNumber}`,
+        name: `Stamp${layout.sheetNumber}`,
         column: anchor.column, row: anchor.row,
         columnOffsetPx: anchor.columnOffsetPx, rowOffsetPx: anchor.rowOffsetPx,
         widthPx: anchor.widthPx, heightPx: anchor.heightPx
@@ -797,7 +889,7 @@ function addTemplateImages(
     if (assets.signature && layout.signature) {
       const size = fitImage(assets.signature, layout.signature.maxWidthPx, layout.signature.maxHeightPx);
       addDrawingImage(files, layout.drawingNumber, assets.signature, {
-        name: `GoodJobSignature${layout.sheetNumber}`,
+        name: `Signature${layout.sheetNumber}`,
         column: layout.signature.column,
         row: layout.signature.row + (layout.signature.shiftByDelta ? (deltas[layoutIndex] || 0) : 0),
         columnOffsetPx: layout.signature.columnOffsetPx,
@@ -1311,20 +1403,16 @@ export async function exportAdvancedDocumentTemplate(templateId: string, documen
   if (!template.dynamicItems && document.items.length > template.maxItems) throw new Error(`该模板最多支持 ${template.maxItems} 项商品，当前为 ${document.items.length} 项`);
   const source = await readFile(path.join(TEMPLATE_ROOT, template.assetName));
   const files = unzipSync(new Uint8Array(source));
-  const resolvedAssets = assets.logo ? assets : {
-    ...assets,
-    logo: {
-      data: new Uint8Array(await readFile(path.join(TEMPLATE_ROOT, DEFAULT_LOGO_ASSET))),
-      extension: "png" as const
-    },
-    logoPlacement: undefined
-  };
-  removeLegacyTemplateBranding(template.id, files);
-  sanitizeWorkbookBranding(files);
+  // 单据上的 Logo / 公司名 / 地址 / 银行全部来自卖方档案：
+  // 模板自带的参考件品牌素材先清掉，没有上传 Logo 就留空，不再拿系统内置 Logo 顶替。
+  removeLegacyTemplateBranding(files);
+  removeWpsCellImages(files);
+  sanitizeWorkbookBranding(files, document.seller || "");
   const deltas = template.build(files, document) || [];
-  addTemplateImages(template.id, files, document, resolvedAssets, deltas);
+  addTemplateImages(template.id, files, document, assets, deltas);
   replaceRemainingPlaceholders(files, document);
   assertNoUnresolvedPlaceholders(files);
+  pruneUnusedSharedStrings(files);
   removeUnreferencedMedia(files);
   return { template, buffer: Buffer.from(zipSync(files, { level: 6, mtime: new Date("2000-01-01T00:00:00.000Z") })) };
 }

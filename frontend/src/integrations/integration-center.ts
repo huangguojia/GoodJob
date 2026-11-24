@@ -918,7 +918,7 @@ export function mountIntegrationCenter(dependencies: IntegrationCenterDependenci
       </div>
       <label class="form-field full">用途说明<textarea id="integrationPrivateDescription" rows="4" maxlength="1000"></textarea></label>
       <p class="hint">系统只保存端点和 Manifest，不下载连接器代码。生产环境端点必须使用 HTTPS。</p>
-    </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="integrationPrivateSubmit" type="button">提交审核</button>`);
+    </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="integrationPrivateSubmit" type="button">创建连接器</button>`);
     const authentication = one<HTMLSelectElement>("#integrationPrivateAuthentication", document);
     const oauthFields = one<HTMLElement>("[data-private-oauth-fields]", document);
     authentication?.addEventListener("change", () => { if (oauthFields) oauthFields.hidden = authentication.value !== "oauth2"; });
@@ -957,9 +957,9 @@ export function mountIntegrationCenter(dependencies: IntegrationCenterDependenci
           }
         });
         dependencies.closeModal();
-        dependencies.toast("私有连接器已提交审核", "success");
+        dependencies.toast("私有连接器已创建并自动放行，可直接发起连接测试", "success");
         await refresh(true);
-        showTab("connector-reviews");
+        showTab("catalog");
       } catch (error) {
         button.disabled = false;
         dependencies.toast(error instanceof Error ? error.message : "连接器提交失败", "error");

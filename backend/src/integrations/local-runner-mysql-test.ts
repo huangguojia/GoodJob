@@ -125,6 +125,38 @@ try {
   await service.revoke(ownerA, paired.runner.id);
   await assert.rejects(() => service.authenticate(paired.token), /已撤销/u);
 
+  // ---- 回归：数据库会话时区不是 UTC 时，配对码也不能「一生成就过期」（2026-11-20 生产事故）----
+  // 生产：后端容器 UTC、MySQL 容器 CST(+8)。时间列由 JS 写成 UTC，却拿 NOW() 比，
+  // 结果每个配对码一生成就比 NOW() 早 8 小时。这里用 +08:00 会话复现同样的错位。
+  const skewPool = mysql.createPool({ uri: databaseUrl, connectionLimit: 1, timezone: "Z" });
+  skewPool.on("connection", (connection) => { void connection.query("SET time_zone='+08:00'"); });
+  try {
+    const skewService = new LocalRunnerService(new MysqlLocalRunnerRepository(skewPool));
+    const [tzRows] = await skewPool.query("SELECT TIMESTAMPDIFF(MINUTE, UTC_TIMESTAMP(), NOW()) AS offset");
+    assert.equal(Number((tzRows as Array<{ offset: number }>)[0]?.offset), 480, "测试前提：会话时区应是 +08:00，否则这条回归没有意义");
+    const skewed = await skewService.createPairing(ownerA, "TZ 设备");
+    assert.ok(skewed.expiresInSeconds >= 600, "配对码有效期至少 10 分钟");
+    const skewedPaired = await skewService.pair({
+      code: skewed.pairingCode, displayName: "TZ 设备", hostname: "tz-test", platform: "darwin",
+      runnerVersion: "0.1.0", codexVersion: "codex-cli test", workbuddyVersion: "", capabilities: ["codex"], workspaces: ["/tmp"]
+    });
+    assert.ok(skewedPaired.runner.id, "会话时区非 UTC 时，配对码必须照样能用满有效期");
+    // 租约同理：刚领到的任务不能被 recoverStaleTasks 立刻回收
+    const skewedTask = await skewService.createTask(ownerA, {
+      runnerId: skewedPaired.runner.id, prompt: "lease under non-UTC session", workspace: "/tmp",
+      executionMode: "read_only", timeoutSeconds: 60
+    });
+    const skewedClaim = await skewService.claim(await skewService.authenticate(skewedPaired.token));
+    assert.equal(skewedClaim?.task.id, skewedTask.id);
+    await skewPool.query("SELECT 1");
+    const skewRepo = new MysqlLocalRunnerRepository(skewPool);
+    await skewRepo.recoverStaleTasks(skewedPaired.runner.id);
+    assert.equal((await skewRepo.getTask(skewedTask.id))?.status, "running", "租约未到期时不能被判定超时回收");
+    await skewService.revoke(ownerA, skewedPaired.runner.id);
+  } finally {
+    await skewPool.end().catch(() => undefined);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     pairingTokenHashed: true,
@@ -140,7 +172,9 @@ try {
     revocation: true,
     workbuddyAdapterRoundTrip: true,
     adapterCapabilityGate: true,
-    twentyFourHourTimeoutCap: true
+    twentyFourHourTimeoutCap: true,
+    pairingSurvivesNonUtcSessionTimeZone: true,
+    leaseSurvivesNonUtcSessionTimeZone: true
   }, null, 2));
 } finally {
   await pool.execute("DELETE FROM integration_local_runner_task_events WHERE team_id IN (?,?)", [teamA, teamB]);

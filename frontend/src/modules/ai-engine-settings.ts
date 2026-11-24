@@ -14,12 +14,14 @@ import { escapeHtml, qs, qsa } from "./shared";
 import { backgroundResearchSourceOverride, developmentEmailSourceOverride, openWhatsAppForContact } from "./development-email";
 import { whatsAppEntryHref } from "./whatsapp";
 import { api, setButtonPending, toast } from "./ui";
+import { openModal } from "../prototype-api";
 import { openCustomerModal } from "./customer-intake";
 
 /** AI 执行来源设置（团队级）：默认背调来源、默认开发信来源、CLI 适配器/工作区/超时 */
 let aiEngineSettings: TeamAiEngineSettings = {
   teamId: "", researchSource: "ai", emailSource: "ai", cliAdapter: "workbuddy",
   cliModel: "deepseek-v4.1-flash", cliEffort: "", codexModel: "gpt-5.6-sol", codexEffort: "",
+  museModel: "muse-spark-1.3",
   cliWorkspace: "", cliTimeoutSeconds: 900, runnerId: "", updatedBy: "", updatedAt: ""
 };
 let aiEngineRunners: AiEngineRunnerSummary[] = [];
@@ -29,6 +31,8 @@ let aiEngineCliReady = false;
 /** Codex CLI 的模型 / 档位清单（与 WorkBuddy 的命名互不相通，后端单独给） */
 let aiEngineCodexModels: AiEngineCliModelOption[] = [];
 let aiEngineCodexEfforts: string[] = [];
+/** Muse Code（Meta）的模型清单：Muse 没有思考档位，只有模型 */
+let aiEngineMuseModels: AiEngineCliModelOption[] = [];
 /** 每个 CLI 当前是否有在线 Runner 可用 */
 let aiEngineAdapterAvailability: Record<string, boolean> = {};
 /**
@@ -104,6 +108,7 @@ export async function loadAiEngineSettings() {
     cliEfforts?: string[];
     codexModels?: AiEngineCliModelOption[];
     codexEfforts?: string[];
+    museModels?: AiEngineCliModelOption[];
     adapterAvailability?: Record<string, boolean>;
     cliReady: boolean;
   }>("/api/ai-engine/settings");
@@ -114,6 +119,7 @@ export async function loadAiEngineSettings() {
   aiEngineCliReady = Boolean(result.cliReady);
   aiEngineCodexModels = result.codexModels || [];
   aiEngineCodexEfforts = result.codexEfforts || [];
+  aiEngineMuseModels = result.museModels || [];
   aiEngineAdapterAvailability = result.adapterAvailability || {};
   aiEngineSettingsLoaded = true;
   return result;
@@ -136,7 +142,8 @@ function renderAiEngineSettings() {
   if (adapter) adapter.value = aiEngineSettings.cliAdapter;
   aiEngineCliDrafts = {
     workbuddy: { model: aiEngineSettings.cliModel || "", effort: aiEngineSettings.cliEffort || "" },
-    codex: { model: aiEngineSettings.codexModel ?? "gpt-5.6-sol", effort: aiEngineSettings.codexEffort ?? "" }
+    codex: { model: aiEngineSettings.codexModel ?? "gpt-5.6-sol", effort: aiEngineSettings.codexEffort ?? "" },
+    muse: { model: aiEngineSettings.museModel ?? "muse-spark-1.3", effort: "" }
   };
   renderAiEngineCliProfileControls(aiEngineSettings.cliAdapter);
   if (adapter) {
@@ -169,7 +176,7 @@ function renderAiEngineSettings() {
 }
 
 function aiEngineAdapterName(adapter: string) {
-  return adapter === "codex" ? "Codex CLI" : "WorkBuddy CLI";
+  return adapter === "codex" ? "Codex CLI" : adapter === "muse" ? "Muse Code" : "WorkBuddy CLI";
 }
 
 /** 把模型 / 档位下拉框的当前值记进指定 CLI 的草稿 */
@@ -187,6 +194,7 @@ function stashAiEngineCliDraft(adapter: string) {
  */
 function renderAiEngineCliProfileControls(adapter: string) {
   const codex = adapter === "codex";
+  const muse = adapter === "muse";
   const draft = aiEngineCliDrafts[adapter] || { model: "", effort: "" };
   const modelSelect = qs<HTMLSelectElement>("#aiEngineCliModel");
   if (modelSelect) {
@@ -197,10 +205,15 @@ function renderAiEngineCliProfileControls(adapter: string) {
         { id: "", label: "跟随本机 Codex 配置（~/.codex/config.toml）", note: "不传 -m，由本机 Codex 配置里的默认模型执行" },
         ...aiEngineCodexModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
       ]
-      : [
-        { id: "", label: "跟随 CLI 默认（由当前账号决定）", note: "不传 --model，由 CLI 按其当前登录账号的默认模型执行。该默认值会随账号/套餐变化，想要稳定效果请显式指定" },
-        ...aiEngineCliModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
-      ];
+      : muse
+        ? [
+          { id: "", label: "跟随 Muse 账号默认", note: "不传 --model，由 muse CLI 当前登录账号/套餐的默认模型执行" },
+          ...aiEngineMuseModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
+        ]
+        : [
+          { id: "", label: "跟随 CLI 默认（由当前账号决定）", note: "不传 --model，由 CLI 按其当前登录账号的默认模型执行。该默认值会随账号/套餐变化，想要稳定效果请显式指定" },
+          ...aiEngineCliModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
+        ];
     if (draft.model && !modelOptions.some((item) => item.id === draft.model)) {
       modelOptions.push({ id: draft.model, label: `${draft.model}（已保存的自定义模型）`, note: "团队之前保存的模型名" });
     }
@@ -212,11 +225,16 @@ function renderAiEngineCliProfileControls(adapter: string) {
   }
   const effortSelect = qs<HTMLSelectElement>("#aiEngineCliEffort");
   if (effortSelect) {
-    const efforts = codex ? aiEngineCodexEfforts : aiEngineCliEfforts;
-    const effortOptions = [
-      { id: "", label: codex ? "跟随 Codex 默认" : "跟随 CLI 默认" },
-      ...efforts.map((id) => ({ id, label: id }))
-    ];
+    // Muse 只有模型、没有思考档位参数：下拉框置灰并说明，避免用户以为设了会生效
+    effortSelect.closest("label")?.toggleAttribute("hidden", muse);
+    effortSelect.disabled = muse;
+    const efforts = codex ? aiEngineCodexEfforts : muse ? [] : aiEngineCliEfforts;
+    const effortOptions = muse
+      ? [{ id: "", label: "Muse 无思考档位" }]
+      : [
+        { id: "", label: codex ? "跟随 Codex 默认" : "跟随 CLI 默认" },
+        ...efforts.map((id) => ({ id, label: id }))
+      ];
     effortSelect.innerHTML = effortOptions
       .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
       .join("");
@@ -231,23 +249,157 @@ function renderAiEngineCliProfileControls(adapter: string) {
 function renderAiEngineCliStatus(adapter: string) {
   const status = qs<HTMLElement>("#aiEngineCliStatus");
   if (!status) return;
-  const other = adapter === "codex" ? "workbuddy" : "codex";
   const availability = (key: string) => aiEngineAdapterAvailability[key] ?? aiEngineRunners.some((item) => item.online && item.capabilities.includes(key));
-  const preferredReady = availability(adapter);
-  const otherReady = availability(other);
-  const runnerName = aiEngineRunners.find((item) => item.online && item.capabilities.includes(preferredReady ? adapter : other))?.displayName || "";
-  const draft = aiEngineCliDrafts[preferredReady ? adapter : other] || { model: "", effort: "" };
-  const modelLabel = draft.model || ((preferredReady ? adapter : other) === "codex" ? "跟随本机 Codex 配置" : "跟随 CLI 默认（由当前账号决定）");
-  const both = `WorkBuddy CLI ${availability("workbuddy") ? "可用" : "未检测到"} · Codex CLI ${availability("codex") ? "可用" : "未检测到"}`;
-  if (preferredReady) {
+  // 替补顺序与后端一致：WorkBuddy / Codex 互为第一替补，Muse 排在其后
+  const fallbacks = (["workbuddy", "codex", "muse"] as const).filter((item) => item !== adapter);
+  const chosen = availability(adapter) ? adapter : fallbacks.find((item) => availability(item)) || "";
+  const preferredReady = Boolean(chosen);
+  const runnerName = chosen ? aiEngineRunners.find((item) => item.online && item.capabilities.includes(chosen))?.displayName || "" : "";
+  const draft = aiEngineCliDrafts[chosen || adapter] || { model: "", effort: "" };
+  const modelLabel = draft.model
+    || (chosen === "codex" ? "跟随本机 Codex 配置" : chosen === "muse" ? "跟随 Muse 账号默认" : "跟随 CLI 默认（由当前账号决定）");
+  const all = (["workbuddy", "codex", "muse"] as const)
+    .map((item) => `${aiEngineAdapterName(item)} ${availability(item) ? "可用" : "未检测到"}`)
+    .join(" · ");
+  if (preferredReady && chosen === adapter) {
     status.className = "badge green";
-    status.textContent = `已就绪：${aiEngineAdapterName(adapter)} · ${runnerName} · 模型 ${modelLabel}（${both}）`;
-  } else if (otherReady) {
+    status.textContent = `已就绪：${aiEngineAdapterName(adapter)} · ${runnerName} · 模型 ${modelLabel}（${all}）`;
+  } else if (preferredReady) {
     status.className = "badge amber";
-    status.textContent = `没有在线的 ${aiEngineAdapterName(adapter)}，将自动改用 ${aiEngineAdapterName(other)} · ${runnerName} · 模型 ${modelLabel}（${both}）`;
+    status.textContent = `没有在线的 ${aiEngineAdapterName(adapter)}，将自动改用 ${aiEngineAdapterName(chosen)} · ${runnerName} · 模型 ${modelLabel}（${all}）`;
   } else {
     status.className = "badge amber";
-    status.textContent = `未就绪：没有在线的 WorkBuddy CLI 或 Codex CLI，请到「集成中心 · 本地 Runner」配对`;
+    status.textContent = `未就绪：没有在线的 WorkBuddy / Codex / Muse。已有执行机就点下方「检测 CLI 连接并自动配置」排查；新电脑点「新增执行机」，把接入指令发给那台电脑的 WorkBuddy 自动配置`;
+  }
+}
+
+// ── CLI 一键检测与自动配置（2026-11-17 用户明确）──────────────────────────────
+// 痛点：AI 引擎存的 CLI 配置（适配器 / 工作目录 / Runner）和「本机实际能不能跑」是两回事，
+// 链路断开（Runner 进程没跑、CLI 登录过期）时只能去集成中心翻任务日志。
+// 「检测 CLI 连接」= 向执行机发一条最小探针任务（不调用任何工具，120 秒超时），
+// 按任务终态判定链路健康；成功时把适配器 / 工作目录 / 执行机自动对齐到实测可用组合并保存。
+// 「新增执行机」= 复用集成中心的配对码流程，把另一台电脑一条命令接入。
+// BS 架构分工：浏览器在哪台电脑打开都行，CLI 任务永远在配对过的执行机上跑。
+
+let aiEngineProbeInFlight = false;
+
+function aiEnginePickProbeRunner(adapter: string): AiEngineRunnerSummary | null {
+  const chosen = aiEngineSettings.runnerId ? aiEngineRunners.find((item) => item.id === aiEngineSettings.runnerId) : null;
+  const pool = [chosen, ...aiEngineRunners].filter(Boolean) as AiEngineRunnerSummary[];
+  return pool.find((item) => item.online && item.capabilities.includes(adapter)) || null;
+}
+
+function aiEngineProbeBadge(state: "pending" | "ok" | "warn" | "error", text: string) {
+  const badge = qs<HTMLElement>("#aiEngineCliProbeResult");
+  if (!badge) return;
+  badge.hidden = false;
+  badge.className = `badge ${state === "ok" ? "green" : state === "warn" ? "amber" : state === "error" ? "red" : ""}`;
+  badge.textContent = text;
+}
+
+export function initAiEngineCliActions() {
+  qs<HTMLButtonElement>("#aiEngineCliProbeButton")?.addEventListener("click", () => void probeAiEngineCli());
+  qs<HTMLButtonElement>("#aiEngineAddRunnerButton")?.addEventListener("click", () => void openAiEngineRunnerPairing());
+}
+
+async function probeAiEngineCli() {
+  if (!teamSystemSettingsCanManage) { toast("只有管理员能操作 CLI 配置", "error"); return; }
+  if (aiEngineProbeInFlight) return;
+  const adapter = qs<HTMLSelectElement>("#aiEngineCliAdapter")?.value || aiEngineSettings.cliAdapter;
+  const runner = aiEnginePickProbeRunner(adapter);
+  const probeButton = qs<HTMLButtonElement>("#aiEngineCliProbeButton");
+  if (!runner) {
+    aiEngineProbeBadge("warn", "没有在线且支持该 CLI 的执行机");
+    toast("没有在线 Runner：在执行机的终端跑 goodjob-runner start，或点「新增执行机」用配对码接入一台电脑", "warn");
+    return;
+  }
+  if (!runner.workspaces.length) {
+    aiEngineProbeBadge("warn", `「${runner.displayName}」没有已授权目录`);
+    toast("该执行机没有已授权目录：重新执行配对命令并带 --workspace 参数", "warn");
+    return;
+  }
+  aiEngineProbeInFlight = true;
+  if (probeButton) { probeButton.disabled = true; probeButton.textContent = "检测中…"; }
+  aiEngineProbeBadge("pending", `正在通过「${runner.displayName}」探测 ${aiEngineAdapterName(adapter)}…`);
+  const startedAt = Date.now();
+  try {
+    const created = (await api<{ data: { id: string } }>("/api/integrations/local-runner-tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        runnerId: runner.id,
+        adapter,
+        prompt: 'Reply ONLY a JSON object: {"ok": true}. Do not use any tools.',
+        workspace: runner.workspaces[0],
+        executionMode: "read_only",
+        timeoutSeconds: 120
+      })
+    })).data;
+    let status = "";
+    let errorMessage = "";
+    while (Date.now() - startedAt < 150_000) {
+      await new Promise((resolve) => window.setTimeout(resolve, 4000));
+      const detail = (await api<{ data: { task: { status: string; errorMessage: string } } }>(
+        `/api/integrations/local-runner-tasks/${encodeURIComponent(created.id)}`)).data;
+      status = detail.task.status;
+      errorMessage = detail.task.errorMessage || "";
+      if (["succeeded", "failed", "cancelled"].includes(status)) break;
+    }
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    if (status === "succeeded") {
+      const adapterSelect = qs<HTMLSelectElement>("#aiEngineCliAdapter");
+      const workspaceInput = qs<HTMLInputElement>("#aiEngineCliWorkspace");
+      const runnerSelect = qs<HTMLSelectElement>("#aiEngineRunner");
+      if (adapterSelect) adapterSelect.value = adapter;
+      if (workspaceInput) workspaceInput.value = runner.workspaces[0];
+      if (runnerSelect) runnerSelect.value = runner.id;
+      aiEngineProbeBadge("ok", `检测通过 · ${aiEngineAdapterName(adapter)} · ${runner.displayName} · ${elapsed}s`);
+      toast(`CLI 链路健康（耗时 ${elapsed} 秒）：适配器、工作目录与执行机已自动对齐到实测可用组合并保存`, "success");
+      await saveAiEngineSettings();
+    } else if (status === "failed" && /authentication|required|未登录|登录|login/iu.test(errorMessage)) {
+      aiEngineProbeBadge("error", `CLI 未登录 · ${runner.displayName}`);
+      toast(`CLI 凭据失效：在 ${runner.displayName} 的终端运行 codebuddy 并输入 /login 重新登录（登录态只存本机）`, "error");
+    } else if (["queued", "running", ""].includes(status)) {
+      aiEngineProbeBadge("warn", `执行机没接单 · ${runner.displayName}`);
+      toast(`探针 150 秒无人领取：${runner.displayName} 的 Runner 进程多半没在跑。终端执行 goodjob-runner start（装了 launchd 用 launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner.prod）`, "warn");
+    } else {
+      aiEngineProbeBadge("error", "检测失败");
+      toast(`探针任务失败：${(errorMessage || "未知错误，到集成中心查看任务日志").slice(0, 180)}`, "error");
+    }
+  } catch (error) {
+    aiEngineProbeBadge("error", "检测请求失败");
+    toast(error instanceof Error ? error.message : "探针任务提交失败", "error");
+  } finally {
+    aiEngineProbeInFlight = false;
+    if (probeButton) { probeButton.disabled = false; probeButton.textContent = "检测 CLI 连接并自动配置"; }
+  }
+}
+
+async function openAiEngineRunnerPairing() {
+  try {
+    const result = await api<{ data: { pairingCode: string; expiresAt: string; command: string } }>(
+      "/api/integrations/local-runners/pairings",
+      { method: "POST", body: JSON.stringify({ deviceName: "我的电脑" }) });
+    const pairing = result.data;
+    const server = /--server\s+"([^"]*)"/.exec(pairing.command)?.[1] || "";
+    const instruction = [
+      "请把这台电脑配置成 GoodJob CRM 的执行机（Runner）并完成配对：",
+      `服务器地址：${server}`,
+      `配对码：${pairing.pairingCode}（${new Date(pairing.expiresAt).toLocaleString("zh-CN")} 前有效，只能用一次）`,
+      "",
+      "步骤：拉取/更新 GoodJob 代码仓库 → 在仓库根目录执行 npm install → npm run build --workspace @goodjob/local-runner → npm link --workspace @goodjob/local-runner → 安装 @tencent-ai/codebuddy-code 并引导我完成 /login 登录 → 执行 goodjob-runner pair --server " + server + " --code " + pairing.pairingCode + " --workspace <先问我用哪个目录> → goodjob-runner start 常驻启动 → goodjob-runner doctor 自检。完成后告诉我配对是否成功。"
+    ].join("\n");
+    openModal("让 WorkBuddy 配置这台电脑", `<div class="form-grid">
+      <p>在<b>要接入的那台电脑</b>上打开 WorkBuddy，把下面这段指令整段粘贴发给它——安装 Runner、引导 CLI 登录、执行配对、启动自检全部由它代劳，不用手动敲命令。它执行完会自动出现在「指定 Runner」下拉框，不用刷新。</p>
+      <label>接入指令（整段复制）</label>
+      <pre style="white-space:pre-wrap;word-break:break-all;margin:0;padding:10px;border:1px solid var(--border,#d5d9e0);border-radius:6px;font-size:12px;line-height:1.6;">${escapeHtml(instruction)}</pre>
+      <p class="hint">浏览器在哪台电脑打开都行——CRM 负责存配置、发任务，CLI 任务永远在配对过的执行机上跑；CLI 登录态只存那台电脑，不经过 CRM。WorkBuddy 配置完成后，回到这里点「检测 CLI 连接并自动配置」确认链路。</p>
+    </div>`, `<button class="btn" data-modal-close type="button">关闭</button><button class="btn primary" id="aiEngineCopyPairCommand" type="button">复制接入指令</button>`);
+    document.querySelector<HTMLButtonElement>("#aiEngineCopyPairCommand")?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(instruction);
+      toast("接入指令已复制，去那台电脑粘贴给 WorkBuddy", "success");
+    });
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "配对码创建失败", "error");
   }
 }
 
@@ -264,6 +416,7 @@ export async function saveAiEngineSettings(button?: HTMLButtonElement) {
     cliEffort: aiEngineCliDrafts.workbuddy?.effort ?? aiEngineSettings.cliEffort,
     codexModel: aiEngineCliDrafts.codex?.model ?? aiEngineSettings.codexModel ?? "gpt-5.6-sol",
     codexEffort: aiEngineCliDrafts.codex?.effort ?? aiEngineSettings.codexEffort ?? "",
+    museModel: aiEngineCliDrafts.muse?.model ?? aiEngineSettings.museModel ?? "muse-spark-1.3",
     cliWorkspace: qs<HTMLInputElement>("#aiEngineCliWorkspace")?.value.trim() || "",
     cliTimeoutSeconds: Math.max(1, Math.round(Number(qs<HTMLInputElement>("#aiEngineCliTimeout")?.value || "15") || 15)) * 60,
     runnerId: qs<HTMLSelectElement>("#aiEngineRunner")?.value || ""

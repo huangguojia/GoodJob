@@ -1026,7 +1026,7 @@ export class MysqlIntegrationControlRepository extends MysqlIntegrationRepositor
     const [rows] = await this.controlPool.query<Array<RowDataPacket & { count: number }>>(
       `SELECT COUNT(*) AS count FROM integration_tool_grants
        WHERE tool_snapshot_id=? AND team_id=? AND grant_status='active'
-       AND permission_code=? AND (expires_at IS NULL OR expires_at>NOW(3))
+       AND permission_code=? AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP(3))
        AND ((subject_type='user' AND subject_id=?) OR (subject_type='team' AND subject_id=?))`,
       [tool.id, actor.teamId, tool.permissionCode, actor.id, actor.teamId]
     );
@@ -1210,7 +1210,7 @@ export class MysqlIntegrationControlRepository extends MysqlIntegrationRepositor
          u.auth_version AS current_auth_version,
          (SELECT COUNT(*) FROM integration_tool_grants g WHERE g.tool_snapshot_id=t.id
           AND g.team_id=c.team_id AND g.grant_status='active' AND g.permission_code=t.permission_code
-          AND (g.expires_at IS NULL OR g.expires_at>NOW(3))
+          AND (g.expires_at IS NULL OR g.expires_at>UTC_TIMESTAMP(3))
           AND ((g.subject_type='user' AND g.subject_id=c.actor_id)
             OR (g.subject_type='team' AND g.subject_id=c.team_id))) AS grant_count
          FROM integration_approvals a
@@ -1307,7 +1307,7 @@ export class MysqlIntegrationControlRepository extends MysqlIntegrationRepositor
   async expireApprovals() {
     return transaction(this.controlPool, async (connection) => {
       const [rows] = await connection.query<Array<RowDataPacket & { id: string; call_id: string; owner_id: string; team_id: string }>>(
-        "SELECT id,call_id,owner_id,team_id FROM integration_approvals WHERE approval_status='pending' AND expires_at<=NOW(3) LIMIT 500 FOR UPDATE"
+        "SELECT id,call_id,owner_id,team_id FROM integration_approvals WHERE approval_status='pending' AND expires_at<=UTC_TIMESTAMP(3) LIMIT 500 FOR UPDATE"
       );
       if (!rows.length) return [];
       const ids = rows.map((row) => row.id);

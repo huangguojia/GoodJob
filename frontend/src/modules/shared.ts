@@ -19,7 +19,7 @@ import {
   type ProcurementContext, type Product, type ProspectAssignee, type ProspectPerformance,
   type ProspectQualificationViewApi, type ProspectScheduleApiRecord, type ProspectStrategySuggestion,
   type QuoteHistoryResponse, type Reminder, type Role, type SalesDistillation, type SalesDistillationSource,
-  type SalesPlaybookActivation, type SalesTrainingRun, type Shipment, type Supplier, type SupplierStatus, type Todo,
+  type PackagingPlan, type PackagingPlanScope, type SalesPlaybookActivation, type SalesTrainingRun, type Shipment, type Supplier, type SupplierStatus, type Todo,
   type TradeDocument, type User, type WebsiteOpportunity, type WecomMessage, type WhatsAppBinding,
   type WhatsAppMessage, type WhatsAppModes, type WhatsAppThread
 } from "./models";
@@ -168,12 +168,24 @@ export interface AppState {
   planTaskStatusFilter: "open" | "done" | "cancelled" | "all";
   competitors: Competitor[];
   peers: Peer[];
+  /** 共享池（全公司可见），与 peers（我的同行）分开存，切页签不用重新请求之外的处理 */
+  peersShared: Peer[];
+  peerPoolScope: "mine" | "shared";
+  peerPoolCounts: { mineCount: number; sharedCount: number; sharedByMeCount: number };
+  selectedPeerIds: string[];
   peerSearch: string;
   peerRelationFilter: "all" | PeerRelation | "未标注";
   peerSort: "newest" | "oldest" | "company";
   peerPage: number;
   peerPageSize: number;
   selectedPeerId: string | null;
+  packagingPlans: PackagingPlan[];
+  packagingPlansLoaded: boolean;
+  packagingPlanSearch: string;
+  packagingPlanScopeFilter: "all" | PackagingPlanScope;
+  packagingPlanPage: number;
+  packagingPlanPageSize: number;
+  selectedPackagingPlanIds: string[];
   suppliers: Supplier[];
   suppliersLoaded: boolean;
   supplierSearch: string;
@@ -289,6 +301,7 @@ export const viewLabels: Record<string, string> = {
   leads: "线索",
   customers: "客户",
   suppliers: "供应商",
+  "packaging-plans": "包装方案",
   "customer-pool": "客户公池",
   whatsapp: "即刻沟通",
   "outreach-journey": "发信明细",
@@ -362,6 +375,9 @@ export const aiProviderPresets: Record<string, {
   groq: { label: "Groq", protocol: "openai-compatible", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-70b-versatile", name: "Groq 高速模型" },
   openrouter: { label: "OpenRouter", protocol: "openai-compatible", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", name: "OpenRouter 聚合模型" },
   ollama: { label: "Ollama", protocol: "openai-compatible", baseUrl: "http://127.0.0.1:11434/v1", model: "qwen2.5:7b", name: "本地 Ollama 模型" },
+  // Muse（Meta Model API）：OpenAI 兼容的 Chat Completions / Responses 端点。
+  // 注意：Muse Code 订阅不能用于 API 调用，这条通道要单独开 Model API 的 API Key（按 token 计费）。
+  muse: { label: "Muse（Meta）", protocol: "openai-compatible", baseUrl: "https://api.meta.ai/v1", model: "muse-spark-1.3", name: "Muse Spark 业务模型" },
   custom: { label: "自定义", protocol: "openai-compatible", baseUrl: "https://example.com/v1", model: "your-model-name", name: "自定义兼容模型" }
 };
 

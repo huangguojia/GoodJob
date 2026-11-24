@@ -73,7 +73,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       state.user = null;
       document.body.classList.remove("is-authenticated");
     }
-    throw new Error(body.message || "请求失败");
+    // 把机器码带出去：账号过期（TEAM_EXPIRED）这类状态要按码分别处理，不能一律弹「密码错误」
+    const error = new Error(body.message || "请求失败") as Error & { code?: string; status?: number; retryAfter?: number };
+    error.code = body.code;
+    error.status = response.status;
+    if (body.retryAfter) error.retryAfter = Number(body.retryAfter);
+    throw error;
   }
   return response.json() as Promise<T>;
 }

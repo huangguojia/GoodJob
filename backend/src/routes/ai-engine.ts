@@ -7,7 +7,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { canSeeOwner, hasIamPermission, isPlatformIdentity, requireAuth } from "../auth.js";
-import { AI_ENGINE_ADAPTERS, AI_ENGINE_CLI_EFFORTS, AI_ENGINE_CLI_MODELS, AI_ENGINE_CODEX_EFFORTS, AI_ENGINE_CODEX_MODELS, EMAIL_ENGINE_SOURCES, readTeamAiEngineSettings, RESEARCH_ENGINE_SOURCES, sanitizeTeamAiEngineSettings, writeTeamAiEngineSettings } from "../ai-engine-settings.js";
+import { AI_ENGINE_ADAPTERS, AI_ENGINE_CLI_EFFORTS, AI_ENGINE_CLI_MODELS, AI_ENGINE_CODEX_EFFORTS, AI_ENGINE_CODEX_MODELS, AI_ENGINE_MUSE_MODELS, EMAIL_ENGINE_SOURCES, readTeamAiEngineSettings, RESEARCH_ENGINE_SOURCES, sanitizeTeamAiEngineSettings, writeTeamAiEngineSettings } from "../ai-engine-settings.js";
 import { buildAcquisitionCliPrompt, buildTenderDailyCliPrompt, collectReportedTenderLines, type TenderDailyReport } from "../ai-engine-prompts.js";
 import { type AiEngineJob } from "../ai-engine-jobs.js";
 import { listEngineRunners, waitForEngineCliTask } from "../ai-engine-service.js";
@@ -304,8 +304,11 @@ export function registerAiEngineRoutes(app: Express) {
       // Codex 的模型 / 档位单独一份：两个 CLI 的模型命名互不相通
       codexModels: AI_ENGINE_CODEX_MODELS,
       codexEfforts: AI_ENGINE_CODEX_EFFORTS,
+      // Muse Code（Meta）的模型：muse-spark-1.3 / muse-wonder-1.0
+      museModels: AI_ENGINE_MUSE_MODELS,
       // 首选 CLI 不可用时会自动改用另一个，所以「能执行」= 任一 CLI 在线可用
-      cliReady: runners.some((runner) => runner.online && (runner.capabilities.includes("workbuddy") || runner.capabilities.includes("codex"))),
+      cliReady: runners.some((runner) => runner.online
+        && (runner.capabilities.includes("workbuddy") || runner.capabilities.includes("codex") || runner.capabilities.includes("muse"))),
       // 每个 CLI 当前是否有在线 Runner 可用：设置页据此提示「两个都配了可选 / 只配了一个会自动用它」
       adapterAvailability: Object.fromEntries(AI_ENGINE_ADAPTERS.map((adapter) => [
         adapter,
@@ -322,13 +325,15 @@ export function registerAiEngineRoutes(app: Express) {
     const body = z.object({
       researchSource: z.enum(["crm", "ai", "cli"]).optional(),
       emailSource: z.enum(["template", "ai", "cli"]).optional(),
-      cliAdapter: z.enum(["workbuddy", "codex"]).optional(),
+      cliAdapter: z.enum(["workbuddy", "codex", "muse"]).optional(),
       // 空串 = 跟随 CLI 默认；非白名单值由 sanitizeTeamAiEngineSettings 回落到旧值
       cliModel: z.string().trim().max(60).optional(),
       cliEffort: z.string().trim().max(20).optional(),
       // Codex 模型：空串 = 跟随本机 ~/.codex/config.toml；非法字符由 sanitize 回落到旧值
       codexModel: z.string().trim().max(64).optional(),
       codexEffort: z.string().trim().max(20).optional(),
+      // Muse 模型：空串 = 跟随 Muse 账号默认；非法字符由 sanitize 回落到旧值
+      museModel: z.string().trim().max(64).optional(),
       cliWorkspace: z.string().trim().max(1000).optional(),
       cliTimeoutSeconds: z.number().int().min(60).max(86_400).optional(),
       runnerId: z.string().trim().max(80).optional()

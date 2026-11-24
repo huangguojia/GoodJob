@@ -4,10 +4,13 @@
  * 由 server.ts 拆分而来：代码逐字迁移，注册顺序与拆分前一致。
  * 共享逻辑与全局中间件在 ../server-core.ts。
  */
-import { engineCliProfile, otherAiEngineAdapter, readTeamAiEngineSettings } from "../ai-engine-settings.js";
+import { aiEngineFallbackAdapters, engineCliProfile, readTeamAiEngineSettings, type AiEngineAdapter } from "../ai-engine-settings.js";
 import { applyCliProfileToPrompt } from "../ai-engine-service.js";
 import type { Express } from "express";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
 import { canSeeOwner, requireAuth } from "../auth.js";
 import { callAiModel, extractJsonObject } from "../ai-model-runtime.js";
@@ -284,7 +287,8 @@ const leadSearchSchema = z.object({
   excludeKeywords: z.string().default(""),
   sources: z.array(z.string().trim().min(1).max(64).regex(/^[a-z0-9_]+$/i)).max(64).default([]),
   useAi: z.boolean().default(false),
-  limit: z.number().min(1).max(30).default(12)
+  // 自动流可选每次找 10 / 20 / 30 / 50 家（旧上限 30，Lfind 内部再截到 20，实际常常只回 9 家）
+  limit: z.number().min(1).max(50).default(12)
 });
 
 const lfindSourceSchema = z.object({
@@ -294,37 +298,137 @@ const lfindSourceSchema = z.object({
   fields: z.array(z.string().trim().max(60)).max(20).default([])
 }).passthrough();
 
+/**
+ * CLI 的「来源可信度」用词与后端契约不是一套词汇表：
+ * 单个来源写 official / registry / reputable_directory，整份报告却要求
+ * official_confirmed / multi_source_supported …。模型很自然会把单个来源的词
+ * 直接搬到报告级字段上（2026-11-22 实测 7/20 家写成 registry），
+ * 而 z.enum 一遇到不认识的词就抛错 —— 整份 57KB、20 家公司的结果被一起判死，
+ * 前端只显示「格式不对」，看上去像第一步又崩了。
+ *
+ * 这里的处理原则与 skipped（数字/数组都接受）一致：**能收敛就收敛，不为一个标签丢整批数据。**
+ */
+function lfindAliasKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[\s-]+/gu, "_");
+}
+
+/** 单个来源的可信度 → 契约枚举（未知一律降到 weak，不阻断） */
+function lfindSourceAuthenticity(value: unknown) {
+  const aliases: Record<string, "official" | "registry" | "reputable_directory" | "search_result" | "weak"> = {
+    official: "official",
+    official_website: "official",
+    official_site: "official",
+    company_website: "official",
+    official_confirmed: "official",
+    registry: "registry",
+    registry_record: "registry",
+    government_registry: "registry",
+    official_registry: "registry",
+    companies_house: "registry",
+    government: "registry",
+    reputable_directory: "reputable_directory",
+    directory: "reputable_directory",
+    chamber_of_commerce: "reputable_directory",
+    trade_association: "reputable_directory",
+    search_result: "search_result",
+    search: "search_result",
+    web_search: "search_result",
+    third_party: "search_result",
+    weak: "weak",
+    unknown: "weak"
+  };
+  return aliases[lfindAliasKey(value)] ?? "weak";
+}
+
+/** 报告级可信度 → 契约枚举。registry/official 都算「官方确认」；目录/搜索结果算单来源 */
+function lfindSourceAuthenticityOverall(value: unknown) {
+  const aliases: Record<string, "official_confirmed" | "multi_source_supported" | "single_source_supported" | "weak" | "unknown"> = {
+    official: "official_confirmed",
+    official_confirmed: "official_confirmed",
+    registry: "official_confirmed",
+    official_registry: "official_confirmed",
+    government_registry: "official_confirmed",
+    government: "official_confirmed",
+    multi_source_supported: "multi_source_supported",
+    multi_source: "multi_source_supported",
+    corroborated: "multi_source_supported",
+    multiple_sources: "multi_source_supported",
+    single_source_supported: "single_source_supported",
+    single_source: "single_source_supported",
+    search_result: "single_source_supported",
+    reputable_directory: "single_source_supported",
+    directory: "single_source_supported",
+    weak: "weak",
+    unknown: "unknown"
+  };
+  return aliases[lfindAliasKey(value)] ?? "unknown";
+}
+
 const lfindSearchReportSourceSchema = z.object({
   url: z.string().trim().max(1200).default(""),
   title: z.string().trim().max(300).default(""),
-  authenticity: z.enum(["official", "registry", "reputable_directory", "search_result", "weak"]).default("weak"),
+  authenticity: z.preprocess(lfindSourceAuthenticity, z.enum(["official", "registry", "reputable_directory", "search_result", "weak"]).default("weak")),
   verifiedFields: z.array(z.string().trim().max(60)).max(20).default([]),
   finding: z.string().trim().max(1200).default("")
 }).passthrough();
 
 const lfindSearchReportSchema = z.object({
   summary: z.string().trim().max(1600).default(""),
-  sourceAuthenticity: z.enum(["official_confirmed", "multi_source_supported", "single_source_supported", "weak", "unknown"]).default("unknown"),
+  sourceAuthenticity: z.preprocess(
+    lfindSourceAuthenticityOverall,
+    z.enum(["official_confirmed", "multi_source_supported", "single_source_supported", "weak", "unknown"]).default("unknown")
+  ),
   verifiedFields: z.array(z.string().trim().max(60)).max(30).default([]),
   checkedSources: z.array(lfindSearchReportSourceSchema).max(20).default([]),
   contactFinding: z.object({
-    status: z.enum(["source_confirmed", "missing", "conflicting", "unverified"]).default("unverified"),
+    status: z.preprocess(
+      (value) => {
+        const aliases: Record<string, "source_confirmed" | "missing" | "conflicting" | "unverified"> = {
+          source_confirmed: "source_confirmed",
+          confirmed: "source_confirmed",
+          found: "source_confirmed",
+          verified: "source_confirmed",
+          missing: "missing",
+          not_found: "missing",
+          none: "missing",
+          conflicting: "conflicting",
+          conflict: "conflicting",
+          disputed: "conflicting",
+          unverified: "unverified",
+          unknown: "unverified"
+        };
+        return aliases[lfindAliasKey(value)] ?? "unverified";
+      },
+      z.enum(["source_confirmed", "missing", "conflicting", "unverified"]).default("unverified")
+    ),
     value: z.string().trim().max(320).default(""),
     sourceUrl: z.string().trim().max(1200).default("")
   }).passthrough().default({}),
   nextAction: z.string().trim().max(1000).default("")
 }).passthrough();
 
+/** 数字字段容错："20"、"85%"、20.4 都能收；实在解析不出用兜底值，不阻断整份结果 */
+function lfindNumber(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(String(value ?? "").replace(/[^\d.-]/gu, ""));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function lfindInt(value: unknown, fallback = 0) {
+  return Math.max(0, Math.trunc(lfindNumber(value, fallback)));
+}
+
 export const lfindResultSchema = z.object({
-  version: z.literal("goodjob-lfind-v1").default("goodjob-lfind-v1"),
+  // 契约版本是固定的：模型写成 1.0 / v1 都按同一份结构解析，不为一句话丢整批
+  version: z.preprocess(() => "goodjob-lfind-v1", z.literal("goodjob-lfind-v1").default("goodjob-lfind-v1")),
   summary: z.object({
     target: z.string().trim().max(500).default(""),
     markets: z.array(z.string().trim().max(100)).max(30).default([]),
     products: z.array(z.string().trim().max(120)).max(30).default([]),
     customerType: z.string().trim().max(160).default(""),
-    rawFound: z.number().int().min(0).default(0),
-    accepted: z.number().int().min(0).default(0),
-    skipped: z.number().int().min(0).default(0),
+    rawFound: z.preprocess((value) => lfindInt(value, 0), z.number().int().min(0).default(0)),
+    accepted: z.preprocess((value) => lfindInt(value, 0), z.number().int().min(0).default(0)),
+    skipped: z.preprocess((value) => lfindInt(value, 0), z.number().int().min(0).default(0)),
     noResultReason: z.string().trim().max(1000).default("")
   }).passthrough().default({}),
   opportunities: z.array(z.object({
@@ -335,8 +439,28 @@ export const lfindResultSchema = z.object({
     contact: z.string().trim().max(160).default(""),
     contactInfo: z.string().trim().max(320).default(""),
     description: z.string().trim().max(3000).default(""),
-    confidence: z.number().min(0).max(100).default(55),
-    qualification: z.enum(["worth_following", "review_needed", "low_fit"]).default("review_needed"),
+    confidence: z.preprocess((value) => Math.min(100, Math.max(0, lfindNumber(value, 55))), z.number().default(55)),
+    qualification: z.preprocess(
+      (value) => {
+        const aliases: Record<string, "worth_following" | "review_needed" | "low_fit"> = {
+          worth_following: "worth_following",
+          qualified: "worth_following",
+          high: "worth_following",
+          fit: "worth_following",
+          review_needed: "review_needed",
+          review: "review_needed",
+          needs_review: "review_needed",
+          medium: "review_needed",
+          low_fit: "low_fit",
+          low: "low_fit",
+          not_fit: "low_fit",
+          reject: "low_fit",
+          excluded: "low_fit"
+        };
+        return aliases[lfindAliasKey(value)] ?? "review_needed";
+      },
+      z.enum(["worth_following", "review_needed", "low_fit"]).default("review_needed")
+    ),
     uncertainPoints: z.array(z.string().trim().max(400)).max(12).default([]),
     searchReport: lfindSearchReportSchema.optional(),
     sources: z.array(lfindSourceSchema).max(20).default([])
@@ -375,26 +499,22 @@ function lfindHash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
 
-function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser) {
-  const store = getStore();
-  const customers = store.customers
-    .filter((item) => item.teamId === user.teamId)
-    .slice(0, 300)
-    .map((item) => ({
-      company: item.company,
-      country: item.billingAddress || item.defaultPortDischarge || "",
-      website: item.website || "",
-      email: item.email || ""
-    }));
-  const leads = store.leads
-    .filter((item) => item.teamId === user.teamId)
-    .slice(0, 300)
-    .map((item) => ({
-      company: item.company,
-      country: item.country || "",
-      sourceUrl: item.sourceUrl || "",
-      email: item.email || ""
-    }));
+/**
+ * 搜索目标数量（发给 CLI 的 quantity target）。
+ *
+ * 2026-11-22：查重名录彻底移出提示词。原因是它根本不需要待在对话里 ——
+ *   1) 客户库 / 线索库：结果回来先过 filterExistingCrmOpportunities（域名、邮箱、公司名+国家）；
+ *   2) 历史候选池：persistProviderOpportunities 用 isSameProviderOpportunity 合并证据，不新增重复行。
+ * 两处都是确定性规则，不依赖模型"自觉跳过"。名录唯一的旧作用是省 CLI 的搜索预算，
+ * 代价却是把 2 万～3.5 万字符塞进每次对话（2026-11-22 因此整单被 Runner 拒掉）。
+ * 现在改成后端去重，代价是重复率上升，所以把目标量放大 60%（上限 50）来补偿净新增。
+ */
+export function lfindTargetCount(limit: number) {
+  return Math.min(50, Math.max(1, Math.ceil(limit * 1.6)));
+}
+
+export function lfindPrompt(input: z.infer<typeof leadSearchSchema>) {
+  const target = lfindTargetCount(input.limit);
   return [
     "Use $lfind.",
     "Run a GoodJob Lfind public-source overseas B2B prospect discovery task.",
@@ -405,6 +525,7 @@ function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser)
     "- If a search engine blocks you (reCAPTCHA, consent wall, 429), do NOT investigate or repair the browser. Immediately switch to a different engine or query (e.g. Bing, DuckDuckGo, Google with different wording) and continue.",
     "- Spend at most 2 minutes total on browser troubleshooting of any kind. Guard the total budget: finish within 25 minutes and start writing the final JSON by minute 22 at the latest.",
     "- If time runs short, return fewer candidates (even zero) with a valid JSON object and explain in summary/failures. An empty opportunities array with valid schema is a successful outcome; a timeout with no output is not.",
+    `- Quantity target: aim for ${target} accepted candidates. Do not stop after the first handful; keep widening queries (more cities, synonyms, distributor/importer/integrator directories, trade-show exhibitor lists, association member lists) until you reach the target or the time budget. Work in batches and keep the JSON valid at every point.`,
     "",
     "GoodJob search request:",
     JSON.stringify({
@@ -414,11 +535,10 @@ function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser)
       industry: input.industry,
       customerType: input.customerType,
       excludeKeywords: input.excludeKeywords,
-      limit: Math.min(input.limit, 20)
+      limit: target
     }, null, 2),
     "",
-    "Already known CRM records. Skip duplicates by official domain, exact public email, or same company plus country:",
-    JSON.stringify({ customers, leads }, null, 2),
+    "Deduplication is handled downstream by the CRM, not by you. Report every company that matches the request above and has credible public evidence; do NOT pre-filter against companies you guess may already be in our database, and do NOT shorten the list to avoid duplicates. The CRM will match your results against its customer, lead, and earlier-candidate records by official domain, public email, and company name plus country, then merge or drop the duplicates.",
     "",
     "Quality requirements:",
     "- Keep only overseas companies with credible public source evidence.",
@@ -431,7 +551,37 @@ function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser)
   ].join("\n");
 }
 
-async function lfindRunnerPlan(user: SessionUser, preferredAdapter: "workbuddy" | "codex" = "workbuddy") {
+/**
+ * Excel 名单导入的识别指令。
+ *
+ * 用户传的表格是任意版式（中英文表头、合并单元格、多个 sheet），交给本机 CLI 读文件后
+ * 输出同一份 goodjob-lfind-v1 契约 —— 后端复用现成的解析、查重、入池与证据合并链路，
+ * 不新增第二套导入格式。
+ */
+function excelImportPrompt(filePath: string, originalName: string) {
+  return [
+    "Use your local tools (python/openpyxl, csv reader, or any available reader) to READ this spreadsheet file:",
+    filePath,
+    `Original file name: ${originalName}`,
+    "",
+    "It is a user-supplied prospect list in an ARBITRARY layout: Chinese or English headers, merged cells, several sheets, extra notes. Read every sheet and every data row.",
+    "Return ONLY the final JSON object following goodjob-lfind-v1. No markdown fences, no explanations after JSON.",
+    "",
+    "Rules:",
+    "- One opportunity per company row. Skip rows without a company name.",
+    "- Map whatever columns mean: company name, country, website, contact person, email, phone/WhatsApp, business/notes. Column order is not fixed; match by header meaning, and fall back to cell shape (e.g. a cell containing @ is an email).",
+    "- contactInfo = all emails / phones / WhatsApp values found in that row, joined by \" | \". contact = contact person name, or the first email when there is no person name.",
+    "- sources: exactly ONE entry per opportunity: {\"url\":\"file://" + filePath.replace(/"/g, "") + "\",\"title\":\"Excel 导入：" + originalName.replace(/"/g, "") + "\",\"evidence\":\"the raw cell text of that row (trimmed)\",\"fields\":[only the fields actually present, e.g. \"company\",\"email\",\"phone\",\"website\"]}",
+    "- NEVER invent data, never look anything up on the web, never enrich. Use only what the file contains.",
+    "- If the same company appears more than once in the file, merge them into one opportunity.",
+    "- summary: target = the import file name, rawFound = number of data rows read, accepted = opportunities.length, skipped = number of skipped rows.",
+    "- skipped[] entries: {company, reason, detail, sourceUrl:\"\"} for rows without a company name or unreadable rows.",
+    "- confidence: 90 when an email is present, 70 when only phone/WhatsApp, 50 otherwise.",
+    "- If the file cannot be read at all, still return valid JSON with zero opportunities and a failures[] entry explaining the concrete reason."
+  ].join("\n");
+}
+
+async function lfindRunnerPlan(user: SessionUser, preferredAdapter: AiEngineAdapter = "workbuddy") {
   const service = getLocalRunnerService();
   if (!service) return {
     configured: false,
@@ -479,7 +629,8 @@ function lfindEvidenceSnapshot(
   taskId: string,
   opportunity: LfindResult["opportunities"][number],
   source: LfindResult["opportunities"][number]["sources"][number],
-  index: number
+  index: number,
+  providerId = "lfind"
 ): ProviderEvidenceSnapshot {
   const payloadHash = lfindHash({
     company: opportunity.company,
@@ -495,8 +646,8 @@ function lfindEvidenceSnapshot(
     ...(opportunity.contactInfo ? ["contact"] : [])
   ])];
   return {
-    providerId: "lfind",
-    providerRecordId: `lfind:${lfindHash({
+    providerId,
+    providerRecordId: `${providerId}:${lfindHash({
       company: opportunity.company,
       country: opportunity.country,
       website: opportunity.website
@@ -645,19 +796,22 @@ function lfindOpportunitiesFromResult(
   parsed: LfindResult,
   taskId: string,
   user: SessionUser,
-  sourceLabel: string
+  sourceLabel: string,
+  options: { providerId?: string; idPrefix?: string } = {}
 ) {
+  const providerId = options.providerId || "lfind";
+  const idPrefix = options.idPrefix || "lf_lfind";
   return parsed.opportunities.flatMap((item, index): WebsiteOpportunity[] => {
     if (!item.sources.length) return [];
     const website = normalizeWebsite(item.website || "");
     const sourceEvidence = item.sources.map((source, sourceIndex) =>
-      lfindEvidenceSnapshot(taskId, item, source, sourceIndex)
+      lfindEvidenceSnapshot(taskId, item, source, sourceIndex, providerId)
     );
     const uncertain = item.uncertainPoints.length
       ? ` 待复核：${item.uncertainPoints.join("；")}`
       : "";
     return [withProspectVerificationReport({
-      id: `lf_lfind_${lfindHash({ taskId, company: item.company, index }).slice(0, 24)}`,
+      id: `${idPrefix}_${lfindHash({ taskId, company: item.company, index }).slice(0, 24)}`,
       company: item.company,
       business: item.business || "待维护",
       country: item.country || "未知",
@@ -670,7 +824,7 @@ function lfindOpportunitiesFromResult(
       status: "preview",
       createdAt: new Date().toISOString(),
       parseMode: "ai",
-      source: "lfind",
+      source: providerId,
       sourceLabel,
       sourceEvidence,
       extractedContacts: lfindContactEvidence(item, sourceLabel),
@@ -678,6 +832,39 @@ function lfindOpportunitiesFromResult(
       confidence: item.confidence
     })];
   });
+}
+
+/**
+ * 同一个 lfind 任务可能被重复同步（搜客页与自动流页同时轮询、页面刷新后重查）。
+ * 第二次 persist 时，上一轮新增的候选已经存在，全部会变成「未变化」——如果直接按
+ * unchanged 过滤就会返回空，前端会误报「没有候选」。这里按 taskId 缓存第一次算出的
+ * 「本轮有效候选（新增或有新证据）」id，保证同一任务多次同步结果稳定。
+ * 进程重启后缓存丢失属于可接受退化：最多把整批当成有效候选返回一次。
+ */
+const lfindRunCandidateIds = new Map<string, string[]>();
+
+function lfindRunCacheKey(user: SessionUser, taskId: string) {
+  // 带 teamId：taskId 虽随机，但缓存不该跨团队复用（多团队共用一套进程时会串）
+  return `${user.teamId}:${taskId}`;
+}
+
+function lfindRunCandidateIdsFor(
+  user: SessionUser,
+  taskId: string,
+  persistence: ReturnType<typeof persistProviderOpportunities>
+) {
+  const key = lfindRunCacheKey(user, taskId);
+  const cached = lfindRunCandidateIds.get(key);
+  if (cached) return new Set(cached);
+  const ids = persistence.opportunities
+    .filter((item) => !persistence.unchangedIds.has(item.id))
+    .map((item) => item.id);
+  lfindRunCandidateIds.set(key, ids);
+  if (lfindRunCandidateIds.size > 200) {
+    const oldest = lfindRunCandidateIds.keys().next().value;
+    if (oldest) lfindRunCandidateIds.delete(oldest);
+  }
+  return new Set(ids);
 }
 
 async function syncLfindTaskResult(user: SessionUser, taskId: string) {
@@ -737,18 +924,40 @@ async function syncLfindTaskResult(user: SessionUser, taskId: string) {
     existingFilteredCount: existingFilter.skipped.length
   });
   await persistCandidateChanges(store, persistence.opportunities, true);
+  // 只把「本轮新增 / 有新证据」的候选交回前端：历史候选已经背调过、也可能已经写过信，
+  // 再当成本轮候选会把它们重复送进第 2、3 步。查重不再依赖 CLI 看名录，而由这里确定性地拦。
+  const hasCachedRun = lfindRunCandidateIds.has(lfindRunCacheKey(user, taskId));
+  const runCandidateIds = lfindRunCandidateIdsFor(user, taskId, persistence);
+  // 任务完成很久之后的重查（页面刷新 + 后端重启导致缓存丢失）：此时整批都会算「未变化」，
+  // 若仍按 fresh 过滤就会返回空、被前端误报成「没有候选」。这种场景保持旧行为，返回完整列表。
+  const finishedAt = Date.parse(detail.task.finishedAt || "");
+  const isLateResync = !hasCachedRun
+    && Number.isFinite(finishedAt)
+    && finishedAt > 0
+    && Date.now() - finishedAt > 10 * 60_000;
+  const runOpportunities = isLateResync
+    ? persistence.opportunities
+    : persistence.opportunities.filter((item) => runCandidateIds.has(item.id));
+  const duplicateHistory = persistence.opportunities
+    .filter((item) => persistence.unchangedIds.has(item.id))
+    .slice(0, 12)
+    .map((item) => ({
+      company: item.company,
+      reason: "历史候选重复：已合并证据，不再重复背调/写信"
+    }));
   const runId = `lfind_${taskId}`;
-  for (const candidateId of persistence.opportunities.slice(0, 8).map((item) => item.id)) {
+  for (const candidateId of runOpportunities.slice(0, 8).map((item) => item.id)) {
     void scheduleContactEnrichment(user, candidateId, runId);
   }
   return {
     task: detail.task,
     events: detail.events,
     synced: true,
-    opportunities: persistence.opportunities,
+    opportunities: runOpportunities,
     incrementalStats: persistence.incrementalStats,
     skipped: [
       ...existingFilter.skipped,
+      ...duplicateHistory,
       ...parsed.skipped.map((item) => ({
         company: item.company || "未命名候选",
         reason: item.detail || item.reason
@@ -1256,10 +1465,12 @@ export function registerLeadFinderRoutes(app: Express) {
     // 按选中 Runner 实际具备的适配器声明引擎：团队首选的 CLI 优先，没有就用另一个；
     // createTask 不传 adapter 时默认 codex，会在只装 WorkBuddy 的机器上误报「未检测到 CLI」。
     const preferredAdapter = engineSettings.cliAdapter;
-    const adapter = plan.runner.capabilities.includes(preferredAdapter) ? preferredAdapter : otherAiEngineAdapter(preferredAdapter);
+    const adapter: AiEngineAdapter = plan.runner.capabilities.includes(preferredAdapter)
+      ? preferredAdapter
+      : aiEngineFallbackAdapters(preferredAdapter).find((item) => plan.runner!.capabilities.includes(item)) || preferredAdapter;
     const task = await plan.service.createTask(req.user!, {
       runnerId: plan.runner.id,
-      prompt: applyCliProfileToPrompt(lfindPrompt(body, req.user!), engineCliProfile(engineSettings, adapter)),
+      prompt: applyCliProfileToPrompt(lfindPrompt(body), engineCliProfile(engineSettings, adapter)),
       workspace: plan.runner.workspaces[0],
       adapter,
       executionMode: "read_only",
@@ -1283,6 +1494,120 @@ export function registerLeadFinderRoutes(app: Express) {
         suggestion: value.suggestion || "请在集成中心查看任务最终回复，确认返回的是 goodjob-lfind-v1 JSON。"
       });
     }
+  }));
+
+  // ---------------------------------------------------------------------------
+  // Excel 名单导入：任意版式表格 → 本机 CLI 识别 → 走同一套查重/入池链路
+  // 用户场景：自动流第 1 步跑完后，把自己整理的名单（Excel/CSV）并进本轮，
+  // 与搜出来的公司一起进入背调、写信。
+  // ---------------------------------------------------------------------------
+  const EXCEL_IMPORT_MAX_BYTES = 8 * 1024 * 1024;
+  const excelImportDir = path.join(os.homedir(), ".goodjob-crm", "imports");
+
+  app.post("/api/lead-finder/excel-imports", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({
+      filename: z.string().trim().min(1).max(160),
+      contentBase64: z.string().min(1)
+    }).parse(req.body);
+    const ext = path.extname(body.filename).toLowerCase();
+    if (![".xlsx", ".xls", ".csv"].includes(ext)) {
+      res.status(400).json({ message: "只支持 .xlsx / .xls / .csv 文件" });
+      return;
+    }
+    const buffer = Buffer.from(body.contentBase64, "base64");
+    if (!buffer.length) {
+      res.status(400).json({ message: "文件内容为空" });
+      return;
+    }
+    if (buffer.length > EXCEL_IMPORT_MAX_BYTES) {
+      res.status(413).json({ message: "Excel 文件不能超过 8MB" });
+      return;
+    }
+    const engineSettings = await readTeamAiEngineSettings(req.user!.teamId);
+    const plan = await lfindRunnerPlan(req.user!, engineSettings.cliAdapter);
+    if (!plan.configured || !plan.service || !plan.runner) {
+      res.status(409).json({
+        message: plan.message,
+        errorCode: "LFIND_RUNNER_NOT_CONFIGURED",
+        suggestion: plan.suggestion
+      });
+      return;
+    }
+    const preferredAdapter = engineSettings.cliAdapter;
+    const adapter: AiEngineAdapter = plan.runner.capabilities.includes(preferredAdapter)
+      ? preferredAdapter
+      : aiEngineFallbackAdapters(preferredAdapter).find((item) => plan.runner!.capabilities.includes(item)) || preferredAdapter;
+    await mkdir(excelImportDir, { recursive: true });
+    const storedPath = path.join(excelImportDir, `${Date.now()}-${randomUUID().slice(0, 8)}${ext}`);
+    await writeFile(storedPath, buffer);
+    const task = await plan.service.createTask(req.user!, {
+      runnerId: plan.runner.id,
+      prompt: applyCliProfileToPrompt(excelImportPrompt(storedPath, body.filename), engineCliProfile(engineSettings, adapter)),
+      workspace: plan.runner.workspaces[0],
+      adapter,
+      executionMode: "read_only",
+      timeoutSeconds: 900
+    });
+    res.status(201).json({
+      task,
+      filename: body.filename,
+      message: "Excel 已交给本机 CLI 识别，通常几十秒出结果",
+      suggestion: "识别完成后会按域名 / 邮箱 / 公司名自动与候选池查重，重复的合并证据，不新增重复行。"
+    });
+  }));
+
+  app.get("/api/lead-finder/excel-imports/:taskId", requireAuth, asyncRoute(async (req, res) => {
+    const plan = await lfindRunnerPlan(req.user!);
+    if (!plan.service) {
+      res.status(503).json({
+        message: plan.message,
+        errorCode: "LFIND_RUNNER_UNAVAILABLE",
+        suggestion: plan.suggestion
+      });
+      return;
+    }
+    const detail = await plan.service.task(req.user!, req.params.taskId);
+    if (detail.task.status !== "succeeded") {
+      res.json({
+        task: detail.task,
+        events: detail.events,
+        synced: false,
+        opportunities: [] as WebsiteOpportunity[],
+        incrementalStats: null,
+        skipped: [] as Array<{ company: string; reason: string }>,
+        lfind: null as LfindResult | null
+      });
+      return;
+    }
+    const parsed = lfindResultSchema.parse(extractJsonObject(detail.task.resultText));
+    const sourceLabel = `Excel 导入 · ${detail.task.id.slice(-8)}`;
+    // providerId 继续用 lfind 口径：证据记录键与搜客结果一致，同一家公司（含改名换域名场景）
+    // 才能在 isSameProviderOpportunity 里合并；对外来源用 source/sourceLabel 标成 Excel 导入。
+    const rawOpportunities = lfindOpportunitiesFromResult(
+      parsed,
+      detail.task.id,
+      req.user!,
+      sourceLabel,
+      { idPrefix: "lf_excel" }
+    ).map((item) => ({ ...item, source: "excel_import", sourceLabel }));
+    const store = getStore();
+    const existingFilter = filterExistingCrmOpportunities(rawOpportunities, store, req.user!.teamId);
+    await store.reloadProspectCandidates?.();
+    const persistence = persistProviderOpportunities(existingFilter.opportunities, {
+      rawCount: parsed.summary.rawFound || parsed.opportunities.length,
+      deduplicatedCount: 0,
+      existingFilteredCount: existingFilter.skipped.length
+    });
+    await persistCandidateChanges(store, persistence.opportunities, true);
+    res.json({
+      task: detail.task,
+      events: detail.events,
+      synced: true,
+      opportunities: persistence.opportunities,
+      incrementalStats: persistence.incrementalStats,
+      skipped: existingFilter.skipped,
+      lfind: parsed
+    });
   }));
 
   app.post("/api/lead-finder/search", requireAuth, asyncRoute(async (req, res) => {

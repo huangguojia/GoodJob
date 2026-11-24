@@ -62,6 +62,7 @@ if [[ -n "$TRACKING_17TRACK_TOKEN" ]]; then
     || die "17TRACK Token 不能包含空格、引号或反斜杠"
 fi
 
+
 install -d -m 0700 "$SECRETS_DIR" "$STATE_DIR" "$BACKUP_DIR"
 printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$SECRETS_DIR/initial_admin_password"
 unset INITIAL_ADMIN_PASSWORD

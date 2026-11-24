@@ -304,38 +304,77 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
         </ul>
         <small>登录和装包必须在系统 Terminal 里做，网页无法代劳——这是安全边界。</small>
       </div>
-      <p class="hint">配对码在页面显示的时间前有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口，并会自动探测 Codex CLI 与 WorkBuddy CLI。</p>
+      <p class="hint">配对码生成后 30 分钟内有效，只能绑定一台设备；过期不用重开窗口，结果页直接点「重新生成」。Runner 由本机主动连接 CRM，不需要开放本机端口，并会自动探测 Codex CLI 与 WorkBuddy CLI。</p>
     </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="localRunnerPairCreate" type="button">生成配对码</button>`);
     document.querySelector<HTMLButtonElement>("#localRunnerPairCreate")?.addEventListener("click", async (event) => {
       const button = event.currentTarget as HTMLButtonElement;
       button.disabled = true;
       try {
-        const result = await client.createLocalRunnerPairing(document.querySelector<HTMLInputElement>("#localRunnerPairName")?.value.trim() || "我的电脑");
-        dependencies.openModal("在本机完成配对", `<div class="local-runner-pair-result">
-          <span>一次性配对码</span><strong>${escapeHtml(result.pairingCode)}</strong><small>${escapeHtml(formatDate(result.expiresAt))} 前有效</small>
-          <label>① 在已装 Runner 的终端执行（把 /path/to/workspace 换成本机项目绝对路径）</label><code>${escapeHtml(result.command)}</code>
-          <p>② 执行成功后回到本页，设备会自动出现；30 秒内没出现就看终端报错。</p>
+        const deviceName = document.querySelector<HTMLInputElement>("#localRunnerPairName")?.value.trim() || "我的电脑";
+        const result = await client.createLocalRunnerPairing(deviceName);
+        const showResult = (code: { pairingCode: string; expiresAt: string; expiresInSeconds: number; command: string }) => {
+          // 倒计时按服务端给的有效期算，不信浏览器时钟：本机时间偏几分钟也不会把码判错
+          const deadline = Date.now() + Math.max(0, Number(code.expiresInSeconds) || 0) * 1000;
+          dependencies.openModal("在本机完成配对", `<div class="local-runner-pair-result">
+          <span>一次性配对码</span><strong id="localRunnerPairCode">${escapeHtml(code.pairingCode)}</strong>
+          <small id="localRunnerPairTtl" data-state="live"></small>
+          <label>① 在已装 Runner 的终端执行（把 /path/to/workspace 换成本机项目绝对路径）</label><code id="localRunnerPairCommand">${escapeHtml(code.command)}</code>
+          <p>② 执行成功后点「检查设备」；30 秒内没出现就看终端报错。码只能用一个设备，换设备要重新生成。</p>
           <p class="warn">配对只解决「谁来执行」，不解决「能不能执行」：本机 CLI 没登录时任务仍会 401 失败，务必先跑通 <b>codebuddy /login</b>。</p>
-        </div>`, `<button class="btn" data-modal-close type="button">关闭</button><button class="btn" id="localRunnerPairCheck" type="button">我已执行，检查设备</button><button class="btn primary" id="localRunnerCopyCommand" type="button">复制命令</button>`);
-        document.querySelector<HTMLButtonElement>("#localRunnerCopyCommand")?.addEventListener("click", async () => {
-          await navigator.clipboard.writeText(result.command);
-          dependencies.toast("配对命令已复制", "success");
-        });
-        document.querySelector<HTMLButtonElement>("#localRunnerPairCheck")?.addEventListener("click", async (checkEvent) => {
-          const check = checkEvent.currentTarget as HTMLButtonElement;
-          check.disabled = true;
-          const original = check.textContent || "检查设备";
-          check.textContent = "检查中…";
-          await refresh(true);
-          if (runners.length > beforeCount) {
-            dependencies.closeModal();
-            dependencies.toast("配对成功，设备已上线", "success");
-          } else {
-            check.disabled = false;
-            check.textContent = original;
-            dependencies.toast("还没看到新设备：确认终端里命令执行成功、没有报错", "warn");
+        </div>`, `<button class="btn" data-modal-close type="button">关闭</button><button class="btn" id="localRunnerPairRegenerate" type="button">重新生成</button><button class="btn" id="localRunnerPairCheck" type="button">我已执行，检查设备</button><button class="btn primary" id="localRunnerCopyCommand" type="button">复制命令</button>`);
+          const ttl = document.querySelector<HTMLElement>("#localRunnerPairTtl");
+          const clock = () => {
+            if (!ttl || !ttl.isConnected) return false;
+            const left = Math.round((deadline - Date.now()) / 1000);
+            if (left <= 0) {
+              ttl.dataset.state = "expired";
+              ttl.textContent = "已过期：点「重新生成」再拿一个新码（不用关这个窗口）";
+              return false;
+            }
+            ttl.dataset.state = left <= 120 ? "soon" : "live";
+            const minutes = Math.floor(left / 60);
+            const seconds = String(left % 60).padStart(2, "0");
+            ttl.textContent = `只剩 ${minutes}:${seconds}（${formatDate(code.expiresAt)} 到期）`;
+            return true;
+          };
+          if (clock()) {
+            const timer = window.setInterval(() => { if (!clock()) window.clearInterval(timer); }, 1000);
           }
-        });
+          document.querySelector<HTMLButtonElement>("#localRunnerCopyCommand")?.addEventListener("click", async () => {
+            await navigator.clipboard.writeText(code.command);
+            dependencies.toast("配对命令已复制", "success");
+          });
+          document.querySelector<HTMLButtonElement>("#localRunnerPairRegenerate")?.addEventListener("click", async (regenEvent) => {
+            const button = regenEvent.currentTarget as HTMLButtonElement;
+            button.disabled = true;
+            button.textContent = "生成中…";
+            try {
+              const next = await client.createLocalRunnerPairing(deviceName);
+              showResult(next);
+              dependencies.toast("已生成新的配对码，旧码作废", "success");
+            } catch (error) {
+              button.disabled = false;
+              button.textContent = "重新生成";
+              dependencies.toast(error instanceof Error ? error.message : "配对码创建失败", "error");
+            }
+          });
+          document.querySelector<HTMLButtonElement>("#localRunnerPairCheck")?.addEventListener("click", async (checkEvent) => {
+            const check = checkEvent.currentTarget as HTMLButtonElement;
+            check.disabled = true;
+            const original = check.textContent || "检查设备";
+            check.textContent = "检查中…";
+            await refresh(true);
+            if (runners.length > beforeCount) {
+              dependencies.closeModal();
+              dependencies.toast("配对成功，设备已上线", "success");
+            } else {
+              check.disabled = false;
+              check.textContent = original;
+              dependencies.toast("还没看到新设备：确认终端里命令执行成功、没有报错", "warn");
+            }
+          });
+        };
+        showResult(result);
       } catch (error) {
         button.disabled = false;
         dependencies.toast(error instanceof Error ? error.message : "配对码创建失败", "error");

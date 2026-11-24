@@ -23,6 +23,11 @@ import {
   todayDateInput
 } from "./trade-documents";
 import { openOrderDetail } from "./orders";
+import {
+  ensurePackagingPlansLoaded, openPackagingPlanPicker, packagingPlanById, packagingPlanHoverBadge,
+  packagingPlanItemsTable
+} from "./packaging-plans";
+import { packagingPlanSummary } from "./models";
 
 export function renderPipeline(deals: Deal[]) {
   const strip = qs<HTMLElement>("#pipeline .pipeline-strip");
@@ -59,6 +64,7 @@ export function renderPipeline(deals: Deal[]) {
         <span>${escapeHtml(deal.nextAction)}</span>
         <span class="deal-date ${isOverdue ? "overdue" : ""}">${isOverdue ? "已逾期" : "下一动作"} · ${escapeHtml(deal.nextActionAt || "待安排")}</span>
         <span class="deal-doc-status">${hasDocument ? "已关联单据" : "未关联单据"} · 预计成交 ${escapeHtml(deal.expectedCloseAt || "待评估")}</span>
+        ${deal.packagingPlanId ? `<span class="deal-pkg-tag">${packagingPlanHoverBadge(deal.packagingPlanId)}</span>` : ""}
         <div class="deal-foot"><span>${dealMoney(deal.amount, deal.currency)}</span>${badge(deal.stage, deal.stage === "已报价" ? "amber" : "")}</div>
         <div class="deal-actions">
           <button class="btn primary deal-primary-action" data-move-deal>${dealPrimaryAction(deal.stage)}</button>
@@ -1288,6 +1294,9 @@ export function dealEventLabel(type: string) {
   return labels[type] || type;
 }
 
+/** 抽屉「方案库加载完再补渲染」的一次性闸门：防止自我重渲染排成微任务死循环 */
+let dealPlanRetryKey = "";
+
 function openDealDrawer(id: string) {
   if (!id) return;
   state.selectedDealId = id;
@@ -1331,6 +1340,7 @@ function renderDealDrawer(id: string) {
       <div class="section-head"><div><h3>产品明细</h3><span class="subline">${dealItemsOf(deal).length} 项 · ${dealMoney(deal.amount, deal.currency)}</span></div></div>
       ${dealItemsOf(deal).map((item) => `<div class="deal-detail-product-row"><span><b>${escapeHtml(item.product)}</b><small>${escapeHtml(item.model || "型号未填写")}</small></span><span>${item.quantity} × ${dealMoney(item.unitPrice, deal.currency)}</span><strong>${dealMoney(item.quantity * item.unitPrice, deal.currency)}</strong></div>`).join("")}
     </div>
+    ${renderDealPackagingPlan(deal)}
     <div id="dealWinGauge"><div style="padding:12px;text-align:center;color:var(--muted);font-size:12px;">AI 赢率分析中...</div></div>
     <div class="deal-detail-actions">
       ${deal.stage === "成交" && deal.orderId ? `<button class="btn primary" id="drawerOpenOrderButton">查看订单</button>` : ""}
@@ -1370,7 +1380,73 @@ function renderDealDrawer(id: string) {
   qs("#drawerDuplicateDealButton", drawer)?.addEventListener("click", (event) => void duplicateDeal(deal.id, event.currentTarget as HTMLButtonElement));
   qs("#drawerRestoreDealButton", drawer)?.addEventListener("click", (event) => void restoreDeal(deal.id, event.currentTarget as HTMLButtonElement));
   qs("#drawerDeleteDealButton", drawer)?.addEventListener("click", (event) => void deleteDeal(deal.id, event.currentTarget as HTMLButtonElement));
+  qs("#drawerPickPackagingPlanButton", drawer)?.addEventListener("click", () => openDealPackagingPlanPicker(deal));
+  qs("#drawerClearPackagingPlanButton", drawer)?.addEventListener("click", () => void setDealPackagingPlan(deal.id, ""));
+  // 方案库若还没到（抽屉可能先于接口返回渲染），到手后补渲染一次。
+  // 必须判「加载前」再加 .then：loadPackagingPlans 命中缓存会立即 resolve，
+  // 无条件挂 .then 就等于每次渲染都排一次自我重渲染，微任务永不结束 → 页面主线程死锁。
+  // retryKey 保证同一次打开只补一次，加载失败也不会变成重试风暴。
+  const retryKey = `${deal.id}:${deal.packagingPlanId || ""}`;
+  if (!state.packagingPlansLoaded && dealPlanRetryKey !== retryKey) {
+    dealPlanRetryKey = retryKey;
+    void ensurePackagingPlansLoaded().then(() => {
+      if (qs("#dealPackagingPlanBlock") && qs("#dealDrawer")?.classList.contains("open")) renderDealDrawer(deal.id);
+    });
+  }
   void loadDealWinProbability(deal.id);
+}
+
+/** 商机详情里的包装方案区块：未选时给入口，已选时直接摊开明细（抽屉有空间，不必再做悬浮） */
+function renderDealPackagingPlan(deal: Deal) {
+  const plan = packagingPlanById(deal.packagingPlanId);
+  if (!deal.packagingPlanId) {
+    return `<div class="deal-detail-products deal-plan-block" id="dealPackagingPlanBlock">
+      <div class="section-head"><div><h3>包装方案</h3><span class="subline">这一票按什么装箱：件数、净重毛重、外尺寸</span></div>
+        <div class="inline-actions"><button class="btn" id="drawerPickPackagingPlanButton" type="button">选择包装方案</button></div></div>
+      <div class="deal-plan-empty">还没有关联包装方案。选一套方案后，做单据时可以直接带出包装件。</div>
+    </div>`;
+  }
+  if (!plan) {
+    return `<div class="deal-detail-products deal-plan-block" id="dealPackagingPlanBlock">
+      <div class="section-head"><div><h3>包装方案</h3><span class="subline">原方案已删除或无权查看</span></div>
+        <div class="inline-actions"><button class="btn" id="drawerPickPackagingPlanButton" type="button">重新选择</button><button class="btn" id="drawerClearPackagingPlanButton" type="button">解除关联</button></div></div>
+      <div class="deal-plan-empty">该商机记录的方案（${escapeHtml(deal.packagingPlanId)}）已不在方案库里。</div>
+    </div>`;
+  }
+  const stats = packagingPlanSummary(plan);
+  return `<div class="deal-detail-products deal-plan-block" id="dealPackagingPlanBlock">
+    <div class="section-head"><div><h3>包装方案</h3><span class="subline">${escapeHtml(plan.code || "")}${plan.code ? " · " : ""}${stats.packages} 件 · 毛重 ${stats.grossWeightKg} kg · ${stats.volumeCbm} m³</span></div>
+      <div class="inline-actions"><button class="btn" id="drawerPickPackagingPlanButton" type="button">更换</button><button class="btn" id="drawerClearPackagingPlanButton" type="button">解除关联</button></div></div>
+    <div class="deal-plan-name"><b>${escapeHtml(plan.name)}</b>${plan.summary ? `<span>${escapeHtml(plan.summary)}</span>` : ""}</div>
+    ${packagingPlanItemsTable(plan)}
+  </div>`;
+}
+
+function openDealPackagingPlanPicker(deal: Deal) {
+  void ensurePackagingPlansLoaded();
+  openPackagingPlanPicker({
+    selectedId: deal.packagingPlanId || "",
+    title: "为商机选择包装方案",
+    onSelect: (plan) => {
+      if (!plan) return;
+      void setDealPackagingPlan(deal.id, plan.id);
+    }
+  });
+}
+
+async function setDealPackagingPlan(dealId: string, planId: string) {
+  try {
+    const result = await api<{ deal: Deal }>(`/api/deals/${dealId}/packaging-plan`, {
+      method: "PATCH",
+      body: JSON.stringify({ planId })
+    });
+    state.deals = state.deals.map((item) => item.id === result.deal.id ? result.deal : item);
+    toast(planId ? "已关联包装方案" : "已解除包装方案关联");
+    renderPipeline(state.deals);
+    renderDealDrawer(dealId);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "包装方案保存失败", "error");
+  }
 }
 
 async function loadDealWinProbability(dealId: string) {
@@ -1535,12 +1611,53 @@ export function openDealModal(
       <div class="form-field"><label>下一动作日期</label><input id="dealNextActionAtInput" type="date" value="${escapeHtml(editing?.nextActionAt || recommendation?.nextActionAt || defaultFutureDate(2))}"></div>
       <div class="form-field"><label>预计成交日期</label><input id="dealExpectedCloseAtInput" type="date" value="${escapeHtml(editing?.expectedCloseAt || recommendation?.expectedCloseAt || defaultFutureDate(21))}"></div>
       <div class="form-field full"><label>下一步动作</label><input id="dealNextActionInput" value="${escapeHtml(editing?.nextAction || recommendation?.nextAction || "确认采购清单并安排报价")}"></div>
+      <div class="form-field full deal-plan-field">
+        <label>包装方案</label>
+        <input id="dealPackagingPlanInput" type="hidden" value="${escapeHtml(editing?.packagingPlanId || "")}">
+        <div class="deal-plan-picker-row">
+          <span class="deal-plan-picker-name" id="dealPackagingPlanLabel">${escapeHtml(packagingPlanById(editing?.packagingPlanId)?.name || (editing?.packagingPlanId ? "已关联包装方案" : "未选择包装方案"))}</span>
+          <button class="btn" id="dealPickPackagingPlanButton" type="button">选择</button>
+          <button class="btn" id="dealClearPackagingPlanButton" type="button" ${editing?.packagingPlanId ? "" : "hidden"}>清除</button>
+        </div>
+        <small class="form-hint">选中后会在商机详情里摊开包装件明细，做单据时也能直接带出这套装箱方式</small>
+      </div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveDealButton">${editing ? "保存修改" : "保存商机"}</button>`);
   qs<HTMLElement>("#appModal .modal")?.classList.add("deal-editor-modal");
   bindDealCustomerPicker();
   bindDealItemsEditor();
+  bindDealPackagingPlanField();
   qs("#saveDealButton")?.addEventListener("click", () => void saveDeal());
+}
+
+/** 编辑弹窗里的包装方案：隐藏域存 id，按钮开同一个选择器（与详情抽屉同源） */
+function bindDealPackagingPlanField() {
+  const hidden = qs<HTMLInputElement>("#dealPackagingPlanInput");
+  if (!hidden) return;
+  const label = qs<HTMLElement>("#dealPackagingPlanLabel");
+  const clear = qs<HTMLButtonElement>("#dealClearPackagingPlanButton");
+  const sync = () => {
+    const plan = packagingPlanById(hidden.value);
+    if (label) label.textContent = hidden.value ? (plan?.name || "已关联包装方案") : "未选择包装方案";
+    if (clear) clear.hidden = !hidden.value;
+  };
+  qs<HTMLButtonElement>("#dealPickPackagingPlanButton")?.addEventListener("click", () => {
+    openPackagingPlanPicker({
+      selectedId: hidden.value,
+      title: "为商机选择包装方案",
+      onSelect: (plan) => {
+        if (!plan) return;
+        hidden.value = plan.id;
+        sync();
+      }
+    });
+  });
+  qs<HTMLButtonElement>("#dealClearPackagingPlanButton")?.addEventListener("click", () => {
+    hidden.value = "";
+    sync();
+  });
+  sync();
+  void ensurePackagingPlansLoaded().then(sync);
 }
 
 function renderDealItemEditorRow(item: DealItem) {
@@ -1725,6 +1842,7 @@ async function saveDeal() {
       nextAction,
       nextActionAt,
       expectedCloseAt: qs<HTMLInputElement>("#dealExpectedCloseAtInput")?.value || "",
+      packagingPlanId: qs<HTMLInputElement>("#dealPackagingPlanInput")?.value || "",
       ...(!dealId && recommendationId ? { recommendationId } : {})
     })
   });

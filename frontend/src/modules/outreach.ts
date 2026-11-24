@@ -1707,6 +1707,7 @@ function outreachBatchActionButtons(batch: OutreachBatchView): string {
   }
   if (batch.status === "approved") buttons.push(`<button class="btn tiny" data-batch-control="${batch.id}" data-batch-action="pause">暂停</button>`);
   if (batch.status === "paused") buttons.push(`<button class="btn tiny primary" data-batch-control="${batch.id}" data-batch-action="resume">继续</button>`);
+  if (batch.status === "completed") buttons.push(`<button class="btn tiny" data-batch-summary="${batch.id}" title="按实际发件邮箱各生成一份 Excel（客户清单 + 背调 + 开发信原文），寄回该邮箱">发送总结</button>`);
   if (!["completed", "cancelled"].includes(batch.status)) buttons.push(`<button class="btn tiny" data-batch-control="${batch.id}" data-batch-action="cancel">取消批次</button>`);
   return `<div class="head-actions">${buttons.join("")}</div>`;
 }
@@ -1873,6 +1874,10 @@ function renderOutreachBatches() {
     const target = event.currentTarget as HTMLButtonElement;
     void controlOutreachBatch(batchIdOf(target), (target.dataset.batchAction || "cancel") as "pause" | "resume" | "cancel", target);
   }));
+  qsa<HTMLButtonElement>("[data-batch-summary]", listBox).forEach((button) => button.addEventListener("click", (event) => {
+    const target = event.currentTarget as HTMLButtonElement;
+    void sendOutreachBatchSummary(batchIdOf(target), target);
+  }));
   // 二级行：编辑 / 移出 / 恢复 / 开发信过程
   qsa<HTMLButtonElement>("[data-item-edit]", listBox).forEach((button) => button.addEventListener("click", (event) => {
     const target = event.currentTarget as HTMLButtonElement;
@@ -1942,6 +1947,45 @@ async function controlOutreachBatch(batchId: string, action: "approve" | "pause"
   } catch (error) {
     toast(error instanceof Error ? error.message : "操作失败", "error");
     if (button) button.disabled = false;
+  }
+}
+
+/**
+ * 手动生成并发送本批次的总结：每个发件邮箱各一份 Excel（客户清单 / 背调 / 开发信原文），
+ * 用该邮箱的 SMTP 寄回它自己。已成功发过的会跳过；用户坚持重发时才带 force。
+ */
+async function sendOutreachBatchSummary(batchId: string, button: HTMLButtonElement, force = false) {
+  if (!batchId) return;
+  const label = button.textContent || "发送总结";
+  setButtonPending(button, true, label, "生成中…");
+  try {
+    const result = await api<{
+      message: string;
+      sentNow: number;
+      deliveries: Array<{ senderEmail: string; status: string; error?: string }>;
+    }>(`/api/prospect-outreach-batches/${encodeURIComponent(batchId)}/summary${force ? "?force=1" : ""}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    if (!force && result.sentNow === 0 && (result.deliveries || []).some((row) => row.status === "sent")) {
+      setButtonPending(button, false, label, label);
+      if (window.confirm("这批总结已经发过了。要重新生成并再发一次吗？")) {
+        await sendOutreachBatchSummary(batchId, button, true);
+      }
+      return;
+    }
+    const failed = (result.deliveries || []).filter((row) => row.status === "failed");
+    if (failed.length) {
+      const detail = failed.slice(0, 2).map((row) => `${row.senderEmail}：${row.error || "发送失败"}`).join("；");
+      toast(`${result.message}（${detail}）`, "error");
+    } else {
+      toast(result.message || "总结已发送", "success");
+    }
+    await loadOutreachBatches();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "发送总结失败", "error");
+  } finally {
+    setButtonPending(button, false, label, label);
   }
 }
 

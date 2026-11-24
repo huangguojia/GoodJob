@@ -170,13 +170,17 @@ function testVariableTemplatePackage(buffer: Buffer) {
   for (const value of [
     "PI-variable-template",
     "Northstar Test Buyer",
-    "GoodJob Export Limited",
+    // 抬头公司名取单据上的「卖方公司」，档案只补空字段；
+    // 档案里另起的名字不能反过来盖掉用户填的卖方公司。
+    "GoodJob Test Seller",
     "Verification Light",
     "Control Enclosure",
     "Precision Bracket",
     "London",
-    "GOODJOB TEST BANK"
+    // 银行资料同理：单据上填了就以单据为准，档案只补空，不能反过来覆盖
+    "TEST BANK DATA"
   ]) assert.ok(text.includes(value), `generated variable template must contain ${value}`);
+  assert.ok(!text.includes("GoodJob Export Limited"), "档案里的旧公司名不能顶掉单据的卖方公司");
   for (const forbidden of ["{{", "#REF!", "#NAME?", "#VALUE!", "#DIV/0!", "2607-3753", "PT202537", "Nelly Huang", "Römerstrasse"]) {
     assert.ok(!text.includes(forbidden), `generated variable template must not contain ${forbidden}`);
   }
@@ -307,7 +311,7 @@ try {
 
   const letterheadResponse = await request("/api/document-assets/letterheads", admin, {
     method: "POST",
-    body: JSON.stringify({ name: "Export HQ", companyName: "GoodJob Export Limited", address: "88 Harbour Road, Hong Kong", bankInfo: "GOODJOB TEST BANK", logoUrl, logoPlacement: { horizontal: "right", vertical: "bottom", offsetX: -12, offsetY: -8, scale: 125 }, isDefault: true, enabled: true })
+    body: JSON.stringify({ name: "Export HQ", companyName: "GoodJob Test Seller", address: "88 Harbour Road, Hong Kong", bankInfo: "GOODJOB TEST BANK", logoUrl, logoPlacement: { horizontal: "right", vertical: "bottom", offsetX: -12, offsetY: -8, scale: 125 }, isDefault: true, enabled: true })
   });
   assert.equal(letterheadResponse.status, 200);
   const letterhead = (await letterheadResponse.json()).asset;
@@ -435,9 +439,10 @@ try {
   assert.equal(directBytes.subarray(0, 2).toString(), "PK", "download must be a valid XLSX package");
   const directFiles = unzipSync(new Uint8Array(directBytes));
   const directPackage = packageText(directFiles);
-  assert.match(directPackage, /GoodJobLetterheadLogo/u, "an export without a configured logo must use the GoodJob default logo");
-  assert.doesNotMatch(directPackage, /ProtoTech|Spreadsheet123|huawei|VNN\.R9/iu, "default export metadata and XML must be brand-safe");
-  assert.match(strFromU8(directFiles["docProps/core.xml"]), /GoodJob CRM/u, "export metadata must identify GoodJob CRM");
+  assert.ok(!directPackage.includes("LetterheadLogo"), "没配置卖方 Logo 时不能再用系统内置 Logo 顶替");
+  assert.ok(!Object.keys(directFiles).some((filePath) => filePath.startsWith("xl/media/")), "没有 Logo / 印章 / 签名时导出件里不应残留任何内置图片");
+  assert.doesNotMatch(directPackage, /ProtoTech|Spreadsheet123|huawei|VNN\.R9|ECORE|JetWash/iu, "default export metadata and XML must be brand-safe");
+  assert.match(strFromU8(directFiles["docProps/core.xml"]), /GoodJob Test Seller/u, "导出件的文档属性必须用卖方公司名，不能写系统品牌");
 
   const snapshotExport = await request(`/api/trade-documents/${snapshotImageDocument.id}/export-xlsx`, admin, {
     method: "POST",
@@ -445,8 +450,8 @@ try {
   });
   assert.equal(snapshotExport.status, 200, "document item image snapshot must export without a product-library id");
   const snapshotFiles = unzipSync(new Uint8Array(await snapshotExport.arrayBuffer()));
-  assert.match(packageText(snapshotFiles), /GoodJobProduct1/, "snapshot image must be placed in the Excel drawing");
-  assert.ok(Object.keys(snapshotFiles).some((filePath) => filePath.includes("GoodJobProduct1")), "snapshot image media must exist in the Excel package");
+  assert.match(packageText(snapshotFiles), /ProductImage1/, "snapshot image must be placed in the Excel drawing");
+  assert.ok(Object.keys(snapshotFiles).some((filePath) => filePath.includes("ProductImage1")), "snapshot image media must exist in the Excel package");
 
   const templatesResponse = await request("/api/trade-document-templates", admin);
   assert.equal(templatesResponse.status, 200);
@@ -484,10 +489,10 @@ try {
   assert.match(strFromU8(dynamicPackingFiles["xl/workbook.xml"]), /F(?:\$|&#x24;)29/, "packing print area must expand with item rows");
   assert.match(strFromU8(dynamicPackingFiles["xl/workbook.xml"]), /_xlnm\.Print_Titles/, "packing list must repeat its item header on later pages");
   const dynamicPackingDrawing = strFromU8(dynamicPackingFiles["xl/drawings/drawing1.xml"]);
-  assert.match(dynamicPackingDrawing, /GoodJobProduct12/, "packing list must place the 12th product image");
+  assert.match(dynamicPackingDrawing, /ProductImage12/, "packing list must place the 12th product image");
   const dynamicPackingStampAnchor = [...dynamicPackingDrawing.matchAll(/<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/gu)]
     .map((match) => match[0])
-    .find((anchor) => anchor.includes("GoodJobStamp")) || "";
+    .find((anchor) => anchor.includes("Stamp")) || "";
   assert.match(dynamicPackingStampAnchor, /<xdr:row>28<\/xdr:row>/u, "packing stamp must move below expanded item rows");
   if (visualOutput) {
     await mkdir(visualOutput, { recursive: true });
@@ -530,19 +535,19 @@ try {
   const drawing1 = strFromU8(variableFiles["xl/drawings/drawing1.xml"]);
   const drawing2 = strFromU8(variableFiles["xl/drawings/drawing2.xml"]);
   for (const drawing of [drawing1, drawing2]) {
-    assert.match(drawing, /GoodJobLetterheadLogo/);
-    assert.match(drawing, /GoodJobProduct1/);
-    assert.match(drawing, /GoodJobProduct2/);
-    assert.match(drawing, /GoodJobProduct3/);
-    assert.match(drawing, /GoodJobStamp/);
-    assert.match(drawing, /GoodJobSignature/);
-    const stampAnchor = [...drawing.matchAll(/<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/gu)].map((match) => match[0]).find((anchor) => anchor.includes("GoodJobStamp")) || "";
+    assert.match(drawing, /LetterheadLogo/);
+    assert.match(drawing, /ProductImage1/);
+    assert.match(drawing, /ProductImage2/);
+    assert.match(drawing, /ProductImage3/);
+    assert.match(drawing, /Stamp/);
+    assert.match(drawing, /Signature/);
+    const stampAnchor = [...drawing.matchAll(/<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/gu)].map((match) => match[0]).find((anchor) => anchor.includes("Stamp")) || "";
     assert.match(stampAnchor, /<xdr:col>1<\/xdr:col>/u, "custom stamp alignment must change the drawing column");
     assert.match(stampAnchor, /<xdr:ext cx="533400" cy="533400"\/>/u, "75% stamp scale must change the drawing dimensions");
   }
-  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("GoodJobProduct1")), "product image media must exist");
-  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("GoodJobStamp")), "stamp media must exist");
-  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("GoodJobSignature")), "signature media must exist");
+  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("ProductImage1")), "product image media must exist");
+  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("Stamp")), "stamp media must exist");
+  assert.ok(Object.keys(variableFiles).some((filePath) => filePath.includes("Signature")), "signature media must exist");
   if (visualOutput) {
     await mkdir(visualOutput, { recursive: true });
     await writeFile(path.join(visualOutput, "PI-assets-verification.xlsx"), variableBytes);
@@ -619,14 +624,19 @@ try {
       assert.match(packageXml, /Aluminum 6061-T6/, `${testCase.templateId} must export optional Material`);
       assert.match(packageXml, /Black anodized/, `${testCase.templateId} must export optional Finish`);
     }
-    assert.match(packageXml, /GoodJobLetterheadLogo/, `${testCase.templateId} must contain selected letterhead logo`);
-    assert.match(packageXml, /GoodJobStamp/, `${testCase.templateId} must contain selected stamp`);
-    assert.match(packageXml, /GoodJobSignature/, `${testCase.templateId} must contain selected signature`);
-    if (testCase.productImages) assert.match(packageXml, /GoodJobProduct1/, `${testCase.templateId} must contain selected product image`);
-    else assert.ok(!packageXml.includes("GoodJobProduct1"), `${testCase.templateId} must not place products over a template without an image column`);
-    assert.ok(Object.keys(files).some((filePath) => filePath.includes("GoodJobStamp")), `${testCase.templateId} stamp media must exist`);
-    assert.ok(Object.keys(files).some((filePath) => filePath.includes("GoodJobSignature")), `${testCase.templateId} signature media must exist`);
-    if (testCase.productImages) assert.ok(Object.keys(files).some((filePath) => filePath.includes("GoodJobProduct1")), `${testCase.templateId} product media must exist`);
+    assert.match(packageXml, /LetterheadLogo/, `${testCase.templateId} must contain selected letterhead logo`);
+    assert.match(packageXml, /Stamp/, `${testCase.templateId} must contain selected stamp`);
+    assert.match(packageXml, /Signature/, `${testCase.templateId} must contain selected signature`);
+    if (testCase.productImages) assert.match(packageXml, /ProductImage1/, `${testCase.templateId} must contain selected product image`);
+    else assert.ok(!packageXml.includes("ProductImage1"), `${testCase.templateId} must not place products over a template without an image column`);
+    assert.ok(Object.keys(files).some((filePath) => filePath.includes("Stamp")), `${testCase.templateId} stamp media must exist`);
+    assert.ok(Object.keys(files).some((filePath) => filePath.includes("Signature")), `${testCase.templateId} signature media must exist`);
+    if (testCase.productImages) assert.ok(Object.keys(files).some((filePath) => filePath.includes("ProductImage1")), `${testCase.templateId} product media must exist`);
+    Object.keys(files)
+      .filter((filePath) => filePath.startsWith("xl/media/"))
+      .forEach((filePath) => {
+        assert.match(filePath, /^xl\/media\/doc-\d+-/u, `${testCase.templateId} 导出件里不能残留模板内置图片（含参考件 Logo 与示例产品照）: ${filePath}`);
+      });
     assert.ok(files["[Content_Types].xml"]?.length, `${testCase.templateId} package must contain content types`);
     if (visualOutput) {
       await writeFile(path.join(visualOutput, `${testCase.templateId}.xlsx`), xlsxBuffer);

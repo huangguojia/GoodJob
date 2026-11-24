@@ -18,6 +18,7 @@ import { whatsAppEntryAttrs, whatsAppEntryClass } from "./whatsapp";
 import { api, toast } from "./ui";
 import { customerGradeHtml, customerGradeLabel, customerGradeValue, filteredCustomers } from "./leads";
 import { formatDateTime } from "./deals";
+import { formatReminderDisplay } from "./date-time-picker";
 import { bulkDeleteCustomers, openCustomerModal } from "./customer-intake";
 import { type OrdListResponse, openOrderDetail, ordBadge, ordDay, ordIdentity } from "./orders";
 
@@ -67,9 +68,24 @@ function boardSearchMatch(customer: Customer) {
     .some((value) => (value || "").toLowerCase().includes(query));
 }
 
+/**
+ * 「下次跟进」的列表展示：
+ * - 含「逾期」的老数据继续走红色徽标；
+ * - 能解析成时间的（含新日历写入的 `YYYY-MM-DD HH:mm`）换成人话：今天 14:30 / 明天 09:30 / 周三 10:00；
+ * - 解析不了的（「7 天后复购」这类）原样显示。
+ */
+export function customerReminderText(customer: Customer) {
+  return formatReminderDisplay(customer.nextReminder || "") || "待安排";
+}
+
+function customerReminderHtml(customer: Customer) {
+  if (customer.nextReminder && customer.nextReminder.includes("逾期")) return badge(customer.nextReminder, "red");
+  return escapeHtml(customerReminderText(customer));
+}
+
 function customerBoardCardHtml(customer: Customer, key: string) {
   const flag = countryFlag(customer.country);
-  const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
+  const reminder = customerReminderHtml(customer);
   const wonBadge = badge(customerWonLabel(customer), customer.hasWonDeal ? "green" : "gray");
   const pipelineStage = customer.pipelineStage || "暂无活跃商机";
   const pipelineBadge = badge(pipelineStage, pipelineStage === "成交" || pipelineStage === "谈判" ? "green" : pipelineStage === "已报价" ? "amber" : "");
@@ -147,7 +163,7 @@ export function renderCustomers(customers: Customer[]) {
   renderCustomerBulkBar(pageCustomers);
   tbody.innerHTML = pageCustomers.length ? pageCustomers.map((customer) => {
     const checked = state.selectedCustomerIds.includes(customer.id);
-    const reminder = customer.nextReminder.includes("逾期") ? badge(customer.nextReminder, "red") : escapeHtml(customer.nextReminder);
+    const reminder = customerReminderHtml(customer);
     const pipelineStage = customer.pipelineStage || "暂无活跃商机";
     const activeDealCount = customer.activeDealCount || 0;
     const customerWhatsapp = customerContactDetails(customer).whatsapp;
@@ -167,7 +183,7 @@ export function renderCustomers(customers: Customer[]) {
     <article class="customer-mobile-card" data-customer-mobile-id="${escapeHtml(customer.id)}">
       <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(customer.country)}<button type="button" class="customer-name ${(customer.activeDealCount || 0) > 0 ? "has-active-deal" : ""}" data-open-customer="${escapeHtml(customer.id)}">${escapeHtml(customer.company)}</button></span>${badge(customer.pipelineStage || "暂无商机", customer.pipelineStage === "谈判" || customer.pipelineStage === "成交" ? "green" : customer.pipelineStage === "已报价" ? "amber" : "gray")}</span>
       <span>${escapeHtml(customer.country)} · ${escapeHtml(customer.contact)} · ${escapeHtml(customer.ownerName || "未分配")}</span>
-      <span class="customer-mobile-meta"><i>来源 · ${escapeHtml(customer.source || "未登记")}</i><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customerWonLabel(customer)}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customer.nextReminder || "待安排")}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
+      <span class="customer-mobile-meta"><i>来源 · ${escapeHtml(customer.source || "未登记")}</i><i>${customerGradeValue(customer)}级 · ${customerGradeLabel(customerGradeValue(customer))}</i><i>${customerWonLabel(customer)}</i><i>${customer.activeDealCount || 0} 个活跃商机</i><i>${escapeHtml(customerReminderText(customer))}</i><i>${customer.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(customer.lastActivityAt))}` : "暂无跟进"}</i></span>
       <div class="customer-row-actions"><button class="${whatsAppEntryClass(customerContactDetails(customer).whatsapp)}" type="button" data-customer-mobile-whatsapp ${whatsAppEntryAttrs(customerContactDetails(customer).whatsapp)}>WhatsApp</button><button class="btn" type="button" data-customer-mobile-pool>放入公池</button></div>
     </article>`).join("") : `<div class="empty-cell">当前${customerOutcomeLabel()}筛选下暂无客户。</div>`;
   qsa<HTMLElement>("tr", tbody).forEach((row, index) => {

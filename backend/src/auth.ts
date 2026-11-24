@@ -203,7 +203,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
   if (userExpired(user)) {
-    res.status(401).json({ message: "账号已过有效期，请联系管理员续期" });
+    res.status(401).json({ message: "账号已过有效期，请联系管理员续期", code: "TEAM_EXPIRED" });
     return;
   }
   const resolvedDataScope = req.user?.id === user.id ? req.user.iamDataScope : undefined;

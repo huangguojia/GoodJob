@@ -1,6 +1,6 @@
 import { getLocalRunnerService } from "./integrations/integration-runtime.js";
 import type { AiEngineAdapter, TeamAiEngineSettings } from "./ai-engine-settings.js";
-import { aiEngineAdapterLabel, otherAiEngineAdapter } from "./ai-engine-settings.js";
+import { aiEngineAdapterLabel, aiEngineFallbackAdapters, otherAiEngineAdapter } from "./ai-engine-settings.js";
 import { adaptEngineCliPromptForAdapter } from "./ai-engine-prompts.js";
 import type { SessionUser } from "./types.js";
 
@@ -45,8 +45,8 @@ export class EngineUnavailableError extends Error {
   }
 }
 
-function cliVersionOf(runner: { workbuddyVersion: string; codexVersion: string }, adapter: AiEngineAdapter) {
-  return adapter === "workbuddy" ? runner.workbuddyVersion : runner.codexVersion;
+function cliVersionOf(runner: { workbuddyVersion: string; codexVersion: string; museVersion?: string }, adapter: AiEngineAdapter) {
+  return adapter === "workbuddy" ? runner.workbuddyVersion : adapter === "muse" ? runner.museVersion || "" : runner.codexVersion;
 }
 
 /**
@@ -80,12 +80,12 @@ export async function pickEngineRunner(
  * 指定了 runnerId 时仍然只在那台机器上找，不静默换机器。
  */
 export function chooseEngineRunner(
-  runners: Array<{ id: string; ownerId: string; displayName: string; online: boolean; capabilities: string[]; workspaces: string[]; workbuddyVersion: string; codexVersion: string; lastError: string }>,
+  runners: Array<{ id: string; ownerId: string; displayName: string; online: boolean; capabilities: string[]; workspaces: string[]; workbuddyVersion: string; codexVersion: string; museVersion?: string; lastError: string }>,
   actor: SessionUser,
   settings: TeamAiEngineSettings
 ): EngineRunnerChoice {
   const preferredAdapter = settings.cliAdapter;
-  const adapters: AiEngineAdapter[] = [preferredAdapter, otherAiEngineAdapter(preferredAdapter)];
+  const adapters: AiEngineAdapter[] = [preferredAdapter, ...aiEngineFallbackAdapters(preferredAdapter)];
   const label = aiEngineAdapterLabel(preferredAdapter);
   const online = runners.filter((runner) => runner.online);
   const usableFor = (adapter: AiEngineAdapter) => online.filter((runner) => runner.capabilities.includes(adapter));
@@ -169,6 +169,7 @@ export interface EngineRunnerSummary {
   workspaces: string[];
   workbuddyVersion: string;
   codexVersion: string;
+  museVersion: string;
 }
 
 /** 供设置页展示：当前可用（已配对）的本机 Runner 清单 */
@@ -184,7 +185,8 @@ export async function listEngineRunners(actor: SessionUser): Promise<EngineRunne
     capabilities: runner.capabilities,
     workspaces: runner.workspaces,
     workbuddyVersion: runner.workbuddyVersion,
-    codexVersion: runner.codexVersion
+    codexVersion: runner.codexVersion,
+    museVersion: runner.museVersion
   }));
 }
 
@@ -232,6 +234,7 @@ const CLI_TIMEOUT_SIGNATURE = /执行超过|已停止|超时|timed out|timeout/i
 export function classifyEngineCliIssue(message: string, adapter: AiEngineAdapter = "workbuddy"): EngineCliIssue {
   const text = String(message || "").trim();
   if (adapter === "codex") return classifyCodexCliIssue(text);
+  if (adapter === "muse") return classifyMuseCliIssue(text);
   if (CLI_AUTH_SIGNATURE.test(text)) {
     return {
       code: "cli_auth_required",
@@ -261,6 +264,51 @@ export function classifyEngineCliIssue(message: string, adapter: AiEngineAdapter
     title: "本机 CLI 执行失败",
     detail: text ? text.slice(0, 200) : "CLI 没有返回可用的错误信息。",
     command: "可先在终端单独运行 /opt/homebrew/bin/codebuddy 确认 CLI 本身可用，再重试"
+  };
+}
+
+/**
+ * Muse Code 版的故障话术：凭据在 ~/.config/muse（`muse auth set` / `muse login`），
+ * 国内网络还需要能访问 api.meta.ai（GOODJOB_MUSE_PROXY 或系统代理）。
+ */
+function classifyMuseCliIssue(text: string): EngineCliIssue {
+  if (CLI_AUTH_SIGNATURE.test(text) || /api[_ ]?key|401|unauthorized|sign in/iu.test(text)) {
+    return {
+      code: "cli_auth_required",
+      title: "Muse Code 当前登录态不可用",
+      detail: `Muse 报「${text.slice(0, 160)}」。Muse 的凭据在 ~/.config/muse，也可以用 META_API_KEY 环境变量；CRM 只要求这台机器的 muse 能用，不绑定具体账号。`,
+      command: "① 终端执行 muse --version 确认 CLI 可用　② 执行 muse auth set 粘贴 API Key，或在交互式 muse 里输入 /login 走浏览器登录　③ 登录后稍等十几秒再重试（Runner 会自动重新探测）"
+    };
+  }
+  if (CLI_NETWORK_SIGNATURE.test(text) || /meta\.ai|eai_again|getaddrinfo|dns/iu.test(text)) {
+    return {
+      code: "cli_network",
+      title: "Muse Code 联网失败",
+      detail: `Muse 连不上 Meta（${text.slice(0, 160)}）。国内网络下 api.meta.ai / dev.meta.ai 常被 DNS 污染，必须先有可用代理。`,
+      command: "① 终端 curl -I https://api.meta.ai/v1/models 验证连通性　② 给 Runner 配置 GOODJOB_MUSE_PROXY=http://127.0.0.1:<端口>（或系统代理）后重启 Runner　③ 仍不通就换一条能访问 Meta 的网络"
+    };
+  }
+  if (CLI_TIMEOUT_SIGNATURE.test(text)) {
+    return {
+      code: "cli_timeout",
+      title: "Muse Code 执行超时",
+      detail: `${text.slice(0, 160)}。长上下文任务或模型排队时会出现。`,
+      command: "在「AI 引擎设置」里调大 CLI 超时秒数，或把任务拆小重试"
+    };
+  }
+  if (/model/iu.test(text) && /not (found|supported|available)|unknown|invalid|does not exist|不存在|不支持/iu.test(text)) {
+    return {
+      code: "cli_failed",
+      title: "Muse 不认识所选模型",
+      detail: `Muse 报「${text.slice(0, 160)}」。订阅套餐可用的模型与 API 计费可用的模型不完全一样（例如 Wonder Full 只在订阅里）。`,
+      command: "在 muse 交互会话里用 /models 看当前账号可用的模型，再把「AI 引擎设置」里的 Muse 模型改成其中之一，或清空以跟随账号默认"
+    };
+  }
+  return {
+    code: "cli_failed",
+    title: "Muse Code 执行失败",
+    detail: text ? text.slice(0, 200) : "Muse 没有返回可用的错误信息。",
+    command: "先在终端执行 muse exec --json \"reply only {\\\"ok\\\":true}\" 确认 CLI 本身可用，再重试"
   };
 }
 

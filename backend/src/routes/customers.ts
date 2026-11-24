@@ -135,7 +135,7 @@ function customerIntakeCliProfileLine() {
 
 function customerIntakePrompt(
   files: Array<{ name: string; readPath: string; converted?: boolean }>,
-  options: { speedProfile?: boolean; adapter?: "workbuddy" | "codex" } = {}
+  options: { speedProfile?: boolean; adapter?: "workbuddy" | "codex" | "muse" } = {}
 ) {
   const list = files
     .map((file) => `- ${file.readPath}（原始文件名：${file.name}${file.converted ? "，已由 CRM 从 Office 文档转为纯文本" : ""}）`)
@@ -145,7 +145,7 @@ function customerIntakePrompt(
     ...(options.speedProfile ? [customerIntakeCliProfileLine()] : []),
     "你是外贸 CRM 的客户资料录入助手。这是一次**纯文本抽取**任务，不是代码任务。",
     "",
-    ...(options.adapter === "codex"
+    ...(options.adapter !== "workbuddy"
       ? [
         // Codex 没有 Read / Glob / Grep 这些 WorkBuddy 工具名；用不依赖工具名的等价约束
         `请读取下面这${files.length > 1 ? "些" : "个"}由用户上传到本机的文件（只读，不要修改、重命名或删除任何文件）：`,
@@ -501,6 +501,9 @@ export function registerCustomersRoutes(app: Express) {
       billingAddress: z.string().optional().default(""),
       documentContact: z.string().optional().default(""),
       contactRemark: z.string().max(500).optional().default(""),
+      // 下一提醒/下次跟进：前端日历给的是 `YYYY-MM-DD HH:mm`，也允许历史人话与空串（空 = 待安排）。
+      // 以前这里没有这个字段，新建客户一律被写成「明天 10:00」，用户在表单里选的日期被无声丢弃。
+      nextReminder: z.string().trim().max(100).optional().default("明天 10:00"),
       phone: z.string().optional().default(""),
       email: z.string().optional().default(""),
       website: z.string().optional().default(""),
@@ -527,7 +530,6 @@ export function registerCustomersRoutes(app: Express) {
       id: `c_${Date.now()}`,
       ownerId: req.user!.id,
       teamId: req.user!.teamId,
-      nextReminder: "明天 10:00",
       wecomBound: false,
       // lifecycleStatus 由 schema default("open") 提供：新增默认未成交，表单选了已成交则随 body 带入
       wonAt: body.lifecycleStatus === "won" ? now : undefined,
@@ -799,7 +801,7 @@ export function registerCustomersRoutes(app: Express) {
       companyFullName: z.string().trim().max(200).optional(),
       grade: z.enum(["A", "B", "C", "D"]).optional(),
       lifecycleStatus: z.enum(["open", "won"]).optional(),
-      nextReminder: z.string().min(1).optional(),
+      nextReminder: z.string().trim().max(100).optional(),
       wecomBound: z.boolean().optional(),
       billingName: z.string().optional(),
       billingAddress: z.string().optional(),

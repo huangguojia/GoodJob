@@ -13,6 +13,7 @@ import { openCustomerDrawer, renderCustomerDetailPage, renderCustomerDrawer } fr
 import { activeOcrJobId, collectOcrFields, renderOcr } from "./tools";
 import { api, setButtonPending, toast } from "./ui";
 import { customerDocumentName, customerGradeValue, reloadLeads } from "./leads";
+import { bindDateTimeField, dateTimeFieldHtml, defaultReminderValue } from "./date-time-picker";
 
 // ---------------------------------------------------------------------------
 // 新增客户 · 客户资料文件识别（本机 CLI）
@@ -641,7 +642,7 @@ export function openCustomerModal(customer?: Customer) {
       <div class="form-field"><label>国家</label><input id="customerCountryInput" value="${escapeHtml(customer?.country || "")}"></div>
       <div class="form-field full"><label>公司全名（单据 / 资料）</label><input id="customerCompanyFullNameInput" maxlength="200" value="${escapeHtml(customerDocumentName(customer || { company: "" } as Customer))}" placeholder="例如：Nordic Tools International Trading Co., Ltd."><small class="form-hint">报价、合同、发票、装箱单、报关资料优先使用此名称</small></div>
       <div class="form-field full"><label>客户来源</label><input id="customerSourceInput" list="customerSourceOptions" maxlength="120" value="${escapeHtml(customer?.source || (editing ? "" : "手动新增"))}" placeholder="例如 官网询盘、展会、转介绍、Alibaba、LinkedIn"><datalist id="customerSourceOptions"><option value="手动新增"></option><option value="官网询盘"></option><option value="展会"></option><option value="转介绍"></option><option value="Alibaba"></option><option value="LinkedIn"></option><option value="WhatsApp"></option><option value="批量导入"></option><option value="智能获客"></option></datalist></div>
-      <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
+      <div class="form-field full"><label>WhatsApp</label><input id="customerWhatsappInput" inputmode="tel" value="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" data-initial="${escapeHtml(customer?.whatsapp || customer?.whatsappPhone || "")}" placeholder="例如 +49123456789（含国家码）"></div>
       <div class="form-field"><label>微信</label><input id="customerWechatInput" maxlength="100" value="${escapeHtml(customer?.wechat || "")}" placeholder="微信号或绑定手机号"></div>
       <div class="form-field"><label>电话</label><input id="customerPhoneInput" inputmode="tel" value="${escapeHtml(customer?.phone || "")}" placeholder="公司电话或联系人电话"></div>
       <div class="form-field"><label>邮箱</label><input id="customerEmailInput" type="email" value="${escapeHtml(customer?.email || "")}" placeholder="例如 sales@example.com"></div>
@@ -651,7 +652,7 @@ export function openCustomerModal(customer?: Customer) {
       <label class="form-field"><span>客户分级</span><select id="customerGradeInput"><option value="A" ${selectedGrade === "A" ? "selected" : ""}>A · 核心客户</option><option value="B" ${selectedGrade === "B" ? "selected" : ""}>B · 重点客户</option><option value="C" ${selectedGrade === "C" ? "selected" : ""}>C · 常规客户</option><option value="D" ${selectedGrade === "D" ? "selected" : ""}>D · 低优先级</option></select></label>
       <label class="form-field"><span>成交状态</span><select id="customerLifecycleInput"><option value="open" ${customerLifecycle !== "won" ? "selected" : ""}>未成交</option><option value="won" ${customerLifecycle === "won" ? "selected" : ""}>已成交</option></select><small class="form-hint">默认未成交；商机阶段确认为「成交」时这里会自动变为已成交</small></label>
       <div class="form-field"><label>健康度（人工评分）</label><input id="customerHealthInput" type="number" min="0" max="100" value="${customer?.health ?? 72}"></div>
-      <div class="form-field"><label>下一提醒</label><input id="customerReminderInput" value="${escapeHtml(customer?.nextReminder || "")}"></div>
+      <div class="form-field"><label>下一提醒</label>${dateTimeFieldHtml("customerReminderInput", customer?.nextReminder || defaultReminderValue())}<small class="form-hint">点开可选日历与具体时间</small></div>
       <div class="form-field full"><label>账单地址</label><input id="customerBillingAddressInput" value="${escapeHtml(customer?.billingAddress || "")}" placeholder="公司地址、城市、国家"></div>
       <div class="form-field full"><label>单据联系人</label><input id="customerDocumentContactInput" value="${escapeHtml(customer?.documentContact || customer?.contact || "")}" placeholder="联系人 / 邮箱 / 电话"></div>
       <div class="form-field"><label>默认目的港</label><input id="customerPortDischargeInput" value="${escapeHtml(customer?.defaultPortDischarge || "")}" placeholder="例如 Hamburg"></div>
@@ -661,6 +662,7 @@ export function openCustomerModal(customer?: Customer) {
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerButton" data-editing-id="${escapeHtml(customer?.id || "")}">${editing ? "保存修改" : "保存客户"}</button>`, { closeOnBackdrop: false, modalClass: "customer-editor-modal" });
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
   qs("#saveCustomerButton")?.addEventListener("click", () => void saveCustomer());
+  bindDateTimeField(qs<HTMLElement>(".dtp-field .dtp-trigger"), qs<HTMLInputElement>("#customerReminderInput"));
   if (!editing) bindCustomerIntake();
   qs<HTMLInputElement>("#customerCompanyInput")?.focus();
 }
@@ -673,7 +675,12 @@ async function saveCustomer() {
   }
   const saveButton = qs<HTMLButtonElement>("#saveCustomerButton");
   const editingId = saveButton?.dataset.editingId || "";
-  const whatsappInput = qs<HTMLInputElement>("#customerWhatsappInput")?.value.trim() || "";
+  const whatsappField = qs<HTMLInputElement>("#customerWhatsappInput");
+  const whatsappInput = whatsappField?.value.trim() || "";
+  // 打开弹窗时的原始值：编辑时如果号码没被改动，就不提交这个字段。
+  // 这样即使某个账号拿到的客户资料里没有号码（历史缓存、旧接口裁剪），保存其它字段也不会把
+  // 业务员登记过的号码 PATCH 成空串（后端是 Object.assign，空串会直接覆盖）。
+  const whatsappInitial = (whatsappField?.dataset.initial || "").trim();
   const whatsapp = whatsappInput ? normalizeWhatsAppPhone(whatsappInput) : "";
   if (whatsappInput && !whatsapp) {
     toast("WhatsApp 号码需包含国家码，例如 +49123456789", "error");
@@ -685,7 +692,9 @@ async function saveCustomer() {
     companyFullName: qs<HTMLInputElement>("#customerCompanyFullNameInput")?.value.trim() || company,
     contact: qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
     country: qs<HTMLInputElement>("#customerCountryInput")?.value || "未知",
-    whatsapp,
+    // 编辑且号码未改动 → 不提交这个字段，避免把已有号码覆盖成空串；
+    // 新建、主动改号、主动清空（值变了）都照常提交。
+    ...(editingId && whatsappInput === whatsappInitial ? {} : { whatsapp }),
     wechat: qs<HTMLInputElement>("#customerWechatInput")?.value.trim() || "",
     source: qs<HTMLInputElement>("#customerSourceInput")?.value.trim() || (editingId ? "" : "手动新增"),
     phone: qs<HTMLInputElement>("#customerPhoneInput")?.value.trim() || "",
@@ -696,7 +705,7 @@ async function saveCustomer() {
     grade: (qs<HTMLSelectElement>("#customerGradeInput")?.value || "C") as "A" | "B" | "C" | "D",
     lifecycleStatus: (qs<HTMLSelectElement>("#customerLifecycleInput")?.value === "won" ? "won" : "open") as "open" | "won",
     health: Math.max(0, Math.min(100, Number(qs<HTMLInputElement>("#customerHealthInput")?.value || 72))),
-    nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value || "明天 10:00",
+    nextReminder: qs<HTMLInputElement>("#customerReminderInput")?.value.trim() || "",
     billingName: qs<HTMLInputElement>("#customerCompanyFullNameInput")?.value.trim() || company,
     billingAddress: qs<HTMLInputElement>("#customerBillingAddressInput")?.value.trim() || "",
     documentContact: qs<HTMLInputElement>("#customerDocumentContactInput")?.value.trim() || qs<HTMLInputElement>("#customerContactInput")?.value || "待维护",
@@ -771,11 +780,12 @@ export function addFollowRecord(customer: Customer) {
   openModal(`新增跟进 · ${customer.company}`, `
     <div class="form-grid">
       <label class="form-field"><span>跟进方式</span><select id="customerFollowType"><option value="call">电话</option><option value="email">邮件</option><option value="whatsapp">WhatsApp</option><option value="wechat">微信</option><option value="meeting">会议</option><option value="note">备注</option></select></label>
-      <div class="form-field"><label>下次提醒</label><input id="customerFollowNext" value="${escapeHtml(customer.nextReminder || "明天 10:00")}"></div>
+      <div class="form-field"><label>下次提醒</label>${dateTimeFieldHtml("customerFollowNext", customer.nextReminder || defaultReminderValue())}</div>
       <div class="form-field full"><label>沟通结果与下一步</label><textarea id="customerFollowContent" placeholder="记录客户反馈、关键需求、承诺事项与下一动作"></textarea></div>
     </div>
   `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="saveCustomerFollowButton">保存跟进</button>`);
   qs("#saveCustomerFollowButton")?.addEventListener("click", () => void saveCustomerFollow(customer.id));
+  bindDateTimeField(qs<HTMLElement>(".dtp-field .dtp-trigger"), qs<HTMLInputElement>("#customerFollowNext"));
   qs<HTMLTextAreaElement>("#customerFollowContent")?.focus();
 }
 

@@ -106,7 +106,7 @@ function rowToJob(row: AiEngineJobRow): AiEngineJob {
     entityType: row.entity_type,
     entityId: row.entity_id,
     source: row.source as AiEngineJob["source"],
-    adapter: row.adapter === "workbuddy" || row.adapter === "codex" ? row.adapter : "",
+    adapter: row.adapter === "workbuddy" || row.adapter === "codex" || row.adapter === "muse" ? row.adapter : "",
     runnerId: row.runner_id,
     cliTaskId: row.cli_task_id,
     status: row.status === "succeeded" || row.status === "failed" ? row.status : "running",

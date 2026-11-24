@@ -184,6 +184,8 @@ const documentItemSchema = z.object({
   imageUrl: z.string().trim().max(512).optional().default("").refine((value) => !value || /^\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g)$/iu.test(value), "商品图片必须来自本系统"),
   product: z.string().min(1).max(500),
   model: z.string().max(200).optional().default(""),
+  /** 货号（定制C 单据在品名下显示 SKU 小字） */
+  sku: z.string().max(80).optional().default(""),
   material: z.string().max(200).optional().default(""),
   finish: z.string().max(200).optional().default(""),
   hsCode: z.string().max(40).optional().default(""),
@@ -195,6 +197,35 @@ const documentItemSchema = z.object({
   packageCount: z.number().int().nonnegative().default(0)
 });
 
+/** 运输唛头的逐箱包装件。箱子数量不固定，走 JSON 而不是拆列。 */
+const documentPackageSchema = z.object({
+  id: z.string().max(64).optional().default(""),
+  label: z.string().max(200).optional().default(""),
+  contents: z.string().max(300).optional().default(""),
+  model: z.string().max(120).optional().default(""),
+  netWeight: z.number().nonnegative().default(0),
+  grossWeight: z.number().nonnegative().default(0),
+  dimensions: z.string().max(120).optional().default(""),
+  destination: z.string().max(120).optional().default("")
+});
+
+/** 定制C（湛蓝制式）的补充字段：标准字段之外，参考件多出来的几个格子。 */
+const documentTemplateDataSchema = z.object({
+  orderNo: z.string().max(80).optional().default(""),
+  purchaseRef: z.string().max(80).optional().default(""),
+  buyerPhone: z.string().max(120).optional().default(""),
+  buyerEmail: z.string().max(180).optional().default(""),
+  buyerTaxNo: z.string().max(160).optional().default(""),
+  consigneeAddress: z.string().max(4_000).optional().default(""),
+  deliveryTime: z.string().max(200).optional().default(""),
+  depositPercent: z.number().min(0).max(100).optional().default(0),
+  discount: z.number().min(0).optional().default(0),
+  packages: z.array(documentPackageSchema).max(60).optional().default([]),
+  /** 选用的包装方案（仅记 id + 名称快照；包装件本体已逐件落在 packages 里）。 */
+  packagingPlanId: z.string().trim().max(80).optional().default(""),
+  packagingPlanName: z.string().trim().max(200).optional().default("")
+}).optional();
+
 const documentBodySchema = z.object({
   customerId: z.string().trim().max(64).optional().default(""),
   dealId: z.string().trim().max(64).optional().default(""),
@@ -202,8 +233,8 @@ const documentBodySchema = z.object({
   orderId: z.string().trim().max(64).optional().default(""),
   revision: z.coerce.number().int().positive().optional(),
   derivedFromDocumentId: z.string().max(64).optional().default(""),
-  derivedFromType: z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"]).optional(),
-  type: z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"]).default("PI"),
+  derivedFromType: z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"]).optional(),
+  type: z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"]).default("PI"),
   title: z.string().min(1).max(255),
   number: z.string().min(1).max(80),
   issueDate: z.string().min(1).max(40),
@@ -228,7 +259,8 @@ const documentBodySchema = z.object({
   bankInfo: z.string().max(8_000).optional().default(""),
   notes: z.string().max(8_000).optional().default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).optional().default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b"]).default("rose"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b", "custom-c"]).default("rose"),
+  templateData: documentTemplateDataSchema,
   status: z.enum(["draft", "ready", "pending_approval", "approved", "rejected", "exported"]).optional().default("draft"),
   approvalNote: z.string().max(2_000).optional().default(""),
   approvedAt: z.string().max(100).optional(),
@@ -275,13 +307,12 @@ function documentSignatureSnapshot(asset: DocumentSignature) {
 function applyDocumentAssetSelection(document: TradeDocument, user: SessionUser, previous?: TradeDocument) {
   const store = getStore();
   if (document.letterheadId) {
-    if (previous?.letterheadId === document.letterheadId && previous.letterheadSnapshot) {
-      document.letterheadSnapshot = previous.letterheadSnapshot;
-    } else {
-      const asset = store.documentLetterheads.find((item) => item.id === document.letterheadId && item.teamId === user.teamId && item.enabled);
-      if (!asset) throw new Error("所选卖方公司不存在、已停用或不属于当前团队");
-      document.letterheadSnapshot = documentLetterheadSnapshot(asset);
-    }
+    // 每次保存都用档案的当前值刷新快照：档案改了公司名 / 地址 / Logo，单据跟着更新，
+    // 不再留一份改档前的旧抬头（那正是单据上「印着别人公司」的来源）。
+    const asset = store.documentLetterheads.find((item) => item.id === document.letterheadId && item.teamId === user.teamId && item.enabled);
+    if (asset) document.letterheadSnapshot = documentLetterheadSnapshot(asset);
+    else if (previous?.letterheadSnapshot) document.letterheadSnapshot = previous.letterheadSnapshot;
+    else throw new Error("所选卖方公司不存在、已停用或不属于当前团队");
   } else {
     document.letterheadSnapshot = undefined;
   }
@@ -578,9 +609,16 @@ async function advancedDocumentAssets(document: TradeDocument, user: SessionUser
     }
   }
   const compactProductImages = Object.fromEntries(Object.entries(productImages).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => Boolean(entry[1])));
+  // 抬头 Logo 同样取「当前卖方档案」：档案里换了 Logo，历史单据下次导出就跟着换。
+  // 档案被停用、删掉、或者根本不是这家公司的（名称对不上）时，宁可不放 Logo，
+  // 也不把别人家的 Logo 塞到单据上。
+  const letterhead = currentLetterheadForDocument(document);
+  const snapshot = document.letterheadSnapshot;
+  const snapshotBelongsToSeller = Boolean(snapshot) && companyNamesMatch(snapshot!.companyName || "", document.seller);
+  const logoUrl = letterhead?.logoUrl || (snapshotBelongsToSeller ? snapshot!.logoUrl : "") || "";
   return {
-    logo: document.letterheadSnapshot?.logoUrl ? await readLocalAdvancedDocumentImage(document.letterheadSnapshot.logoUrl) : undefined,
-    logoPlacement: normalizeDocumentAssetPlacement(document.letterheadSnapshot?.logoPlacement),
+    logo: logoUrl ? await readLocalAdvancedDocumentImage(logoUrl) : undefined,
+    logoPlacement: normalizeDocumentAssetPlacement(letterhead?.logoPlacement || (snapshotBelongsToSeller ? snapshot!.logoPlacement : undefined)),
     stamp: document.stampSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.stampSnapshot.imageUrl) : undefined,
     stampPlacement: normalizeDocumentAssetPlacement(document.stampSnapshot?.placement),
     signature: document.signatureSnapshot?.imageUrl ? await readLocalAdvancedDocumentImage(document.signatureSnapshot.imageUrl) : undefined,
@@ -688,18 +726,55 @@ async function restoreLegacyImportedDocumentImages(user: SessionUser) {
   return recovery;
 }
 
+/**
+ * 单据抬头一律取「当前卖方」：
+ * 先是单据自己的卖方字段（用户刚在上面看到的公司名），空了才用当前卖方档案补，
+ * 最后才回落到建单时的快照。
+ * 以前这里是快照优先，结果单据上印的还是改档前的旧公司名 / 旧地址，
+ * 看起来就像模板里写死了别人的公司。
+ * 另外，档案名和卖方公司对不上时（单据拷了模板、档案还挂着别人家的资料），
+ * 不拿这份档案的 Logo / 抬头去凑，宁可不放，也不把别人家的东西印上去。
+ */
+function normalizeCompanyName(value: string) {
+  return (value || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gu, " ").trim();
+}
+
+/** 同名或简称包含（"珠海长陆" ↔ "珠海长陆工业自动控制系统股份有限公司"）都算同一家；"ECORE" 和 "JET WASH" 就不算。 */
+function companyNamesMatch(left: string, right: string) {
+  const a = normalizeCompanyName(left);
+  const b = normalizeCompanyName(right);
+  if (!a || !b) return true;
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return shorter.length >= 4 && longer.includes(shorter);
+}
+
+function currentLetterheadForDocument(document: TradeDocument) {
+  if (!document.letterheadId) return undefined;
+  const store = getStore();
+  const candidates = store.documentLetterheads.filter((item) => item.teamId === document.teamId && item.enabled);
+  const selected = candidates.find((item) => item.id === document.letterheadId);
+  if (!selected) return undefined;
+  const seller = (document.seller || "").trim();
+  if (!seller) return selected;
+  if (companyNamesMatch(selected.companyName || "", seller)) return selected;
+  return candidates.find((item) => companyNamesMatch(item.companyName || "", seller));
+}
+
 function documentForAdvancedExcel(document: TradeDocument) {
-  if (!document.letterheadSnapshot) return document;
+  const letterhead = currentLetterheadForDocument(document);
+  const snapshot = document.letterheadSnapshot;
+  const firstFilled = (...values: Array<string | undefined>) => values.map((value) => (value || "").trim()).find(Boolean) || "";
   return {
     ...document,
-    seller: document.letterheadSnapshot.companyName,
-    sellerAddress: document.letterheadSnapshot.address,
-    sellerContact: document.letterheadSnapshot.contact,
-    sellerPhone: document.letterheadSnapshot.phone,
-    sellerEmail: document.letterheadSnapshot.email,
-    sellerWebsite: document.letterheadSnapshot.website,
-    sellerTaxNo: document.letterheadSnapshot.taxNo,
-    bankInfo: document.letterheadSnapshot.bankInfo
+    seller: firstFilled(document.seller, letterhead?.companyName, snapshot?.companyName),
+    sellerAddress: firstFilled(document.sellerAddress, letterhead?.address, snapshot?.address),
+    sellerContact: firstFilled(document.sellerContact, letterhead?.contact, snapshot?.contact),
+    sellerPhone: firstFilled(document.sellerPhone, letterhead?.phone, snapshot?.phone),
+    sellerEmail: firstFilled(document.sellerEmail, letterhead?.email, snapshot?.email),
+    sellerWebsite: firstFilled(document.sellerWebsite, letterhead?.website, snapshot?.website),
+    sellerTaxNo: firstFilled(document.sellerTaxNo, letterhead?.taxNo, snapshot?.taxNo),
+    bankInfo: firstFilled(document.bankInfo, letterhead?.bankInfo, snapshot?.bankInfo)
   };
 }
 
@@ -765,7 +840,7 @@ const documentLetterheadSchema = z.object({
   logoPlacements: z.record(z.string().trim().min(3).max(40), documentAssetPlacementSchema).optional(),
   matchCountries: z.array(z.string().trim().min(1).max(120)).max(50).default([]),
   matchCurrencies: z.array(z.string().trim().regex(/^[A-Z]{3}$/)).max(20).default([]),
-  matchDocumentTypes: z.array(z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"])).max(9).default([]),
+  matchDocumentTypes: z.array(z.enum(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"])).max(9).default([]),
   matchPriority: z.coerce.number().int().min(0).max(100).default(0),
   stampId: z.string().trim().max(64).default(""),
   signatureId: z.string().trim().max(64).default(""),
@@ -816,7 +891,7 @@ const documentDefaultProfileSchema = z.object({
   validityDays: z.coerce.number().int().min(0).max(365).default(0),
   notes: z.string().trim().max(8_000).default(""),
   language: z.enum(["EN", "ES", "RU", "AR", "ZH"]).default("EN"),
-  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b"]).default("rose"),
+  templateStyle: z.enum(["executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b", "custom-c"]).default("rose"),
   letterheadId: z.string().trim().max(64).default(""),
   stampId: z.string().trim().max(64).default(""),
   signatureId: z.string().trim().max(64).default(""),
@@ -1795,7 +1870,7 @@ export function registerTradeDocumentsRoutes(app: Express) {
 
   app.post("/api/trade-documents/:id/convert", requireAuth, asyncRoute(async (req, res) => {
     const targetType = String(req.body?.targetType || "").trim();
-    const allowedTypes = new Set(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"]);
+    const allowedTypes = new Set(["PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"]);
     if (!allowedTypes.has(targetType)) {
       res.status(400).json({ message: "不支持的目标单据类型" });
       return;

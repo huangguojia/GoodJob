@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { browserServiceConfiguration, isBrowserCdpReady, isBrowserMcpReady, isBr
 import { codexCodeModeHost, executeCodexTask, parseCodexCliProfile, resolveCodexBinary } from "./codex-adapter.js";
 import { execFileSync } from "node:child_process";
 import { executeWorkbuddyTask, parseWorkbuddyCliProfile, resolveWorkbuddyBinary, workbuddyProcessEnvironment, workbuddySkillDirs, STRIPPED_ENVIRONMENT_PREFIXES } from "./workbuddy-adapter.js";
+import { buildMuseExecArgs, executeMuseTask, museProcessEnvironment, parseMuseCliProfile, parseMuseEvent, parseMuseExecFlags } from "./muse-adapter.js";
 import { cachedRunnerIdentity, cliDetectionSnapshot, detectRunnerClis, resetRunnerCliCache, runnerCliIssue, runnerIdentity } from "./runner.js";
 
 const root = await mkdtemp(path.join(tmpdir(), "goodjob-runner-test-"));
@@ -403,28 +404,31 @@ let codexProbes = 0;
 let workbuddyProbes = 0;
 const firstDetection = await detectRunnerClis({
   detectCodex: async () => { codexProbes += 1; return "codex 1.0.0"; },
-  detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 2.156.0"; }
+  detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 2.156.0"; },
+  detectMuse: async () => ""
 });
-assert.deepEqual(firstDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0" });
+assert.deepEqual(firstDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0", museVersion: "" });
 await detectRunnerClis({
   detectCodex: async () => { codexProbes += 1; return "codex 9.9.9"; },
-  detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 9.9.9"; }
+  detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 9.9.9"; },
+  detectMuse: async () => ""
 });
 assert.equal(codexProbes, 1, "TTL 内必须复用缓存，不得重复启动 CLI");
 assert.equal(workbuddyProbes, 1, "TTL 内必须复用缓存，不得重复启动 CLI");
 const flakyDetection = await detectRunnerClis({
   force: true,
   detectCodex: async () => { throw new Error("probe timeout"); },
-  detectWorkbuddy: async () => { throw new Error("probe timeout"); }
+  detectWorkbuddy: async () => { throw new Error("probe timeout"); },
+  detectMuse: async () => ""
 });
-assert.deepEqual(flakyDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0" },
+assert.deepEqual(flakyDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0", museVersion: "" },
   "单次探测失败必须保留上一次检测到的版本与能力");
 for (let attempt = 0; attempt < 3; attempt += 1) {
-  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" });
+  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "", detectMuse: async () => "" });
 }
 assert.deepEqual(
-  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" }),
-  { codexVersion: "", workbuddyVersion: "" },
+  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "", detectMuse: async () => "" }),
+  { codexVersion: "", workbuddyVersion: "", museVersion: "" },
   "连续失败达阈值后必须承认 CLI 已不在，不能一直挂着不可用的能力"
 );
 
@@ -438,10 +442,11 @@ const recovered = await detectRunnerClis({
   ttlMs: undefined,
   recoveryTtlMs: 10,
   detectCodex: async () => { recoveryProbes += 1; return "codex 1.0.0"; },
-  detectWorkbuddy: async () => { recoveryProbes += 1; return "codebuddy 2.160.0"; }
+  detectWorkbuddy: async () => { recoveryProbes += 1; return "codebuddy 2.160.0"; },
+  detectMuse: async () => ""
 });
 assert.equal(recoveryProbes, 2, "掉线窗口内必须重新探测，而不是死等 5 分钟 TTL");
-assert.deepEqual(recovered, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.160.0" },
+assert.deepEqual(recovered, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.160.0", museVersion: "" },
   "CLI 一恢复，能力就要立刻回来");
 assert.equal(cliDetectionSnapshot()?.regressedAt, 0, "恢复后必须退出快速重探窗口");
 assert.equal(runnerCliIssue(), "", "CLI 正常时不得上报故障");
@@ -507,5 +512,103 @@ assert.equal(degradedBrowser.service, null, "浏览器端口被占用时必须�
 assert.match(degradedBrowser.error, /已被占用/, "降级原因必须可读，便于在心跳里上报");
 await new Promise<void>((resolve) => occupyingListener.close(() => resolve()));
 
+
+// —— Muse Code（Meta 的 muse CLI）适配器 ——
+// 这台机器上暂时装不了 muse（api.meta.ai 不可达），所以用假 CLI 把「参数拼装 / 事件解析 / 失败路径」
+// 全部离线跑通：真机接入后只需确认 argv 与事件 schema 没变。
+{
+  const museRoot = path.join(root, "muse");
+  await mkdir(museRoot, { recursive: true });
+  const fakeMuse = path.join(museRoot, "fake-muse.mjs");
+  const museInvocation = path.join(museRoot, "invocation.json");
+  await writeFile(fakeMuse, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+const argv = process.argv.slice(2);
+if (argv.includes("--help")) {
+  console.log("Usage: muse exec [options] [prompt]");
+  console.log("  --json               JSONL events on stdout");
+  console.log("  --prompt-file <path> read the prompt from a file");
+  console.log("  --model <id>         choose a model");
+  console.log("  --disable-approval   skip approval prompts");
+  console.log("  --sandbox-network <mode>  proxy-only | restricted | unrestricted");
+  process.exit(0);
+}
+writeFileSync(${JSON.stringify(museInvocation)}, JSON.stringify({ argv, cwd: process.cwd() }));
+console.log(JSON.stringify({ type: "session.started", session_id: "muse_session_1" }));
+console.log(JSON.stringify({ type: "tool_call.started", tool: "web_search", arguments: { query: "brazil weighing distributors" } }));
+console.log(JSON.stringify({ type: "assistant.message", text: "最终答案：候选 3 家" }));
+console.log(JSON.stringify({ type: "run.usage", usage: { input_tokens: 1200, output_tokens: 340 } }));
+process.exit(0);
+`, { mode: 0o755 });
+
+  // 模型标记：只取 model，effort 丢弃；标记行从正文剥掉
+  const museProfile = parseMuseCliProfile('[[gj-cli-options {"model":"muse-wonder-1.0","effort":"high"}]]\n给出结论');
+  assert.equal(museProfile.profile.model, "muse-wonder-1.0");
+  assert.equal(museProfile.prompt, "给出结论");
+  assert.equal(parseMuseCliProfile("没有标记的正文").profile.model, "", "无标记时不传 --model");
+
+  // help 探测：只认 help 里真实出现的开关，避免旧版本因未知参数直接退出
+  const museFlags = parseMuseExecFlags("--json  --model <id>  --disable-approval  --sandbox-network <mode>");
+  assert.equal(museFlags.has("--json"), true);
+  assert.equal(museFlags.has("--prompt-file"), false);
+  const museReadOnly = buildMuseExecArgs({ profile: museProfile.profile, flags: museFlags, executionMode: "read_only", prompt: "x" });
+  assert.deepEqual(museReadOnly, ["exec", "--json", "--disable-approval", "--sandbox-network", "unrestricted", "--model", "muse-wonder-1.0", "x"]);
+  const museMinimal = buildMuseExecArgs({ profile: { model: "muse-spark-1.3" }, flags: new Set<string>(), executionMode: "workspace_write", prompt: "y" });
+  assert.deepEqual(museMinimal, ["exec", "--json", "y"], "help 探不到时退化成最小参数集，不传未知开关");
+
+  // 事件解析：助手文本 / 用量 / 未知事件兜底
+  assert.equal(parseMuseEvent(JSON.stringify({ type: "assistant.message", text: "答案" })).text, "答案");
+  assert.equal(parseMuseEvent(JSON.stringify({ type: "run.usage", usage: { input_tokens: 1, output_tokens: 2 } })).usage?.output_tokens, 2);
+  assert.equal(parseMuseEvent("这不是 JSON").event?.eventType, "output", "非 JSON 行原样入流，不丢信息");
+
+  // 端到端：真 spawn 假 CLI，校验 argv / cwd / 终态文本 / session id
+  const museResult = await executeMuseTask({
+    id: "lrt_muse_test", runnerId: "lrr_test", adapter: "muse", prompt: '[[gj-cli-options {"model":"muse-wonder-1.0"}]]\n写一段开发信',
+    workspace: root, executionMode: "read_only", timeoutSeconds: 30, status: "running"
+  } as never, {
+    allowedWorkspaces: [root],
+    signal: new AbortController().signal,
+    onEvent: async () => undefined,
+    museBinary: fakeMuse
+  });
+  assert.equal(museResult.status, "succeeded");
+  assert.equal(museResult.resultText, "最终答案：候选 3 家");
+  assert.equal(museResult.codexThreadId, "muse_session_1");
+  const museCalls = JSON.parse(await readFile(museInvocation, "utf8")) as { argv: string[]; cwd: string };
+  assert.equal(museCalls.argv.includes("--disable-approval"), true, "headless 必须关审批，否则会卡在 TTY 等待");
+  assert.equal(museCalls.argv[museCalls.argv.length - 1], "写一段开发信", "模型标记行必须从提示词里剥掉");
+  assert.equal(museCalls.cwd, await realpath(root), "任务必须在授权工作目录里执行");
+
+  // 失败路径：未登录 / key 失效要如实回传 stderr
+  const failingMuse = path.join(museRoot, "failing-muse.mjs");
+  await writeFile(failingMuse, `#!/usr/bin/env node
+if (process.argv.includes("--help")) { console.log("--json"); process.exit(0); }
+console.error("401 unauthorized: api key invalid");
+process.exit(1);
+`, { mode: 0o755 });
+  const museFailure = await executeMuseTask({
+    id: "lrt_muse_fail", runnerId: "lrr_test", adapter: "muse", prompt: "x",
+    workspace: root, executionMode: "read_only", timeoutSeconds: 30, status: "running"
+  } as never, {
+    allowedWorkspaces: [root],
+    signal: new AbortController().signal,
+    onEvent: async () => undefined,
+    museBinary: failingMuse
+  });
+  assert.equal(museFailure.status, "failed");
+  assert.match(museFailure.errorMessage, /unauthorized/);
+
+  // 环境：代理保留 + Contributor mode 关闭（客户资料不进训练集）
+  const museEnv = museProcessEnvironment();
+  assert.equal(museEnv.MUSE_CONTRIBUTOR_MODE, "0");
+  assert.ok(String(museEnv.PATH).includes(path.join(process.env.HOME || "", ".local", "bin")));
+  assert.equal(await executeMuseTask({
+    id: "lrt_guard", runnerId: "lrr_test", adapter: "codex", prompt: "x",
+    workspace: root, executionMode: "read_only", timeoutSeconds: 30, status: "running"
+  } as never, {
+    allowedWorkspaces: [root], signal: new AbortController().signal, onEvent: async () => undefined
+  }).then(() => "no-throw", (error: Error) => error.message).then((value) => /只允许执行 Muse/.test(value)), true);
+}
+
 await rm(root, { recursive: true, force: true });
-console.log(JSON.stringify({ ok: true, fakeCodexClosedLoop: true, structuredSpawn: true, browserMcpInjected: true, browserServiceLoopbackOnly: true, liveWorkflowCaptured: true, finalReplyIsLatestMessage: true, completedTurnStopsPromptly: true, workbuddyStreamJson: true, workbuddyPermissionMode: true, workbuddyEnvIsolation: true, workbuddySkillDirsInjected: true, workbuddyFailureSurfaced: true, workbuddyGuards: true, cliDetectionCachedAndSticky: true, browserFailureDegrades: true }, null, 2));
+console.log(JSON.stringify({ ok: true, fakeCodexClosedLoop: true, structuredSpawn: true, browserMcpInjected: true, browserServiceLoopbackOnly: true, liveWorkflowCaptured: true, finalReplyIsLatestMessage: true, completedTurnStopsPromptly: true, workbuddyStreamJson: true, workbuddyPermissionMode: true, workbuddyEnvIsolation: true, workbuddySkillDirsInjected: true, workbuddyFailureSurfaced: true, workbuddyGuards: true, cliDetectionCachedAndSticky: true, browserFailureDegrades: true, museAdapter: true }, null, 2));

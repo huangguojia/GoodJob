@@ -28,11 +28,61 @@ function formatProductDate(value?: string): string {
   return `${y}-${m}-${day}`;
 }
 
+/** 可选数字回填：undefined / null 一律渲染成空串，别把 "undefined" 塞进输入框。 */
+function numText(value?: number | null): string {
+  return value === null || value === undefined || !Number.isFinite(Number(value)) ? "" : String(value);
+}
+
+/** 「1.2×0.8×0.9 m³」这类体积只在三个外箱尺寸都齐时才算，缺一个就不猜。 */
+function cartonVolumeM3(p: { packLength?: number; packWidth?: number; packHeight?: number }): number | null {
+  const { packLength: l, packWidth: w, packHeight: h } = p;
+  if (!l || !w || !h) return null;
+  return (l * w * h) / 1_000_000;
+}
+
+/** 产品卡片上的规格摘要：型号 / 产品尺寸 / 颜色，只挑有值的显示。 */
+function specSummaryHtml(p: Product): string {
+  return [p.model, p.sizeSpec, p.color]
+    .filter((v): v is string => Boolean(v))
+    .map((v) => `<span class="pc-meta-item">${escapeHtml(v)}</span>`)
+    .join("");
+}
+
+/**
+ * 卡片上的包装摘要。塞进 meta 行会把型号和分类徽章挤掉，所以单独压成一行 10.5px 小字，
+ * 放不下就省略号（`title` 里留全文），绝不换行 —— 否则三列布局下每张卡高度都会飘。
+ */
+function packLineHtml(p: Product): string {
+  const bits: string[] = [];
+  if (p.packWeight != null) bits.push(`G.W. ${numText(p.packWeight)}kg`);
+  if (p.netWeight != null) bits.push(`N.W. ${numText(p.netWeight)}kg`);
+  if (p.packLength && p.packWidth && p.packHeight) {
+    bits.push(`${numText(p.packLength)}×${numText(p.packWidth)}×${numText(p.packHeight)}cm`);
+  }
+  if (p.unitsPerCarton != null) bits.push(`${numText(p.unitsPerCarton)}/ctn`);
+  if (!bits.length) return "";
+  const text = bits.join(" · ");
+  return `<p class="pc-spec-line" title="${escapeHtml(text)}">${escapeHtml(text)}</p>`;
+}
+
+/**
+ * 产品图占位。没有图时不再是一块写着「图」的小方块 —— 换成与卡片同高的
+ * 品牌浅底 + 相框图标 + 「暂无图片」，看上去是「留白等图」而不是「坏了」。
+ */
+function thumbPlaceholderHtml(hidden = false): string {
+  return `<div class="product-thumb-placeholder"${hidden ? ` style="display:none"` : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/></svg><span>暂无图片</span></div>`;
+}
+
 function productThumbHtml(imageUrl: string): string {
   if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
-    return `<img class="product-thumb" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><div class="product-thumb-placeholder" style="display:none">图</div>`;
+    return `<img class="product-thumb" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${thumbPlaceholderHtml(true)}`;
   }
-  return `<div class="product-thumb-placeholder">图</div>`;
+  return thumbPlaceholderHtml();
+}
+
+/** 有真图才给图片位描实边，没图时描虚线 —— 图位边框样式跟着数据走，不靠 :has。 */
+function productHasImage(imageUrl: string): boolean {
+  return /^https?:\/\//i.test(imageUrl || "");
 }
 
 export let currentProductVisibleIds: string[] = [];
@@ -254,24 +304,25 @@ function productCardHtml(p: Product): string {
   return `
   <article class="pc-card" data-product-id="${escapeHtml(p.id)}">
     <label class="pc-check"><input type="checkbox" data-select-product ${selected ? "checked" : ""} aria-label="选择 ${escapeHtml(p.nameZh)}"><span></span></label>
-    <div class="pc-thumb">${productThumbHtml(p.imageUrl)}</div>
+    <div class="pc-thumb${productHasImage(p.imageUrl) ? "" : " is-empty"}">${productThumbHtml(p.imageUrl)}</div>
     <div class="pc-card-body">
       <h3 class="pc-name">${escapeHtml(p.nameZh)}</h3>
       ${p.nameEn ? `<p class="pc-name-en">${escapeHtml(p.nameEn)}</p>` : ""}
       <div class="pc-meta">
-        ${p.model ? `<span class="pc-meta-item">${escapeHtml(p.model)}</span>` : ""}
+        ${specSummaryHtml(p)}
         ${p.category ? `<span class="pc-badge">${escapeHtml(p.category)}</span>` : ""}
         ${p.hsCode ? `<span class="pc-hs">HS ${escapeHtml(p.hsCode)}</span>` : ""}
       </div>
+      ${packLineHtml(p)}
       ${tags ? `<div class="pc-tags">${tags}</div>` : ""}
-      <div class="pc-card-foot">
-        <span class="pc-price">${formatNumber(p.price)}<small>${escapeHtml(p.currency)}</small></span>
-        <span class="pc-time">${formatProductDate(p.updatedAt)}</span>
-      </div>
     </div>
-    <div class="pc-card-actions">
-      <button class="pc-iconbtn" data-product-edit="${escapeHtml(p.id)}" type="button">编辑</button>
-      <button class="pc-iconbtn ghost" data-product-duplicate="${escapeHtml(p.id)}" type="button">复制</button>
+    <div class="pc-card-foot">
+      <span class="pc-price">${formatNumber(p.price)}<small>${escapeHtml(p.currency)}</small></span>
+      <time class="pc-time">${formatProductDate(p.updatedAt)}</time>
+      <div class="pc-card-actions">
+        <button class="pc-iconbtn" data-product-edit="${escapeHtml(p.id)}" type="button">编辑</button>
+        <button class="pc-iconbtn ghost" data-product-duplicate="${escapeHtml(p.id)}" type="button">复制</button>
+      </div>
     </div>
   </article>`;
 }
@@ -282,6 +333,20 @@ export function openProductDrawer(p: Product) {
   const scrim = qs<HTMLElement>("#productScrim");
   if (!drawer || !inner) return;
   const tags = (p.tags || []).map((t) => `<span class="pc-tag">${escapeHtml(t)}</span>`).join("") || `<span class="pc-dim">无</span>`;
+  const vol = cartonVolumeM3(p);
+  const cartonDim = p.packLength && p.packWidth && p.packHeight ? `${numText(p.packLength)}×${numText(p.packWidth)}×${numText(p.packHeight)} cm` : "";
+  const nwGw = [p.netWeight != null ? `N.W. ${numText(p.netWeight)} kg` : "", p.packWeight != null ? `G.W. ${numText(p.packWeight)} kg` : ""].filter(Boolean).join(" · ");
+  const ctn = [p.unitsPerCarton != null ? `${numText(p.unitsPerCarton)} pcs/ctn` : "", vol != null ? `${vol.toFixed(3)} m³/ctn` : ""].filter(Boolean).join(" · ");
+  const hasSpec = Boolean(p.sku || p.material || p.color || p.sizeSpec || nwGw || cartonDim || ctn);
+  const specRows = [
+    p.sku ? `<div><dt>SKU / 货号</dt><dd class="pc-mono">${escapeHtml(p.sku)}</dd></div>` : "",
+    p.material ? `<div><dt>材质</dt><dd>${escapeHtml(p.material)}</dd></div>` : "",
+    p.color ? `<div><dt>颜色</dt><dd>${escapeHtml(p.color)}</dd></div>` : "",
+    p.sizeSpec ? `<div><dt>产品尺寸</dt><dd>${escapeHtml(p.sizeSpec)}</dd></div>` : "",
+    nwGw ? `<div><dt>净重 / 毛重</dt><dd class="pc-mono">${nwGw}</dd></div>` : "",
+    cartonDim ? `<div><dt>外箱尺寸</dt><dd class="pc-mono">${cartonDim}</dd></div>` : "",
+    ctn ? `<div><dt>装箱 / 体积</dt><dd class="pc-mono">${ctn}</dd></div>` : ""
+  ].filter(Boolean).join("");
   inner.innerHTML = `
     <header class="pc-drawer-head">
       <div>
@@ -292,7 +357,7 @@ export function openProductDrawer(p: Product) {
       <button class="pc-drawer-close" id="productDrawerClose" type="button" aria-label="关闭">&times;</button>
     </header>
     <div class="pc-drawer-body">
-      <div class="pc-drawer-thumb">${productThumbHtml(p.imageUrl)}</div>
+      <div class="pc-drawer-thumb${productHasImage(p.imageUrl) ? "" : " is-empty"}">${productThumbHtml(p.imageUrl)}</div>
       <dl class="pc-def">
         <div><dt>型号 / 规格</dt><dd>${escapeHtml(p.model) || "—"}</dd></div>
         <div><dt>分类</dt><dd>${escapeHtml(p.category) || "—"}</dd></div>
@@ -301,6 +366,7 @@ export function openProductDrawer(p: Product) {
         <div><dt>HS 编码</dt><dd class="pc-mono">${escapeHtml(p.hsCode) || "—"}</dd></div>
         <div><dt>更新时间</dt><dd>${formatProductDate(p.updatedAt)}</dd></div>
       </dl>
+      ${hasSpec ? `<div class="pc-drawer-sec"><h4>规格与包装</h4><dl class="pc-def">${specRows}</dl></div>` : ""}
       <div class="pc-drawer-sec"><h4>标签</h4><div class="pc-tags">${tags}</div></div>
       ${p.descriptionZh ? `<div class="pc-drawer-sec"><h4>中文描述</h4><p class="pc-desc">${escapeHtml(p.descriptionZh)}</p></div>` : ""}
       ${p.descriptionEn ? `<div class="pc-drawer-sec"><h4>英文描述</h4><p class="pc-desc">${escapeHtml(p.descriptionEn)}</p></div>` : ""}
@@ -352,6 +418,16 @@ export function openProductModal(product?: Product) {
   set("#productCurrency", product?.currency || "USD");
   set("#productHsCode", product?.hsCode || "");
   set("#productTags", (product?.tags || []).join(", "));
+  set("#productSku", product?.sku || "");
+  set("#productMaterial", product?.material || "");
+  set("#productColor", product?.color || "");
+  set("#productSizeSpec", product?.sizeSpec || "");
+  set("#productNetWeight", numText(product?.netWeight));
+  set("#productPackWeight", numText(product?.packWeight));
+  set("#productPackLength", numText(product?.packLength));
+  set("#productPackWidth", numText(product?.packWidth));
+  set("#productPackHeight", numText(product?.packHeight));
+  set("#productUnitsPerCarton", numText(product?.unitsPerCarton));
   set("#productImageUrl", product?.imageUrl || "");
   set("#productDescriptionZh", product?.descriptionZh || "");
   set("#productDescriptionEn", product?.descriptionEn || "");
@@ -375,6 +451,24 @@ export async function saveProduct() {
   if (isNaN(price) || price < 0) { toast("单价需为非负数字", "error"); return; }
   const get = (sel: string) => (qs<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel)?.value || "").trim();
   const tags = get("#productTags").split(",").map((t) => t.trim()).filter(Boolean);
+  // 重量 / 外箱尺寸 / 装箱数：空 → null（明确「清空」），非法 → 拦下。
+  // 传 null 而不是不传，后端才知道是「用户清空了」而不是「这次没改这个字段」。
+  const numFields: Array<[string, string, boolean]> = [
+    ["#productNetWeight", "净重", false],
+    ["#productPackWeight", "毛重", false],
+    ["#productPackLength", "外箱长", false],
+    ["#productPackWidth", "外箱宽", false],
+    ["#productPackHeight", "外箱高", false],
+    ["#productUnitsPerCarton", "每箱装箱数", true]
+  ];
+  const nums: Record<string, number | null> = {};
+  for (const [sel, label, isInteger] of numFields) {
+    const raw = get(sel);
+    if (raw === "") { nums[sel] = null; continue; }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) { toast(`${label}需为不小于 0 的数字`, "error"); return; }
+    nums[sel] = isInteger ? Math.round(n) : n;
+  }
   let imageUrl = get("#productImageUrl");
   const imageFile = qs<HTMLInputElement>("#productImageFile")?.files?.[0];
   if (imageFile) {
@@ -394,6 +488,16 @@ export async function saveProduct() {
     descriptionZh: get("#productDescriptionZh"),
     descriptionEn: get("#productDescriptionEn"),
     tags,
+    sku: get("#productSku"),
+    material: get("#productMaterial"),
+    color: get("#productColor"),
+    sizeSpec: get("#productSizeSpec"),
+    netWeight: nums["#productNetWeight"],
+    packWeight: nums["#productPackWeight"],
+    packLength: nums["#productPackLength"],
+    packWidth: nums["#productPackWidth"],
+    packHeight: nums["#productPackHeight"],
+    unitsPerCarton: nums["#productUnitsPerCarton"],
     imageUrl
   };
   const btn = qs<HTMLButtonElement>("#productSaveButton");

@@ -878,8 +878,20 @@ export function buildDevelopmentEmailFallback(brief: DevelopmentEmailBrief): Dev
 // 7. AI 提示词：把 brief 完整喂进去，并加上硬约束
 // ─────────────────────────────────────────────────────────────
 
+/** 背调里的联系方式、注册号、地址这类信息不进写信素材：信里不该出现，也会诱导模型照抄 */
+const DEVELOPMENT_EMAIL_PRIVATE_FACT = /邮箱|电话|手机|传真|whatsapp|wechat|微信|联系|地址|address|phone|e-?mail|fax|cnpj|vat|税号|注册号|registration|统一社会信用|邮编|zip/iu;
+
+function developmentEmailWritingFacts(facts: Array<{ label: string; value: string }>) {
+  return facts.filter((fact) =>
+    !DEVELOPMENT_EMAIL_PRIVATE_FACT.test(fact.label)
+    && !/@|https?:\/\/|\+?\d[\d\s().-]{7,}\d/.test(fact.value)
+  );
+}
+
 export function buildDevelopmentEmailPrompt(brief: DevelopmentEmailBrief, options: { tone?: string; goal?: string } = {}) {
   const { plan, role, recipient, sender } = brief;
+  // 业务员可以要求更短，但不能更长
+  const wordLimit = Math.min(plan.maxWords, 120);
   return [
     "You write B2B cold/follow-up emails in English for an export salesperson.",
     "Write ONLY in English. Never output Chinese characters anywhere in the subject or body.",
@@ -889,7 +901,11 @@ export function buildDevelopmentEmailPrompt(brief: DevelopmentEmailBrief, option
     // 「千人千面」的硬约束：换掉公司名还能原样发出去的信，等于没有个性化
     "Personalisation is mandatory. In the first two sentences, name at least one concrete detail that is true of THIS recipient only (their product line, application, market or stated need) and comes from the verified research or the personalisation plan below.",
     "If a sentence would still make sense after swapping the company name for another prospect, rewrite it or delete it.",
-    `Hard limits: at most ${plan.maxWords} words, no bullet lists longer than three lines, exactly one call to action.`,
+    `Hard limits: at most ${wordLimit} words in the body (signature not counted), no bullet lists longer than three lines, exactly one call to action. Shorter is better; 3 short paragraphs is the ideal shape.`,
+    // 打痛点：从对方的业务处境出发，而不是从我方产品目录出发
+    "Lead with the recipient's likely pain point: infer ONE concrete operational problem their business faces (from the research: what they sell, who they serve, what their customers demand) and show in one sentence how our product removes it. Do not list multiple products or features.",
+    "The research is private preparation. Never mention that you researched them, never quote scores, verdicts, risks or 'according to our research', and never repeat the recipient's own phone numbers, email addresses, street address, registration/tax numbers or website URLs back to them.",
+    "Do not add our phone numbers or extra links in the body; the signature already carries contact details.",
     "Do not use filler openings such as 'I hope this email finds you well'.",
     "Return JSON only: {\"subject\":\"\",\"body\":\"\",\"factsUsed\":[\"label or short quote of every background fact you actually used\"]} with \\n line breaks inside body.",
     "",
@@ -945,7 +961,7 @@ export function buildDevelopmentEmailPrompt(brief: DevelopmentEmailBrief, option
     JSON.stringify({
       verdict: brief.researchVerdict,
       summary: brief.researchSummary,
-      facts: brief.facts,
+      facts: developmentEmailWritingFacts(brief.facts),
       opportunities: brief.opportunities,
       talkTracks: brief.talkTracks,
       risks: brief.risks,
@@ -953,7 +969,9 @@ export function buildDevelopmentEmailPrompt(brief: DevelopmentEmailBrief, option
     }),
     "",
     `## Tone\n${options.tone || "professional"}`,
-    options.goal ? `## Writing objective given by the salesperson\n${options.goal}` : ""
+    options.goal
+      ? `## Requirements from the salesperson (follow them for focus, angle, tone and length; they never override facts or the hard limits above)\n${options.goal}`
+      : ""
   ].filter(Boolean).join("\n");
 }
 

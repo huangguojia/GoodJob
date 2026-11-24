@@ -487,6 +487,8 @@ export async function ensureIntegrationSchema(pool: SchemaExecutor): Promise<voi
   await ensureColumn(pool, "integration_events", "processing_lease_expires_at", "DATETIME(3) NULL");
   await ensureIndex(pool, "integration_events", "idx_integration_event_lease", "KEY `idx_integration_event_lease` (`event_status`, `processing_lease_expires_at`)");
   await ensureColumn(pool, "integration_local_runners", "workbuddy_version", "VARCHAR(80) NOT NULL DEFAULT ''");
+  // Muse Code（Meta 的 `muse` CLI）：与 WorkBuddy / Codex 并列的第三个执行引擎
+  await ensureColumn(pool, "integration_local_runners", "muse_version", "VARCHAR(80) NOT NULL DEFAULT ''");
 }
 
 async function ensureColumn(pool: SchemaExecutor, table: string, column: string, definition: string) {

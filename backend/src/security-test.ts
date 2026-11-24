@@ -1046,6 +1046,36 @@ try {
     headers: { origin: "chrome-extension://not-a-valid-extension-id!!" }
   });
   await expectStatus("malformed chrome-extension origin", corsExtensionMalformed.response.status, 403);
+  // 插件真正会遇到的场景是「已部署的 CRM」= NODE_ENV=production。
+  // 本机自测走的是宽松分支，曾经因此漏掉线上 403「不允许的请求来源」——
+  // 这里把 production 那一档也钉死：扩展照放，其它非白名单来源照拒。
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    const extensionOrigin = "chrome-extension://mfcnngeoclhdaiglofafkjogdpgkelfg";
+    const prodExtension = await request("/api/health", { headers: { origin: extensionOrigin } });
+    await expectStatus("chrome-extension origin in production", prodExtension.response.status, 200);
+    // 浏览器要能读到响应，ACAO 必须精确回显这个来源（通配符在带凭据的请求里不被接受）
+    const allowOrigin = prodExtension.response.headers.get("access-control-allow-origin");
+    if (allowOrigin !== extensionOrigin) {
+      throw new Error(`plugin CORS header: expected ${extensionOrigin}, got ${allowOrigin}`);
+    }
+    // 插件真正的动作：用 `client: "plugin"` 换一枚一个月有效、走 body 的 Bearer
+    const pluginLogin = await request("/api/auth/login", {
+      method: "POST",
+      headers: { origin: extensionOrigin },
+      body: JSON.stringify({ email: "shirley@goodjob.com", password: "goodjob123", client: "plugin" })
+    });
+    await expectStatus("plugin login from deployed CRM", pluginLogin.response.status, 200);
+    if (!pluginLogin.json?.token) throw new Error("plugin login: 响应里没有 token");
+    results.pluginLoginFromExtension = true;
+    const prodLocalhost = await request("/api/health", { headers: { origin: "http://localhost:5188" } });
+    await expectStatus("localhost origin in production", prodLocalhost.response.status, 403);
+    const prodAttacker = await request("/api/health", { headers: { origin: "https://attacker.example" } });
+    await expectStatus("untrusted origin in production", prodAttacker.response.status, 403);
+  } finally {
+    process.env.NODE_ENV = previousNodeEnv;
+  }
   results.corsBlocked = corsBlocked.response.status;
 
   console.log(JSON.stringify({ ok: true, ...results }, null, 2));

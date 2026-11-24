@@ -10,7 +10,7 @@ import { type Customer, type CustomerIntelligenceFieldKey, type Deal, type DealI
 import { updateTodoChips } from "./dashboard";
 import {
   type WhatsAppConversationInsight, type WhatsAppPluginConversation, customerContactDetails, customerRelatedDeals,
-  customerWonLabel, dealTone, loadCustomerOrders, normalizeWhatsAppPhone, openCustomerReleaseModal,
+  customerReminderText, customerWonLabel, dealTone, loadCustomerOrders, normalizeWhatsAppPhone, openCustomerReleaseModal,
   renderCustomerDealProgress, renderCustomerOrders, renderCustomers, whatsappPluginRequest
 } from "./customers";
 import { badge, currentDateTimeText, escapeHtml, money, qs, qsa } from "./shared";
@@ -296,6 +296,7 @@ export function renderCustomerDetailPage(customer?: Customer) {
       <div><span>活跃商机</span><b>${activeDeals.length} 个</b><small>在手金额 ${money(current.pipelineAmount || 0)}</small></div>
       <div><span>健康度</span><b>${current.health}%</b><small>人工评分，低于 60 进入风险提醒</small></div>
       <div><span>跟进记录</span><b>${activities.length} 条</b><small>${current.lastActivityAt ? `最近 ${escapeHtml(formatDateTime(current.lastActivityAt))}` : "暂无跟进"}</small></div>
+      <div class="${current.nextReminder && current.nextReminder.includes("逾期") ? "is-overdue" : ""}"><span>下次跟进</span><b>${escapeHtml(customerReminderText(current))}</b><small>${current.nextReminder ? "到期进入跟进提醒" : "尚未安排下一次联系"}</small></div>
     </section>
 
     <div class="customer-page-grid">
@@ -916,7 +917,7 @@ export function renderCustomerDrawer(customer?: Customer) {
       <div class="info"><span>最高活跃阶段</span><b>${escapeHtml(pipelineStage)}</b></div>
       <div class="info"><span>活跃商机数</span><b>${activeDealCount}</b></div>
       <div class="info"><span>在手商机额</span><b>${money(pipelineAmount)}</b></div>
-      <div class="info"><span>下一提醒</span><b>${escapeHtml(customer.nextReminder)}</b></div>
+      <div class="info"><span>下一提醒</span><b>${escapeHtml(customerReminderText(customer))}</b></div>
     </div>
     <section class="customer-doc-info">
       <div class="customer-deals-head"><h3>联系方式</h3><button class="btn" data-edit-customer-drawer>维护信息</button></div>

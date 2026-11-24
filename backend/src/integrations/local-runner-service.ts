@@ -14,9 +14,13 @@ const sha256 = (value: string) => createHash("sha256").update(value).digest("hex
 const now = () => new Date().toISOString();
 const future = (milliseconds: number) => new Date(Date.now() + milliseconds).toISOString();
 
+/**
+ * 配对码有效期。默认 30 分钟：用户要「在网页生成 → 切到本机终端执行」，中间还要装包/检测 CLI，
+ * 10 分钟经常不够；要更严可以设 LOCAL_RUNNER_PAIRING_TTL_MINUTES（最小 10 分钟）。
+ */
 function pairingTtlMilliseconds() {
-  const configured = Number(process.env.LOCAL_RUNNER_PAIRING_TTL_MINUTES || 10);
-  const minutes = Number.isFinite(configured) ? Math.min(7 * 24 * 60, Math.max(10, Math.floor(configured))) : 10;
+  const configured = Number(process.env.LOCAL_RUNNER_PAIRING_TTL_MINUTES || 30);
+  const minutes = Number.isFinite(configured) ? Math.min(7 * 24 * 60, Math.max(10, Math.floor(configured))) : 30;
   return minutes * 60_000;
 }
 
@@ -34,13 +38,20 @@ function normalizedWorkspaces(input: string[]) {
   return [...new Set(input.map((item) => item.trim()).filter((item) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(item) && item.length <= 1000))].slice(0, 20);
 }
 
-/** 本地 Runner 支持的能力：codex（含独立浏览器）、workbuddy（WorkBuddy CLI） */
+/** 本地 Runner 支持的能力：codex（含独立浏览器）、workbuddy（WorkBuddy CLI）、muse（Muse Code） */
 const knownCapabilities = (input: string[]) => [
-  ...new Set(input.filter((item) => item === "codex" || item === "browser" || item === "workbuddy"))
+  ...new Set(input.filter((item) => item === "codex" || item === "browser" || item === "workbuddy" || item === "muse"))
 ];
 
 /** 任务适配器 → 展示名 */
-const adapterLabel = (adapter: LocalRunnerAdapter) => adapter === "workbuddy" ? "WorkBuddy CLI" : "Codex CLI";
+const adapterLabel = (adapter: LocalRunnerAdapter) =>
+  adapter === "workbuddy" ? "WorkBuddy CLI" : adapter === "muse" ? "Muse Code" : "Codex CLI";
+
+const adapterUnavailable = (adapter: LocalRunnerAdapter) => ({
+  workbuddy: { code: "LOCAL_RUNNER_WORKBUDDY_UNAVAILABLE", message: "该 Runner 未检测到 WorkBuddy CLI" },
+  muse: { code: "LOCAL_RUNNER_MUSE_UNAVAILABLE", message: "该 Runner 未检测到 Muse Code（muse CLI）" },
+  codex: { code: "LOCAL_RUNNER_CODEX_UNAVAILABLE", message: "该 Runner 未检测到 Codex CLI" }
+}[adapter]);
 
 function publicRunner(runner: LocalRunner) {
   const online = runner.status === "active" && Boolean(runner.lastSeenAt)
@@ -50,6 +61,7 @@ function publicRunner(runner: LocalRunner) {
     status: runner.status, online, hostname: runner.hostname, platform: runner.platform,
     runnerVersion: runner.runnerVersion, codexVersion: runner.codexVersion,
     workbuddyVersion: runner.workbuddyVersion,
+    museVersion: runner.museVersion,
     capabilities: runner.capabilities, workspaces: runner.workspaces, lastSeenAt: runner.lastSeenAt,
     lastError: runner.lastError, createdAt: runner.createdAt, updatedAt: runner.updatedAt,
     revokedAt: runner.revokedAt
@@ -60,6 +72,15 @@ function publicTask(task: LocalRunnerTask) {
   const { leaseHash: _leaseHash, ...safe } = task;
   return safe;
 }
+
+/**
+ * 单次任务提示词上限。
+ *
+ * 原先是 2 万字符，但获客提示词要带 CRM 查重名录（客户 + 线索 + 历史候选），
+ * 名录一涨就整单被拒；报错又写成「不能为空」，看起来像前端漏传参数（2026-11-22 实际故障）。
+ * 提示词是通过 stdin 交给 CLI 的，不受 argv 长度限制，放宽到 20 万字符只作安全阀。
+ */
+export const LOCAL_RUNNER_PROMPT_MAX_CHARS = 200_000;
 
 export class LocalRunnerService {
   constructor(private readonly repository: LocalRunnerRepository) {}
@@ -82,18 +103,20 @@ export class LocalRunnerService {
     const raw = randomBytes(6).toString("hex").toUpperCase();
     const code = `GJ-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`;
     const createdAt = now();
-    const expiresAt = future(pairingTtlMilliseconds());
+    const ttl = pairingTtlMilliseconds();
+    const expiresAt = future(ttl);
     await this.repository.createPairing({
       id: `lrp_${randomUUID()}`, codeHash: sha256(code), teamId: actor.teamId,
       ownerId: actor.id, createdBy: actor.id, deviceName: deviceName.trim() || "我的电脑",
       expiresAt, consumedAt: "", runnerId: "", createdAt
     });
-    return { pairingCode: code, expiresAt };
+    // expiresInSeconds 让前端倒计时不必依赖浏览器时钟（本机时间偏了也能算对）
+    return { pairingCode: code, expiresAt, expiresInSeconds: Math.round(ttl / 1000) };
   }
 
   async pair(input: {
     code: string; displayName: string; hostname: string; platform: string; runnerVersion: string;
-    codexVersion: string; workbuddyVersion: string; capabilities: string[]; workspaces: string[];
+    codexVersion: string; workbuddyVersion: string; museVersion?: string; capabilities: string[]; workspaces: string[];
   }) {
     const runnerId = `lrr_${randomUUID()}`;
     const secret = randomBytes(32).toString("base64url");
@@ -105,6 +128,7 @@ export class LocalRunnerService {
       hostname: input.hostname.slice(0, 200), platform: input.platform.slice(0, 80),
       runnerVersion: input.runnerVersion.slice(0, 40), codexVersion: input.codexVersion.slice(0, 80),
       workbuddyVersion: input.workbuddyVersion.slice(0, 80),
+      museVersion: (input.museVersion || "").slice(0, 80),
       capabilities: knownCapabilities(input.capabilities),
       workspaces: normalizedWorkspaces(input.workspaces), lastSeenAt: createdAt, lastError: "",
       createdAt, updatedAt: createdAt, revokedAt: ""
@@ -137,7 +161,7 @@ export class LocalRunnerService {
   }
 
   async heartbeat(runner: LocalRunner, input: {
-    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string; workbuddyVersion?: string;
+    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string; workbuddyVersion?: string; museVersion?: string;
     capabilities?: string[]; workspaces?: string[]; lastError?: string; taskId?: string; leaseToken?: string;
   }) {
     const reportedWorkspaces = input.workspaces ? normalizedWorkspaces(input.workspaces) : undefined;
@@ -147,6 +171,7 @@ export class LocalRunnerService {
       hostname: input.hostname?.slice(0, 200), platform: input.platform?.slice(0, 80),
       runnerVersion: input.runnerVersion?.slice(0, 40), codexVersion: input.codexVersion?.slice(0, 80),
       workbuddyVersion: input.workbuddyVersion?.slice(0, 80),
+      museVersion: input.museVersion?.slice(0, 80),
       capabilities: reportedCapabilities,
       workspaces: reducedWorkspaces?.length ? reducedWorkspaces : undefined,
       lastError: input.lastError?.slice(0, 1000)
@@ -166,13 +191,10 @@ export class LocalRunnerService {
     if (!runner.workspaces.includes(input.workspace)) {
       serviceError("LOCAL_RUNNER_WORKSPACE_DENIED", "该工作目录未在本机 Runner 授权范围内", 403);
     }
-    const adapter: LocalRunnerAdapter = input.adapter === "workbuddy" ? "workbuddy" : "codex";
+    const adapter: LocalRunnerAdapter = input.adapter === "workbuddy" ? "workbuddy" : input.adapter === "muse" ? "muse" : "codex";
     if (!runner.capabilities.includes(adapter)) {
-      serviceError(
-        adapter === "workbuddy" ? "LOCAL_RUNNER_WORKBUDDY_UNAVAILABLE" : "LOCAL_RUNNER_CODEX_UNAVAILABLE",
-        adapter === "workbuddy" ? "该 Runner 未检测到 WorkBuddy CLI" : "该 Runner 未检测到 Codex CLI",
-        409
-      );
+      const unavailable = adapterUnavailable(adapter);
+      serviceError(unavailable.code, unavailable.message, 409);
     }
     const createdAt = now();
     const task: LocalRunnerTask = {
@@ -183,7 +205,13 @@ export class LocalRunnerService {
       resultText: "", errorMessage: "", outputTruncated: false, codexThreadId: "",
       createdAt, queuedAt: createdAt, startedAt: "", finishedAt: "", updatedAt: createdAt
     };
-    if (!task.prompt || task.prompt.length > 20_000) serviceError("LOCAL_RUNNER_PROMPT_INVALID", "任务内容不能为空且不能超过 20000 个字符");
+    if (!task.prompt) serviceError("LOCAL_RUNNER_PROMPT_EMPTY", "任务内容不能为空");
+    if (task.prompt.length > LOCAL_RUNNER_PROMPT_MAX_CHARS) {
+      serviceError(
+        "LOCAL_RUNNER_PROMPT_TOO_LONG",
+        `任务内容 ${task.prompt.length} 字符，超过 ${LOCAL_RUNNER_PROMPT_MAX_CHARS} 字符上限，已拒绝派单`
+      );
+    }
     await this.repository.createTask(task);
     await this.repository.appendEvent({
       taskId: task.id, runnerId: task.runnerId, teamId: task.teamId, ownerId: task.ownerId,

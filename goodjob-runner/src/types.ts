@@ -7,7 +7,7 @@ export interface RunnerConfig {
   createdAt: string;
 }
 
-export type RunnerAdapter = "codex" | "workbuddy";
+export type RunnerAdapter = "codex" | "workbuddy" | "muse";
 
 export interface RunnerIdentity {
   hostname: string;
@@ -15,6 +15,8 @@ export interface RunnerIdentity {
   runnerVersion: string;
   codexVersion: string;
   workbuddyVersion: string;
+  /** Muse Code（Meta 的 `muse` CLI）版本；未安装时为空串，能力自动关闭 */
+  museVersion: string;
   capabilities: string[];
   workspaces: string[];
 }

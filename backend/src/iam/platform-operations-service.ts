@@ -114,7 +114,12 @@ async function withTransaction<T>(pool: mysql.Pool, work: (connection: mysql.Poo
   }
 }
 
-async function seedTenantRoles(connection: mysql.PoolConnection, tenantId: string, operatorId: string) {
+/**
+ * 新公司初始化三个模板角色与权限绑定。
+ * 导出给账号开通事务复用：自助开通与平台开通的团队必须是同一套角色模板，
+ * 否则同一份权限在产品里会有两种口径。
+ */
+export async function seedTenantRoles(connection: mysql.PoolConnection, tenantId: string, operatorId: string) {
   const templates = [
     { legacy: "admin" as const, code: "company_admin", name: "公司管理员", description: "公司成员、组织、权限和业务管理模板" },
     { legacy: "manager" as const, code: "sales_manager", name: "销售经理", description: "公司经营和销售管理模板" },

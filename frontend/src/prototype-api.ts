@@ -63,9 +63,10 @@ import {
   saveCompanyProfile
 } from "./modules/development-email";
 import {
-  aiEngineSourceHint, awaitAiEngineJob, effectiveResearchSource, ensureAiEngineSettings, loadAiEngineSettings,
-  renderTeamSystemSettings, saveAiEngineSettings, stopCliWaitTicker
+  aiEngineSourceHint, awaitAiEngineJob, effectiveResearchSource, ensureAiEngineSettings, initAiEngineCliActions,
+  loadAiEngineSettings, renderTeamSystemSettings, saveAiEngineSettings, stopCliWaitTicker
 } from "./modules/ai-engine-settings";
+import { initWecomPush, loadWecomPushSettings } from "./modules/notify-wecom";
 import { openWhatsAppCustomerPicker, refreshWhatsAppWorkspace, renderWhatsAppThreads, syncWhatsAppRefresh } from "./modules/whatsapp";
 import {
   agentUiAction, approveAllExternalAgentSteps, closeAgentSkillDetail, controlAgentMission, createAgentPlan,
@@ -95,8 +96,8 @@ import { bindLeadAdsEvents, loadLeadAdsData } from "./modules/lead-ads";
 import { bindSalesSkillCenterEvents, loadSalesSkillCenter } from "./modules/sales-skill-center";
 import { type ConfirmActionOptions, type ModalOptions, api, setButtonPending, toast } from "./modules/ui";
 import {
-  canAccessWorkspaceView, hasIamCapability, isAccessControlView, isPlatformOperator, isSystemAdministrator,
-  loginWithPassword, updateProfileSmtpHints, viewPermissionRequirements
+  canAccessWorkspaceView, hasIamCapability, initLocalOneClickLogin, initOfficialWhatsAppEntry, restoreViewAfterExternalJump, isAccessControlView, isPlatformOperator,
+  isSystemAdministrator, loginWithPassword, updateProfileSmtpHints, viewPermissionRequirements
 } from "./modules/auth";
 import {
   changeProfilePassword, checkProfileEmailDomain, clearProfileEmailBinding, clearProfileImapPassword,
@@ -111,8 +112,9 @@ import {
 import {
   PEER_PAGE_SIZE_OPTIONS, clearCurrentUserMemoDrafts, clearMemoDraft, closePeerDrawer, closeProblemDrawer,
   collectMemoEditorDraft, memoRelationText, openCaseModal, openCompetitorModal, openMemoModal, openPeerImportModal,
-  openPeerModal, openProblemModal, openReminderModal, patchSelectedMemo, publishSelectedCase, readMemoDraft,
+  openPeerModal, openPeerShareModal, openProblemModal, openReminderModal, patchSelectedMemo, publishSelectedCase, readMemoDraft,
   renderMemoRelationOptions, renderPeers, renderProblems, resetPeerFilters, restoreSelectedMemo, setMemoSaveState,
+  switchPeerPoolScope, toggleAllPeerSelection, updatePeerSelectionControls,
   toggleCompetitorThreat, visibleMemos, writeMemoDraft
 } from "./modules/workspace";
 import {
@@ -120,7 +122,11 @@ import {
   resetSupplierFilters, sortedSuppliers
 } from "./modules/suppliers";
 import {
-  type AdvancedDocumentTemplate, DOC_PINNED_TEMPLATE_STYLES, activeTradeDocument, addDocumentItem,
+  ensurePackagingPlansLoaded, loadPackagingPlans, openPackagingPlanModal, renderPackagingPlans,
+  resetPackagingPlanFilters
+} from "./modules/packaging-plans";
+import {
+  type AdvancedDocumentTemplate, DOC_PINNED_TEMPLATE_STYLES, activeTradeDocument, addDocumentItem, addDocumentPackage,
   advancedDocumentCategoryLabels, applyDataSource, applyDocumentCustomerDefaults, applyMatchedSellerToEditor,
   approveActiveDocument, bindDocumentLogoInline, collectDocumentDraft, createDocumentRevision, currentDocumentType,
   defaultTradeDocument, documentTypeLabel, downloadAdvancedExcel, downloadCustomerTemplate, exportCustomers,
@@ -128,7 +134,8 @@ import {
   openDocumentAssetManager, openDocumentConversion, openNewDocument, openProductPicker, openTradeDocumentImport,
   openTradeDocumentOcr, rejectActiveDocument, renderDocThemeSwatches, renderDocumentPreview, renderTradeDocuments,
   resetDocumentHistoryFilters, resetQuoteHistoryFilters, saveDocumentDefaults, sendActiveDocument, setDocumentType,
-  setDocumentWorkspaceMode, setQuoteHistoryMode, submitDocumentApproval, syncShippingCostLabel, updateActiveDocument
+  fillDocumentPackagesFromItems, setDocumentWorkspaceMode, setQuoteHistoryMode, submitDocumentApproval, syncCustomCFieldsVisibility,
+  syncShippingCostLabel, updateActiveDocument, pickDocumentPackagingPlan, clearDocumentPackagingPlan
 } from "./modules/trade-documents";
 import { syncWecomMessages } from "./modules/wecom";
 import { openKnowledgeModal, refreshKnowledgeAssets, renderKnowledge } from "./modules/knowledge";
@@ -165,7 +172,7 @@ import {
   refreshDailyReports, refreshInternalMessageBadge, refreshInternalMessages
 } from "./modules/collaboration";
 import {
-  THEME_DEFAULT, THEME_PRESETS, applyTheme, contrastRatio, getInitialTheme, initSystemUpdate, loadProductConfig,
+  THEME_DEFAULT, THEME_PRESETS, applyTheme, contrastRatio, getInitialTheme, loadProductConfig,
   openSecondaryDropdownForView, renderTopbarForView, resolveTopbarSearchView, restoreSession, saveTheme,
   setThemeStatus, workspaceViewStorageKey
 } from "./modules/navigation";
@@ -174,7 +181,7 @@ import { renderEmailReturnFlow } from "./modules/email-return-flow";
 import { MAIL_SECTION_ITEMS, loadMailCenter, mcComposeDraftSaveNow, renderMailSectionNav } from "./modules/mail-center";
 import { loadOrders, openOrderDetail, ordWireList } from "./modules/orders";
 import { bindFileCenterEvents, loadFileCenter } from "./modules/file-center";
-import { renderAutoFlow, stopAutoFlowFeed } from "./modules/auto-flow";
+import { renderAutoFlow, renderAutoFlowHistory, startAutoFlowScheduler, stopAutoFlowFeed, stopAutoFlowMonitor } from "./modules/auto-flow";
 
 
 isoCountries.registerLocale(enCountries);
@@ -326,12 +333,23 @@ export const state: AppState = {
   planTaskStatusFilter: "open",
   competitors: [],
   peers: [],
+  peersShared: [],
+  peerPoolScope: "mine",
+  peerPoolCounts: { mineCount: 0, sharedCount: 0, sharedByMeCount: 0 },
+  selectedPeerIds: [],
   peerSearch: "",
   peerRelationFilter: "all",
   peerSort: "newest",
   peerPage: 1,
   peerPageSize: 20,
   selectedPeerId: null,
+  packagingPlans: [],
+  packagingPlansLoaded: false,
+  packagingPlanSearch: "",
+  packagingPlanScopeFilter: "all",
+  packagingPlanPage: 1,
+  packagingPlanPageSize: 20,
+  selectedPackagingPlanIds: [],
   suppliers: [],
   suppliersLoaded: false,
   supplierSearch: "",
@@ -610,7 +628,7 @@ export function openModal(title: string, body: string, foot: string, options: Mo
   document.body.style.overflow = "hidden";
   modalRoot.setAttribute("role", "dialog");
   modalRoot.removeAttribute("aria-describedby");
-  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "document-asset-manager-modal", "deal-editor-modal", "ac-guide-modal", "outreach-policy-modal", "outreach-plan-detail-modal", "outreach-plan-create-modal", "sender-mailbox-modal", "lead-assignment-modal", "customer-editor-modal", "supplier-editor-modal", "ord-edit-modal", "od-pick-modal");
+  qs<HTMLElement>("#appModal .modal")?.classList.remove("customs-workspace-modal", "agent-memory-modal", "agent-knowledge-modal", "confirm-modal", "advanced-excel-modal", "excel-preview-modal", "trade-document-import-modal", "document-asset-editor-modal", "document-asset-manager-modal", "deal-editor-modal", "ac-guide-modal", "outreach-policy-modal", "outreach-plan-detail-modal", "outreach-plan-create-modal", "sender-mailbox-modal", "lead-assignment-modal", "customer-editor-modal", "supplier-editor-modal", "packaging-plan-modal", "packaging-picker-modal", "ord-edit-modal", "od-pick-modal", "af-report-modal");
   if (options.modalClass) qs<HTMLElement>("#appModal .modal")?.classList.add(options.modalClass);
   qs("#modalTitle")!.textContent = title;
   qs<HTMLElement>("#modalDescription")!.textContent = options.description
@@ -2744,6 +2762,8 @@ function installEvents() {
   ensureUiLayer();
   renderDashboardCurrentDate();
   window.setInterval(renderDashboardCurrentDate, 60_000);
+  // 自动流定时运行：在任意页面都按时检查（未登录时不会触发）
+  startAutoFlowScheduler();
   installIntegrationCenterInteractions();
   setupApprovalEvents();
   qs<HTMLButtonElement>("#prospectRadarCloseButton")?.addEventListener("click", closeProspectRadar);
@@ -2800,7 +2820,9 @@ function installEvents() {
     event.stopImmediatePropagation();
     const email = qs<HTMLInputElement>("#loginEmail")?.value.trim() || "";
     const password = qs<HTMLInputElement>("#loginPassword")?.value || "";
-    void loginWithPassword(email, password).catch((error) => toast(error instanceof Error ? error.message : "登录失败", "error"));
+    void loginWithPassword(email, password).catch((error) => {
+      toast(error instanceof Error ? error.message : "登录失败", "error");
+    });
   }, true);
   // 默认账号静默内嵌：登录页输入框自动填好默认管理员账号密码，页面上不展示明文提示块。
   // 实际填充见 prefillLoginCredentials()（启动与退出登录时触发）。
@@ -2818,6 +2840,8 @@ function installEvents() {
     state.user = null;
     document.body.classList.remove("is-authenticated");
     prefillLoginCredentials();
+    // 主动退出：只把「一键登录」按钮放回来，不自动再登进去。
+    void initLocalOneClickLogin({ auto: false });
     toast("已退出登录");
   });
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
@@ -3041,6 +3065,35 @@ function installEvents() {
     state.supplierPage = Math.max(1, state.supplierPage - 1);
     renderSuppliers();
   });
+  // —— 包装方案：列表筛选 / 分页 / 新增 ——
+  qs<HTMLButtonElement>("#packagingPlanCreateButton")?.addEventListener("click", () => openPackagingPlanModal());
+  qs<HTMLInputElement>("#packagingPlanSearchInput")?.addEventListener("input", (event) => {
+    state.packagingPlanSearch = (event.currentTarget as HTMLInputElement).value;
+    state.packagingPlanPage = 1;
+    renderPackagingPlans();
+  });
+  qs<HTMLSelectElement>("#packagingPlanScopeFilter")?.addEventListener("change", (event) => {
+    state.packagingPlanScopeFilter = (event.currentTarget as HTMLSelectElement).value as AppState["packagingPlanScopeFilter"];
+    state.packagingPlanPage = 1;
+    renderPackagingPlans();
+  });
+  qs<HTMLButtonElement>("#packagingPlanFilterReset")?.addEventListener("click", resetPackagingPlanFilters);
+  qs<HTMLSelectElement>("#packagingPlanPageSize")?.addEventListener("change", (event) => {
+    state.packagingPlanPageSize = Number((event.currentTarget as HTMLSelectElement).value) || 20;
+    state.packagingPlanPage = 1;
+    renderPackagingPlans();
+  });
+  qs<HTMLButtonElement>("#packagingPlanPrevPage")?.addEventListener("click", () => {
+    state.packagingPlanPage = Math.max(1, state.packagingPlanPage - 1);
+    renderPackagingPlans();
+  });
+  qs<HTMLButtonElement>("#packagingPlanNextPage")?.addEventListener("click", () => {
+    state.packagingPlanPage += 1;
+    renderPackagingPlans();
+  });
+  // —— 单据编辑区：包装方案选择（仅定制C 显示） ——
+  qs<HTMLButtonElement>("#docPickPackagingPlanButton")?.addEventListener("click", () => void pickDocumentPackagingPlan());
+  qs<HTMLButtonElement>("#docClearPackagingPlanButton")?.addEventListener("click", () => clearDocumentPackagingPlan());
   qs<HTMLButtonElement>("#supplierNextPage")?.addEventListener("click", () => {
     state.supplierPage += 1;
     renderSuppliers();
@@ -3337,6 +3390,18 @@ function installEvents() {
     state.peerSearch = (event.target as HTMLInputElement).value;
     state.peerPage = 1;
     renderPeers();
+  });
+  // 同行共享池：页签切换 / 整池推送 / 批量推送 / 全选
+  qsa<HTMLButtonElement>("[data-peer-scope]").forEach((button) => button.addEventListener("click", () => {
+    void switchPeerPoolScope(button.dataset.peerScope === "shared" ? "shared" : "mine");
+    updatePeerSelectionControls();
+  }));
+  qs<HTMLButtonElement>("#peerPushAllButton")?.addEventListener("click", () => openPeerShareModal(state.peers, true));
+  qs<HTMLButtonElement>("#peerPushSelectedButton")?.addEventListener("click", () => {
+    openPeerShareModal(state.peers.filter((peer) => state.selectedPeerIds.includes(peer.id)));
+  });
+  qs<HTMLInputElement>("#peerSelectAll")?.addEventListener("change", (event) => {
+    toggleAllPeerSelection((event.target as HTMLInputElement).checked);
   });
   qs<HTMLSelectElement>("#peerRelationFilter")?.addEventListener("change", (event) => {
     state.peerRelationFilter = ((event.target as HTMLSelectElement).value || "all") as typeof state.peerRelationFilter;
@@ -4007,6 +4072,8 @@ function installEvents() {
     applyMatchedSellerToEditor(customer, deal);
   });
   qs<HTMLButtonElement>("#addDocumentItemButton")?.addEventListener("click", addDocumentItem);
+  qs<HTMLButtonElement>("#addDocumentPackageButton")?.addEventListener("click", addDocumentPackage);
+  qs<HTMLButtonElement>("#fillPackagesFromItemsButton")?.addEventListener("click", fillDocumentPackagesFromItems);
   qs<HTMLButtonElement>("#refreshDocumentPreviewButton")?.addEventListener("click", () => renderDocumentPreview(collectDocumentDraft()));
   qsa<HTMLButtonElement>("#documentTypeTabs button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -4043,6 +4110,7 @@ function installEvents() {
     const th = qs<HTMLSelectElement>("#docThemeInput");
     if (th) th.value = DOC_PINNED_TEMPLATE_STYLES.has(val) ? "rose" : val;
     renderDocThemeSwatches(th?.value || val);
+    syncCustomCFieldsVisibility();
     renderDocumentPreview(collectDocumentDraft());
   });
   // 数据源填充
@@ -4150,6 +4218,8 @@ function installEvents() {
   qs<HTMLButtonElement>("#tradeDocumentOcrSaveButton")?.addEventListener("click", (event) => void saveTradeDocumentOcrProvider(event.currentTarget as HTMLButtonElement));
   const aiEngineSaveButton = qs<HTMLButtonElement>("#aiEngineSaveButton");
   aiEngineSaveButton?.addEventListener("click", () => void saveAiEngineSettings(aiEngineSaveButton));
+  initAiEngineCliActions();
+  initWecomPush();
   qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.addEventListener("change", () => {
     tradeDocumentOcrProvider = { ...tradeDocumentOcrProvider, provider: (qs<HTMLSelectElement>("#tradeDocumentOcrProvider")?.value || "none") as TradeDocumentOcrProviderConfig["provider"] };
     renderTeamSystemSettings();
@@ -4287,6 +4357,10 @@ export function activateNavView(view: string, after?: () => void) {
   if (activeView === "kb-training" && view !== "kb-training") stopKbTrainingPoll();
   if (activeView === "container-load") disposeContainerLoad();
   if (activeView === "auto-flow" && view !== "auto-flow") stopAutoFlowFeed();
+  // 打开/回复的统一刷新线程只服务自动流与它的归档页；离开这一节就停掉，不留后台轮询
+  if (["auto-flow", "auto-flow-history"].includes(activeView || "") && !["auto-flow", "auto-flow-history"].includes(view)) {
+    stopAutoFlowMonitor();
+  }
   if (["lead-finder", "lead-task-detail"].includes(activeView || "") && !["lead-finder", "lead-task-detail"].includes(view)) {
     stopLeadTaskEventStream(false);
   }
@@ -4325,6 +4399,10 @@ export function activateNavView(view: string, after?: () => void) {
   if (view === "business-card" || view === "website-verify") {
     qsa<HTMLElement>('.sidebar button[data-view="tools"]').forEach((button) => button.classList.add("active"));
   }
+  // 任务归档是自动流下的子页面（侧栏没有独立入口）：高亮仍停在「自动流获客」
+  if (view === "auto-flow-history") {
+    qsa<HTMLElement>('.sidebar button[data-view="auto-flow"]').forEach((button) => button.classList.add("active"));
+  }
   openSecondaryDropdownForView(view);
   qsa<HTMLElement>(".view").forEach((node) => node.classList.toggle("active", node.id === view));
   renderMailSectionNav();
@@ -4336,6 +4414,18 @@ export function activateNavView(view: string, after?: () => void) {
   renderTopbarForView(view);
   if (view === "customers") {
     renderCustomers(state.customers);
+  }
+  // 商机卡片/单据编辑区都要按 id 查方案：进这两页时静默补一次（失败不打断页面）
+  if (view === "pipeline" || view === "documents") {
+    void ensurePackagingPlansLoaded().then(() => {
+      if (qs<HTMLElement>("#pipeline")?.classList.contains("active") && state.deals.length) renderPipeline(state.deals);
+    });
+  }
+  if (view === "packaging-plans") {
+    renderPackagingPlans();
+    void loadPackagingPlans()
+      .then(() => renderPackagingPlans())
+      .catch((error) => toast(error instanceof Error ? error.message : "包装方案加载失败", "error"));
   }
   if (view === "suppliers") {
     // 先渲染（可能已有缓存），再按需拉一次；失败必须给出口，否则页面停在「加载中…」
@@ -4360,6 +4450,7 @@ export function activateNavView(view: string, after?: () => void) {
   if (view === "settings") {
     void loadTeamSystemSettings().catch((error) => toast(error instanceof Error ? error.message : "系统设置加载失败", "error"));
     void loadTrialAccounts().catch(() => undefined);
+    void loadWecomPushSettings({ silent: true });
   }
   if (view === "inbox") {
     void refreshInternalMessages(false);
@@ -4496,6 +4587,9 @@ export function activateNavView(view: string, after?: () => void) {
   if (view === "auto-flow") {
     renderAutoFlow();
   }
+  if (view === "auto-flow-history") {
+    renderAutoFlowHistory();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
   after?.();
 }
@@ -4505,13 +4599,19 @@ void loadProductConfig();
 // 避免登录页停留在 :root 内置配色、登录后才跳变。
 applyTheme(getInitialTheme());
 installEvents();
+// 登录页官方 WhatsApp 入口：独立窗口打开官方站点，不做内嵌/代理。
+initOfficialWhatsAppEntry();
 renderTopbarForView(qs<HTMLElement>(".view.active")?.id || "dashboard");
 void restoreSession()
   .catch(() => {})
   .finally(() => {
-    // 未登录（需要展示登录页）时，静默内嵌默认账号密码
-    if (!document.body.classList.contains("is-authenticated")) prefillLoginCredentials();
+    // 未登录（需要展示登录页）时，输入框保持为空（不再内嵌默认账号）
+    if (!document.body.classList.contains("is-authenticated")) {
+      prefillLoginCredentials();
+      // 本机个人版：服务端内置管理员，登录页出一个「一键登录」。
+      void initLocalOneClickLogin();
+    } else {
+      // 从官方 WhatsApp 等同标签跳出去过：回到原视图，不让人重新找位置。
+      restoreViewAfterExternalJump();
+    }
   });
-
-// 页面加载后初始化更新模块
-void initSystemUpdate();

@@ -13,7 +13,12 @@ import { buildOutreachJourney, buildOutreachJourneyDraft, listOutreachJourneyOve
 import { type OutboundEmailLog, type ProspectOutreachBatch, type SessionUser } from "../types.js";
 import { getStore } from "../store.js";
 import { recordCrmEmailTouchpoint } from "../email-touchpoints.js";
-import { asyncRoute, createOutreachWritingRuntime, dispatchOutboundEmail, sendProspectBatchEmail } from "../server-core.js";
+import { asyncRoute, createOutreachWritingRuntime, dispatchOutboundEmail, sendOutreachSummaryForBatch, sendProspectBatchEmail } from "../server-core.js";
+import { readOutreachSummarySettings, readOutreachSummaryState } from "../outreach-send-summary.js";
+import { emitCrmEvent } from "../crm-events.js";
+import { readWecomLog, readWecomSettings } from "../wecom-push.js";
+import { readJsonSetting, writeJsonSetting } from "../json-settings.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * 批次响应统一带上「正文补写进度」。
@@ -66,6 +71,31 @@ function outreachEngagementFor(
   }
   result.openRate = result.sent ? Math.round((result.opened / result.sent) * 1000) / 10 : 0;
   return result;
+}
+
+/**
+ * 获客任务归档：自动流跑完一轮就落一条。
+ *
+ * 打开 / 点击 / 回复不存快照，而是按 `batch:<批次id>:` 前缀去发件台账实时统计 ——
+ * 回信是跑完之后几天才来的，存快照等于永远停在 0。批次 id 来自 complete-send 的返回值。
+ */
+interface AutoFlowRunCounts {
+  candidates: number;
+  researched: number;
+  drafts: number;
+  sent: number;
+}
+
+interface AutoFlowRunArchive {
+  id: string;
+  command: string;
+  startedAt: string;
+  finishedAt: string;
+  targetCount: number;
+  counts: AutoFlowRunCounts;
+  batchId: string;
+  senderEmail?: string;
+  status: "sent" | "draft_only" | "partial";
 }
 
 function sumEngagement(list: OutreachEngagement[]): OutreachEngagement {
@@ -326,6 +356,26 @@ export function registerOutreachRoutes(app: Express) {
     }
   }));
 
+  /**
+   * 手动生成并发送本批次的总结（每个发件邮箱各一份 Excel）。
+   * 默认跳过已成功发过的邮箱；?force=1 重新生成并重发（邮件内容有改动时用）。
+   * 注意：必须注册在 `/:id/:action` 之前，否则会被当成 pause/resume/cancel 拦下。
+   */
+  app.post("/api/prospect-outreach-batches/:id/summary", requireAuth, asyncRoute(async (req, res) => {
+    try {
+      const batch = getProspectOutreachBatch(getStore(), req.user!, req.params.id);
+      const force = req.query.force === "1" || (req.body || {}).force === true;
+      const result = await sendOutreachSummaryForBatch(batch, { force });
+      res.json(result);
+    } catch (error) {
+      if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
+        res.status(404).json({ message: error.message });
+        return;
+      }
+      throw error;
+    }
+  }));
+
   app.post("/api/prospect-outreach-batches/:id/:action", requireAuth, asyncRoute(async (req, res) => {
     const action = z.enum(["pause", "resume", "cancel"]).parse(req.params.action);
     try {
@@ -348,6 +398,20 @@ export function registerOutreachRoutes(app: Express) {
     try {
       const batch = getProspectOutreachBatch(getStore(), req.user!, req.params.id);
       res.json({ batch: prospectBatchSummary(batch) });
+    } catch (error) {
+      if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
+        res.status(404).json({ message: error.message });
+        return;
+      }
+      throw error;
+    }
+  }));
+
+  app.get("/api/prospect-outreach-batches/:id/summary", requireAuth, asyncRoute(async (req, res) => {
+    try {
+      const batch = getProspectOutreachBatch(getStore(), req.user!, req.params.id);
+      const state = await readOutreachSummaryState(batch.teamId, batch.id);
+      res.json({ batchId: batch.id, deliveries: state.deliveries, updatedAt: state.updatedAt });
     } catch (error) {
       if (error instanceof Error && /不存在或无权访问/.test(error.message)) {
         res.status(404).json({ message: error.message });
@@ -525,6 +589,336 @@ export function registerOutreachRoutes(app: Express) {
         simulated: ["test", "e2e"].includes(process.env.NODE_ENV || "")
       },
       journey: await buildOutreachJourney(store, body.entityType, body.entityId)
+    });
+  }));
+
+  // -------------------------------------------------------------------------
+  // 获客自动流：状态云端同步 + 发信完成归档为标准发信批次（打通总结邮件与企微推送）
+  // -------------------------------------------------------------------------
+  const autoFlowStateKey = (userId: string) => `auto.flow.state:${userId}`;
+
+  app.get("/api/auto-flow/state", requireAuth, asyncRoute(async (req, res) => {
+    const stored = await readJsonSetting<{ updatedAt?: number; state?: unknown; schedule?: unknown } | null>(
+      autoFlowStateKey(req.user!.id),
+      null
+    );
+    res.json({ data: stored });
+  }));
+
+  app.put("/api/auto-flow/state", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({
+      updatedAt: z.number().finite().nonnegative(),
+      state: z.record(z.unknown()).optional(),
+      schedule: z.record(z.unknown()).optional()
+    }).parse(req.body);
+    // 严格限制单条设置体积 <= 48KB，避免超出 MySQL app_settings TEXT(64KB) 限制
+    const payload = { updatedAt: body.updatedAt, state: body.state, schedule: body.schedule };
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") > 48_000) {
+      res.status(413).json({ message: "自动流同步快照超出体积限制" });
+      return;
+    }
+    await writeJsonSetting(autoFlowStateKey(req.user!.id), payload);
+    res.json({ ok: true, updatedAt: body.updatedAt });
+  }));
+
+  app.post("/api/auto-flow/complete-send", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({
+      /**
+       * 客户端预生成的批次号：第一次归档失败后重试时带同一个号，
+       * 服务端按 id 覆盖而不是再插一条，归档里不会出现两条空批次。
+       */
+      batchId: z.string().trim().max(80).optional(),
+      items: z.array(z.object({
+        prospectId: z.string().trim().min(1).max(120),
+        company: z.string().trim().max(240).default(""),
+        to: z.string().trim().email(),
+        subject: z.string().trim().min(1).max(300),
+        body: z.string().trim().min(1).max(20000),
+        sentAt: z.string().trim().max(64).default(""),
+        requestId: z.string().trim().max(160).default("")
+      })).min(1).max(200),
+      /** 这一轮发送失败的封数（只用于企业微信「本轮已发完」的通知文案） */
+      failed: z.coerce.number().int().min(0).max(200).default(0)
+    }).parse(req.body);
+
+    const store = getStore();
+    const now = new Date().toISOString();
+    // 客户端带了合法批次号就用它（重试幂等），否则服务端生成
+    const requestedBatchId = (body.batchId || "").trim();
+    const batchId = /^afb_[0-9a-fA-F-]{8,}$/.test(requestedBatchId)
+      ? requestedBatchId
+      : `afb_${randomUUID()}`;
+    const batchItems = body.items.map((item, idx) => {
+      const itemId = `afi_${idx + 1}_${randomUUID().slice(0, 8)}`;
+      const sentAt = item.sentAt || now;
+      if (item.requestId) {
+        const log = store.outboundEmailLogs.find((row) =>
+          row.teamId === req.user!.teamId
+          && row.ownerId === req.user!.id
+          && row.requestId === item.requestId
+        );
+        if (log) log.requestId = `batch:${batchId}:${itemId}:0`;
+      }
+      return {
+        id: itemId,
+        candidateId: item.prospectId,
+        entityType: "candidate" as const,
+        company: item.company || item.to,
+        recipient: item.to,
+        status: "sent" as const,
+        skipReason: "",
+        stageKey: "first_touch_sent" as const,
+        stageLabel: "自动流首触",
+        stageSource: "derived" as const,
+        researchId: "",
+        researchScore: 0,
+        letterStatus: "ready" as const,
+        letterEngine: "auto_flow",
+        letterBasis: "",
+        letterNote: "",
+        steps: [{
+          index: 0,
+          delayHours: 0,
+          scheduledAt: sentAt,
+          subject: item.subject,
+          body: item.body,
+          status: "sent" as const,
+          sentAt,
+          error: "",
+          stageKey: "first_touch_sent" as const,
+          stageLabel: "自动流首触"
+        }],
+        sentAt,
+        error: "",
+        convertedLeadId: ""
+      };
+    });
+
+    // 同一个批次号重试：先摘掉上一次那条，再按本次明细重建（幂等，不产生重复批次）
+    store.prospectOutreachBatches = store.prospectOutreachBatches.filter((batch) => batch.id !== batchId);
+    store.prospectOutreachBatches.unshift({
+      id: batchId,
+      ownerId: req.user!.id,
+      teamId: req.user!.teamId,
+      status: "completed",
+      targetType: "candidate",
+      policy: {
+        dailyLimit: 200,
+        stepIntervalHours: 72,
+        sendWindowStartHour: 0,
+        sendWindowEndHour: 24,
+        stopOnReply: true,
+        rotateMailboxEvery: 0,
+        autoResearch: false
+      },
+      items: batchItems,
+      counts: { total: batchItems.length, frozen: batchItems.length, skipped: 0 },
+      frozenPayload: null,
+      frozenHash: "",
+      approvedBy: req.user!.id,
+      approvedAt: now,
+      pauseReason: "",
+      nextSendAt: "",
+      createdAt: now,
+      updatedAt: now
+    });
+    await store.persist();
+    // 本轮真的发完了：先推一条企业微信「发完了」，不依赖稍后总结邮件是否寄出。
+    // 打开 / 回复不在这里报 —— 它们是跑完之后几天才发生的事，交给自动流页的统一监控去刷新。
+    const senders = new Set(
+      store.outboundEmailLogs
+        .filter((log) => (log.requestId || "").startsWith(`batch:${batchId}:`))
+        .map((log) => log.senderEmail || "")
+        .filter(Boolean)
+    ).size;
+    emitCrmEvent({
+      type: "outreach.round",
+      teamId: req.user!.teamId,
+      ownerId: req.user!.id,
+      batchId,
+      batchLabel: `自动流批次 ${batchId.slice(-8)}`,
+      sent: batchItems.length,
+      failed: body.failed,
+      customers: new Set(batchItems.map((item) => item.company)).size,
+      senders,
+      occurredAt: now
+    });
+    res.json({ ok: true, batchId, count: batchItems.length, failed: body.failed });
+  }));
+
+  // -------------------------------------------------------------------------
+  // 获客任务归档：每跑完一轮存一条，可切换不同任务看打开 / 回复
+  // -------------------------------------------------------------------------
+  const AUTO_FLOW_RUNS_LIMIT = 30;
+  const autoFlowRunsKey = (userId: string) => `auto.flow.runs:${userId}`;
+
+  async function readAutoFlowRuns(userId: string): Promise<AutoFlowRunArchive[]> {
+    const stored = await readJsonSetting<{ runs?: AutoFlowRunArchive[] }>(autoFlowRunsKey(userId), { runs: [] });
+    return Array.isArray(stored?.runs) ? stored.runs : [];
+  }
+
+  app.get("/api/auto-flow/runs", requireAuth, asyncRoute(async (req, res) => {
+    const store = getStore();
+    const actor = store.users.find((item) => item.id === req.user!.id) || req.user!;
+    const runs = (await readAutoFlowRuns(req.user!.id)).slice(0, AUTO_FLOW_RUNS_LIMIT).map((run) => ({
+      ...run,
+      engagement: run.batchId ? outreachEngagementFor(store, actor, `batch:${run.batchId}:`) : EMPTY_ENGAGEMENT
+    }));
+    res.json({ runs });
+  }));
+
+  app.post("/api/auto-flow/runs", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({
+      id: z.string().trim().min(1).max(80),
+      command: z.string().trim().max(500).default(""),
+      startedAt: z.string().trim().max(64).default(""),
+      finishedAt: z.string().trim().max(64).default(""),
+      targetCount: z.coerce.number().int().min(0).max(500).default(0),
+      counts: z.object({
+        candidates: z.coerce.number().int().min(0).max(5000).default(0),
+        researched: z.coerce.number().int().min(0).max(5000).default(0),
+        drafts: z.coerce.number().int().min(0).max(5000).default(0),
+        sent: z.coerce.number().int().min(0).max(5000).default(0)
+      }).default({ candidates: 0, researched: 0, drafts: 0, sent: 0 }),
+      batchId: z.string().trim().max(120).default(""),
+      senderEmail: z.string().trim().max(160).default(""),
+      status: z.enum(["sent", "draft_only", "partial"]).default("sent")
+    }).parse(req.body);
+
+    const runs = await readAutoFlowRuns(req.user!.id);
+    const index = runs.findIndex((item) => item.id === body.id);
+    const existing = index >= 0 ? runs[index] : null;
+    // 重复归档（同 runId）只补新值：缺省字段沿用已有记录，不能把开跑时间/目标/批次号清成空
+    const run: AutoFlowRunArchive = {
+      id: body.id,
+      command: body.command || existing?.command || "",
+      startedAt: body.startedAt || existing?.startedAt || "",
+      finishedAt: body.finishedAt || new Date().toISOString(),
+      targetCount: body.targetCount || existing?.targetCount || 0,
+      counts: body.counts,
+      batchId: body.batchId || existing?.batchId || "",
+      senderEmail: body.senderEmail || existing?.senderEmail || "",
+      status: body.status
+    };
+    if (index >= 0) runs[index] = run;
+    else runs.unshift(run);
+    // 只保留最近 30 轮：归档是给「切换任务看效果」用的，不是全量历史仓
+    await writeJsonSetting(autoFlowRunsKey(req.user!.id), { runs: runs.slice(0, AUTO_FLOW_RUNS_LIMIT) });
+    res.json({ ok: true, run });
+  }));
+
+  app.get("/api/auto-flow/runs/:id", requireAuth, asyncRoute(async (req, res) => {
+    const runs = await readAutoFlowRuns(req.user!.id);
+    const run = runs.find((item) => item.id === req.params.id);
+    if (!run) {
+      res.status(404).json({ message: "这条任务归档不存在，可能已被更新的一轮挤掉" });
+      return;
+    }
+    const store = getStore();
+    const actor = store.users.find((item) => item.id === req.user!.id) || req.user!;
+    const prefix = run.batchId ? `batch:${run.batchId}:` : "";
+    const canSee = (log: OutboundEmailLog) =>
+      log.teamId === req.user!.teamId
+      && (log.ownerId === req.user!.id || ["admin", "super_admin", "manager"].includes(req.user!.role));
+    const rows = prefix
+      ? store.outboundEmailLogs
+        .filter((log) => (log.requestId || "").startsWith(prefix) && canSee(log))
+        .map((log) => ({
+          to: log.to || "",
+          subject: log.subject || "",
+          sentAt: log.sentAt || "",
+          dispatchStatus: log.dispatchStatus || "sent",
+          openCount: log.openCount || 0,
+          clickCount: log.clickCount || 0,
+          firstOpenedAt: log.firstOpenedAt || "",
+          lastOpenedAt: log.lastOpenedAt || "",
+          repliedAt: log.repliedAt || "",
+          bouncedAt: log.bouncedAt || ""
+        }))
+        .sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)))
+        .slice(0, 200)
+      : [];
+    /**
+     * 回复 / 退信能不能被抓到，取决于「发这批信的那个邮箱」有没有被 IMAP 监听：
+     * 回信与 DSN 退信都是靠 inbound-mail-watcher 轮询收件箱才写回台账的。
+     * 没配 IMAP 的邮箱，这一批的回复与退信就永远是 0 —— 界面必须说清楚是"没数据"还是"没接通"，
+     * 否则监控面板会让人误以为客户都不回。
+     */
+    const watchedSenders = new Set(
+      store.users
+        .filter((user) => user.status === "active"
+          && user.inboundSyncEnabled
+          && !!user.imapHost && !!user.imapUser && !!user.imapPassword)
+        .map((user) => (user.outboundEmail || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const batchLogs = prefix
+      ? store.outboundEmailLogs.filter((log) => (log.requestId || "").startsWith(prefix) && canSee(log))
+      : [];
+    const senders = [...new Set(
+      batchLogs.map((log) => (log.senderEmail || "").trim().toLowerCase()).filter(Boolean)
+    )];
+    const replyCoverage = {
+      watchers: watchedSenders.size,
+      senders,
+      /** 这批用过、但没有收件同步的邮箱：它们的回信 / 退信抓不到 */
+      uncovered: senders.filter((email) => !watchedSenders.has(email)),
+      /** 台账里没记发件邮箱的老数据：无法判断是否被覆盖 */
+      unknownSender: batchLogs.filter((log) => !(log.senderEmail || "").trim()).length
+    };
+    res.json({
+      run: { ...run, engagement: prefix ? outreachEngagementFor(store, actor, prefix) : EMPTY_ENGAGEMENT },
+      rows,
+      replyCoverage
+    });
+  }));
+
+  /**
+   * 这一轮的通知结果：企业微信「发完了」推没推、发送总结寄到了哪几个发件邮箱。
+   * 只读聚合，不主动发任何东西；自动流页的统一监控定时调它（一个线程覆盖所有任务）。
+   */
+  app.get("/api/auto-flow/runs/:id/notify", requireAuth, asyncRoute(async (req, res) => {
+    const runs = await readAutoFlowRuns(req.user!.id);
+    const run = runs.find((item) => item.id === req.params.id);
+    if (!run) {
+      res.status(404).json({ message: "这条任务归档不存在，可能已被更新的一轮挤掉" });
+      return;
+    }
+    const teamId = req.user!.teamId;
+    const [wecomSettings, wecomLog, summarySettings] = await Promise.all([
+      readWecomSettings(teamId),
+      readWecomLog(teamId),
+      readOutreachSummarySettings(teamId)
+    ]);
+    // `round:` 是本轮发完的推送；`summary:` 是总结 Excel 寄出后的推送（老数据只有这一条）
+    const keys = run.batchId ? [`round:${run.batchId}`, `summary:${run.batchId}`] : [];
+    const entries = keys.length
+      ? wecomLog.filter((item) => keys.includes(item.key))
+      : [];
+    // 推成功优先：同一条链路失败重试成功后，面板应该显示「已推送」，而不是那条历史失败
+    const wecomEntry = entries.find((item) => item.status === "sent") || entries[0] || null;
+    const summary = run.batchId
+      ? await readOutreachSummaryState(teamId, run.batchId)
+      : { batchId: "", updatedAt: "", deliveries: [] };
+    res.json({
+      runId: run.id,
+      batchId: run.batchId,
+      senderEmail: run.senderEmail || "",
+      wecom: {
+        configured: Boolean(wecomSettings.updatedAt),
+        enabled: wecomSettings.enabled,
+        mode: wecomSettings.mode,
+        recipients: wecomSettings.mode === "robot" ? ["群机器人"] : wecomSettings.recipients,
+        ruleOn: Boolean(wecomSettings.rules.outreachRound),
+        entry: wecomEntry
+      },
+      email: {
+        autoSend: summarySettings.autoSend,
+        updatedAt: summary.updatedAt || "",
+        deliveries: summary.deliveries,
+        sent: summary.deliveries.filter((row) => row.status === "sent").length,
+        failed: summary.deliveries.filter((row) => row.status === "failed").length
+      }
     });
   }));
 }

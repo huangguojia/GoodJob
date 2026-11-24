@@ -99,6 +99,30 @@ const supplierFields: Record<string, JsonSchema> = {
   remark: string({ default: "", maxLength: 2000 })
 };
 
+const packagingPlanItemFields: Record<string, JsonSchema> = {
+  id: string({ default: "", maxLength: 80 }),
+  label: string({ default: "", maxLength: 120, description: "包装类型，例如 加固出口木箱" }),
+  contents: string({ default: "", maxLength: 300, description: "箱内物品，例如 主机框架 / Main frame" }),
+  model: string({ default: "", maxLength: 120, description: "归属设备或货号，例如 JW-T7 PRO #1" }),
+  lengthCm: number({ minimum: 0, maximum: 1000, default: 0 }),
+  widthCm: number({ minimum: 0, maximum: 1000, default: 0 }),
+  heightCm: number({ minimum: 0, maximum: 1000, default: 0 }),
+  netWeightKg: number({ minimum: 0, maximum: 100000, default: 0 }),
+  grossWeightKg: number({ minimum: 0, maximum: 100000, default: 0 })
+};
+
+const packagingPlanFields: Record<string, JsonSchema> = {
+  code: string({ default: "", maxLength: 40, description: "留空按 PKG-0001 顺延生成" }),
+  name: string({ minLength: 1, maxLength: 200 }),
+  scope: oneOf("general", "product"),
+  productId: string({ default: "", maxLength: 80 }),
+  productName: string({ default: "", maxLength: 200 }),
+  productModel: string({ default: "", maxLength: 120 }),
+  summary: string({ default: "", maxLength: 300 }),
+  remark: string({ default: "", maxLength: 2000 }),
+  items: array(objectSchema([], packagingPlanItemFields), { maxItems: 60 })
+};
+
 const leadFields: Record<string, JsonSchema> = {
   company: string({ minLength: 1 }), contact: string({ default: "" }), country: string({ default: "" }),
   email: string({ default: "" }), phone: string({ default: "" }), wechat: string({ default: "" }),
@@ -113,7 +137,8 @@ const dealFields: Record<string, JsonSchema> = {
   quantity: integer({ minimum: 0, default: 0 }), unitPrice: number({ minimum: 0, default: 0 }), amount: number({ minimum: 0 }),
   items: array(objectSchema(["product", "quantity", "unitPrice"], { id: string({ maxLength: 64 }), productId: string({ maxLength: 64 }), product: string({ minLength: 1, maxLength: 500 }), model: string({ maxLength: 200 }), quantity: number({ minimum: 0 }), unitPrice: number({ minimum: 0 }) }), { minItems: 1, maxItems: 50 }),
   currency: string({ pattern: "^[A-Z]{3}$", default: "USD" }), nextAction: string({ minLength: 1 }), nextActionAt: string({ minLength: 1 }),
-  expectedCloseAt: string({ default: "" }), recommendationId: string({ default: "", maxLength: 90 })
+  expectedCloseAt: string({ default: "" }), recommendationId: string({ default: "", maxLength: 90 }),
+  packagingPlanId: string({ default: "", maxLength: 80 })
 };
 
 const todoFields: Record<string, JsonSchema> = {
@@ -178,7 +203,17 @@ const productFields: Record<string, JsonSchema> = {
   descriptionZh: string({ maxLength: 4000 }),
   descriptionEn: string({ maxLength: 4000 }),
   tags: array(string({ maxLength: 60 }), { maxItems: 30 }),
-  imageUrl: string({ maxLength: 512 })
+  imageUrl: string({ maxLength: 512 }),
+  sku: string({ maxLength: 64 }),
+  material: string({ maxLength: 120 }),
+  color: string({ maxLength: 120 }),
+  sizeSpec: string({ maxLength: 200 }),
+  netWeight: number({ minimum: 0 }),
+  packLength: number({ minimum: 0 }),
+  packWidth: number({ minimum: 0 }),
+  packHeight: number({ minimum: 0 }),
+  packWeight: number({ minimum: 0 }),
+  unitsPerCarton: integer({ minimum: 0, maximum: 1000000 })
 };
 
 const shipmentItemSchema = objectSchema([], {
@@ -225,6 +260,9 @@ define("POST /api/customers/bulk-delete", idsSchema, "批量删除客户会连�
 define("POST /api/suppliers", objectSchema(["company"], supplierFields), "创建供应商档案。只登记用户提供或有来源的事实，联系方式拿不到就留空，不得编造；响应 supplier.id 是完成证据。");
 define("PATCH /api/suppliers/{id}", objectSchema([], supplierFields), "更新供应商档案；只提交用户要求修改的字段，不得顺手改写其它字段。");
 define("POST /api/suppliers/bulk-delete", idsSchema, "批量删除供应商档案，必须展示完整 ID 清单并单独确认。");
+define("POST /api/packaging-plans", objectSchema(["name"], packagingPlanFields), "创建包装方案（通用方案或关联某个物料的方案）。包装件只填用户给出的真实尺寸与重量，拿不到就留 0，不得编造；响应 plan.id 是完成证据。");
+define("PATCH /api/packaging-plans/{id}", objectSchema([], packagingPlanFields), "更新包装方案；items 是整份替换，只提交用户要求修改的字段。");
+define("POST /api/packaging-plans/bulk-delete", idsSchema, "批量删除包装方案，必须展示完整 ID 清单并单独确认；已引用该方案的商机与单据不会自动改写。");
 define("POST /api/customers/{id}/activities", objectSchema(["type", "content"], { type: oneOf("call", "email", "whatsapp", "wechat", "meeting", "note"), content: string({ minLength: 1, maxLength: 2000 }), nextReminder: string({ maxLength: 100 }) }), "记录真实客户跟进；响应 activity.id 是写入证据。");
 define("PATCH /api/customers/{id}/activities/{activityId}", objectSchema([], { content: string({ minLength: 1, maxLength: 2000 }), type: oneOf("call", "email", "whatsapp", "wechat", "meeting", "note"), nextReminder: string({ maxLength: 100 }) }), "编辑一条客户跟进记录。自动同步写入的摘要需要能人工修正；留痕写入 updatedAt/editedBy，createdAt 与 operatorId 不可改写。至少要修改一个字段。");
 define("DELETE /api/customers/{id}/activities/{activityId}", emptySchema, "撤销一条客户跟进记录，需要明确确认。这是自动同步的安全网：写错客户或整条是噪音时可以干净撤掉。");
@@ -261,6 +299,7 @@ define("POST /api/deals", objectSchema(["customerId", "title", "product", "nextA
 define("PATCH /api/deals/{id}", objectSchema(["customerId", "title", "product", "nextAction", "nextActionAt"], dealFields), "编辑商机基础信息；服务端会重新计算金额。");
 define("PATCH /api/deals/{id}/stage", objectSchema(["stage", "result", "nextAction", "nextActionAt"], { stage: oneOf("询盘", "已联系", "已报价", "样品", "谈判", "成交", "丢单"), result: string({ minLength: 1, maxLength: 2000 }), nextAction: string({ minLength: 1, maxLength: 200 }), nextActionAt: string({ minLength: 1 }), expectedCloseAt: string(), transitionReason: string(), wonReason: string() }), "推进商机阶段；跨阶段、回退和成交需要对应业务依据。");
 define("POST /api/deals/{id}/events", objectSchema(["type", "content", "nextAction", "nextActionAt"], { type: oneOf("follow_up", "quote", "sample", "negotiation", "payment"), content: string({ minLength: 1, maxLength: 2000 }), nextAction: string({ minLength: 1, maxLength: 200 }), nextActionAt: string({ minLength: 1 }) }), "记录商机进展，并同步下一动作。");
+define("PATCH /api/deals/{id}/packaging-plan", objectSchema([], { planId: string({ default: "", maxLength: 80 }) }), "给商机关联或解除包装方案；planId 必须是团队内真实存在的包装方案 id，空串表示解除关联。");
 define("POST /api/deals/{id}/archive", emptySchema, "只有已成交商机可以归档。");
 define("POST /api/deals/{id}/restore", emptySchema, "恢复已归档商机：仅取消归档标记，阶段与关联数据不变更。");
 define("POST /api/deals/{id}/duplicate", emptySchema, "复制商机：生成一张新的询盘阶段商机，沿用客户、金额与产品明细；时间线与单据不随复制。");
@@ -339,6 +378,29 @@ define("PUT /api/company-profile", objectSchema([], { companyName: string({ maxL
 define("PUT /api/email-tracking/config", objectSchema([], { baseUrl: string({ maxLength: 300 }) }), "配置开发信已读追踪的公网地址（留空 = 关闭追踪）；写库并立即生效，生产环境要求 https。");
 define("PUT /api/system-settings", objectSchema(["requireDocumentExcelApproval"], { requireDocumentExcelApproval: boolean() }), "维护当前团队的系统设置，仅具备系统设置权限的管理员可执行。");
 define("PUT /api/system-settings/ocr", objectSchema([], { provider: oneOf("none", "baidu", "siliconflow"), enabled: boolean(), apiKey: string({ maxLength: 400 }), secretKey: string({ maxLength: 400 }), model: string({ maxLength: 160 }), baseUrl: string({ maxLength: 255 }) }), "维护单证 OCR 供应商配置，仅具备系统设置权限的管理员可执行。");
+define("PUT /api/notify/wecom", objectSchema([], {
+  enabled: boolean(),
+  mode: oneOf("app", "robot"),
+  corpId: string({ maxLength: 64 }),
+  agentId: string({ maxLength: 12 }),
+  secret: string({ maxLength: 200 }),
+  robotWebhook: string({ maxLength: 400 }),
+  sendToOwner: boolean(),
+  recipients: array(string({ maxLength: 120 }), { maxItems: 20 }),
+  rules: objectSchema([], {
+    emailOpened: boolean(), emailReopened: boolean(), emailClicked: boolean(), emailReplied: boolean(), leadAds: boolean(), outreachSummary: boolean(), outreachRound: boolean()
+  })
+}), "维护企业微信消息推送配置（自建应用或群机器人）：Secret 与群机器人地址只写不读、加密存储。启用自建应用时必须填全 CorpID / AgentID / Secret 并至少有一个接收人，否则拒绝。");
+define("POST /api/notify/wecom/test", emptySchema, "用已保存的企业微信配置发一条测试消息，验证推送链路是否连通。不改配置、不发信、不影响业务数据。");
+define("PUT /api/social/meta/app", objectSchema(["appId"], {
+  appId: string({ maxLength: 20 }), appSecret: string({ maxLength: 120 }),
+  graphVersion: string({ maxLength: 10 }), leadOwnerId: string({ maxLength: 100 })
+}), "维护团队 Meta（Facebook / Instagram）应用配置：App Secret 只写不读、加密保存；换 App ID 会让已授权连接失效并要求重新授权。");
+define("POST /api/social/meta/oauth/start", emptySchema, "生成 Meta OAuth 授权地址，供人工在浏览器里完成授权。只返回地址，不写库、不代表已连接。");
+define("POST /api/social/meta/connections/{id}/refresh", emptySchema, "刷新一条 Meta 连接的访问令牌；令牌过期或权限变更后使用。");
+define("DELETE /api/social/meta/connections/{id}", emptySchema, "断开并删除一条 Meta 连接；之后该主页的表单线索不再进入 CRM。");
+define("POST /api/social/meta/pages/{pageId}/leadgen/subscribe", objectSchema([], { subscribe: boolean() }), "为指定主页开启或关闭 leadgen 事件订阅，让新表单线索实时进入 CRM。");
+define("POST /api/social/meta/forms/{formId}/backfill", objectSchema([], { pageId: string({ maxLength: 120 }) }), "回填指定表单已提交的线索；按表单与时间窗口去重，不会重复建线索。");
 define("POST /api/ai-background-research", objectSchema(["entityType", "entityId"], { entityType: oneOf("lead", "customer", "prospect"), entityId: string({ minLength: 1, maxLength: 120 }), source: oneOf("crm", "ai", "cli"), runnerId: string({ maxLength: 80 }) }), "执行客户、线索或搜客候选背调，可能访问外部来源，必须确认目标对象。source 省略时用团队「默认背调来源」；source=cli 表示交给本机已配对的 CLI 联网调研，此时本机必须先有一台在线 Runner。");
 define("PUT /api/ai-engine/settings", objectSchema([], { researchSource: oneOf("crm", "ai", "cli"), emailSource: oneOf("template", "ai", "cli"), cliAdapter: oneOf("workbuddy", "codex"), cliWorkspace: string({ maxLength: 1000 }), cliTimeoutSeconds: integer({ minimum: 60, maximum: 86400 }), runnerId: string({ maxLength: 80 }) }), "修改团队级的 AI 执行来源设置（默认背调来源、默认开发信来源、CLI 适配器/工作目录/超时）。这是团队共享配置，会改变其他人下次执行背调与开发信的默认引擎，必须确认后再提交。");
 define("POST /api/ai-engine/acquire", objectSchema([], { goal: string({ maxLength: 500 }), productKeywords: string({ maxLength: 300 }), countries: string({ maxLength: 200 }), industry: string({ maxLength: 200 }), customerType: string({ maxLength: 200 }), excludeKeywords: string({ maxLength: 200 }), limit: integer({ minimum: 1, maximum: 30 }), runnerId: string({ maxLength: 80 }) }), "用本机已配对的 CLI 按获客技能口径执行一次客户搜寻（只用公开来源、先核实再产出），结果自动同步进候选清单。goal、productKeywords、industry 至少填一项；响应里 acquisition.created 是实际新增的候选数量。");
@@ -368,6 +430,36 @@ define("POST /api/outreach-plans/{id}/control", objectSchema(["action"], {
   action: oneOf("pause", "resume", "stop")
 }), "暂停、继续或停止搜客开发方案；停止后该方案不再推进，也不会再生成新的发信批次。");
 define("DELETE /api/outreach-plans/{id}", emptySchema, "删除搜客开发方案；仅能删除自己名下、已停止的方案，需要明确确认。");
+define("PUT /api/auto-flow/state", objectSchema(["updatedAt"], {
+  updatedAt: number({ minimum: 0 }),
+  state: { type: "object" },
+  schedule: { type: "object" }
+}), "保存当前账号的获客自动流运行快照（进度与排期），只覆盖自己的配置，单条快照上限 48KB；不改动任何发信动作。");
+define("POST /api/auto-flow/complete-send", objectSchema(["items"], {
+  items: array(objectSchema(["prospectId", "to", "subject", "body"], {
+    prospectId: string({ minLength: 1, maxLength: 120 }),
+    company: string({ maxLength: 240 }),
+    to: string({ format: "email", maxLength: 300 }),
+    subject: string({ minLength: 1, maxLength: 300 }),
+    body: string({ minLength: 1, maxLength: 20000 }),
+    sentAt: string({ maxLength: 64 }),
+    requestId: string({ maxLength: 160 })
+  }), { minItems: 1, maxItems: 200 }),
+  failed: integer({ minimum: 0, maximum: 200 })
+}), "把自动流刚刚发出的信归档成一条已完成的发信批次（只登记，不发送）；同一 requestId 会改挂到该批次项上，避免重复计数。归档后给企业微信推一条「本轮已发完」。");
+define("POST /api/auto-flow/runs", objectSchema(["id"], {
+  id: string({ minLength: 1, maxLength: 80 }),
+  command: string({ maxLength: 500 }),
+  startedAt: string({ maxLength: 64 }),
+  finishedAt: string({ maxLength: 64 }),
+  targetCount: number({ minimum: 0, maximum: 500 }),
+  counts: { type: "object" },
+  batchId: string({ maxLength: 120 }),
+  senderEmail: string({ maxLength: 160 }),
+  status: oneOf("sent", "draft_only", "partial")
+}), "把跑完的一轮获客任务归档一条（目标、候选/背调/草稿/已发条数与批次号）；只写当前账号自己的归档，不发送邮件、不改客户归属。");
+defineMany(["GET /api/auto-flow/runs", "GET /api/auto-flow/runs/{id}"], emptySchema, "读取自己的获客任务归档；打开、点击、回复按该批次的实际发件台账实时统计，详情返回每封收件人的打开次数与回复时间。");
+define("GET /api/auto-flow/runs/{id}/notify", emptySchema, "读取某一轮任务的通知结果：企业微信「本轮已发完」是否推送成功（含接收人与失败原因）、发送总结已寄到哪些发件邮箱（附件名/客户数/信件数/失败原因）。只读聚合，不会主动发消息。");
 define("POST /api/sender-mailboxes", objectSchema(["email", "smtpHost", "smtpUser", "smtpPassword"], {
   label: string({ maxLength: 120 }),
   email: string({ format: "email", maxLength: 200 }),
@@ -489,7 +581,14 @@ define("POST /api/peers/import", objectSchema(["peers"], {
 }), "批量导入同行资料，单次最多 500 条；skipDuplicates 决定重复公司名是跳过还是整体报错。");
 define("PATCH /api/peers/{id}", objectSchema([], peerContractFields), "修改自己名下同行的资料，只提交需要变更的字段。");
 define("DELETE /api/peers/{id}", emptySchema, "删除同行资料；只有归属人可以删除，需要明确确认。");
-define("POST /api/development-email/send", objectSchema(["entityType", "entityId", "to", "subject", "body"], { entityType: oneOf("lead", "customer", "prospect"), entityId: string({ minLength: 1, maxLength: 120 }), to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 6000 }), nextFollowAt: string({ maxLength: 100 }) }), "真实发送开发信；收件人、主题、正文必须冻结并确认。");
+define("POST /api/peers/{id}/share", objectSchema([], { reason: string({ maxLength: 500 }) }), "把一条同行推到全公司共享池；只改可见性，归属和团队都不变。推送前需要向用户展示这条同行并确认。");
+define("POST /api/peers/share-bulk", objectSchema([], {
+  ids: array(string({ minLength: 1, maxLength: 64 }), { maxItems: 500 }),
+  all: boolean(),
+  reason: string({ maxLength: 500 })
+}), "批量把同行推到共享池；all=true 表示整池推送（当前可见范围内所有还没共享的同行）。一次改变多条记录，必须先展示清单并单独确认。");
+define("POST /api/peers/{id}/adopt", emptySchema, "从共享池收录一条同行到自己名下：复制一份新记录，原记录保留，双方各自维护。");
+define("POST /api/development-email/send", objectSchema(["entityType", "entityId", "to", "subject", "body"], { entityType: oneOf("lead", "customer", "prospect"), entityId: string({ minLength: 1, maxLength: 120 }), to: string({ format: "email" }), subject: string({ minLength: 1, maxLength: 160 }), body: string({ minLength: 10, maxLength: 6000 }), nextFollowAt: string({ maxLength: 100 }), senderEmail: string({ maxLength: 200 }) }), "真实发送开发信；收件人、主题、正文必须冻结并确认。senderEmail 可选，只能是本人在发件邮箱池里已启用的地址，不传则用账号主发件邮箱。");
 define("POST /api/prospect-outreach-batches", objectSchema(["targetType"], {
   targetType: oneOf("candidate", "lead"),
   candidateIds: array(string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 100 }),
@@ -507,6 +606,8 @@ define("POST /api/prospect-outreach-batches/{id}/items/{itemId}", objectSchema([
 defineMany(["POST /api/prospect-outreach-batches/{id}/pause", "POST /api/prospect-outreach-batches/{id}/resume", "POST /api/prospect-outreach-batches/{id}/cancel"], emptySchema, "控制发信批次运行状态：暂停、继续或取消；取消后的批次不能再次放行。");
 define("POST /api/prospect-outreach-batches/{id}/{action}", emptySchema, "控制发信批次运行状态；路径 action 必须是 pause、resume 或 cancel，取消后的批次不能再次放行。");
 define("DELETE /api/prospect-outreach-batches/{id}", emptySchema, "删除草稿或已取消的发信批次；已放行的批次需先取消再删除，需要明确确认。");
+define("GET /api/prospect-outreach-batches/{id}/summary", emptySchema, "查看这批开发信的发送总结状态：哪些发件邮箱已经收过 Excel、失败原因与重试次数。");
+define("POST /api/prospect-outreach-batches/{id}/summary", emptySchema, "按实际发件邮箱各生成一份 Excel 总结（客户清单+背调+开发信原文）并寄回该邮箱；默认跳过已成功的邮箱，?force=1 强制重发。会给发件邮箱自己发信，属于对外发送动作。");
 
 define("POST /api/agent/sales-training", objectSchema(["sourceUserId"], { sourceUserId: string({ minLength: 1, maxLength: 100 }), periodDays: integer({ minimum: 7, maximum: 365 }) }), "创建业务员训练任务；只能选择服务端允许的团队成员。");
 define("PATCH /api/agent/sales-training/{id}/samples/{sampleId}", objectSchema([], { label: oneOf("positive", "negative", "neutral"), included: boolean(), managerNote: string({ maxLength: 500 }) }), "人工标注训练样本，作为后续训练证据。");
@@ -668,8 +769,8 @@ define("POST /api/import-export/jobs", objectSchema(["name", "type", "rows"], { 
 define("POST /api/import-export/customers/import", objectSchema(["rows"], { rows: array(objectSchema(["company"], { ...customerFields, amount: number({ minimum: 0 }) }), { minItems: 1, maxItems: 2000 }), fileName: string() }), "批量导入客户；同名本人客户会被更新，执行前必须确认数据范围。");
 define("POST /api/import-export/customers/export", emptySchema, "导出当前账号可见客户数据。");
 
-const documentItemFields: Record<string, JsonSchema> = { id: string({ maxLength: 64 }), productId: string({ maxLength: 64 }), product: string({ minLength: 1, maxLength: 500 }), model: string({ maxLength: 200 }), material: string({ maxLength: 200 }), finish: string({ maxLength: 200 }), hsCode: string({ maxLength: 40 }), quantity: number({ minimum: 0 }), unit: string({ maxLength: 40 }), unitPrice: number({ minimum: 0 }), originCountry: string({ maxLength: 80 }), weightKg: number({ minimum: 0 }), packageCount: integer({ minimum: 0 }) };
-const documentFields: Record<string, JsonSchema> = { customerId: string({ maxLength: 64 }), dealId: string({ maxLength: 64 }), revision: integer({ minimum: 1 }), derivedFromDocumentId: string({ maxLength: 64 }), derivedFromType: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"), type: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING"), title: string({ minLength: 1, maxLength: 255 }), number: string({ minLength: 1, maxLength: 80 }), issueDate: string({ minLength: 1, maxLength: 40 }), buyer: string({ maxLength: 200 }), buyerAddress: string({ maxLength: 4000 }), buyerContact: string({ maxLength: 200 }), seller: string({ minLength: 1, maxLength: 200 }), sellerAddress: string({ maxLength: 4000 }), currency: string({ minLength: 1, maxLength: 12 }), incoterm: string({ minLength: 1, maxLength: 80 }), paymentTerm: string({ maxLength: 255 }), shippingMethod: string({ maxLength: 120 }), portLoading: string({ maxLength: 120 }), portDischarge: string({ maxLength: 120 }), validityDate: string({ maxLength: 40 }), bankInfo: string({ maxLength: 8000 }), notes: string({ maxLength: 8000 }), templateStyle: oneOf("executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b"), status: oneOf("draft", "ready", "pending_approval", "approved", "rejected", "exported"), approvalNote: string({ maxLength: 2000 }), approvedAt: string({ maxLength: 100 }), approvedBy: string({ maxLength: 64 }), audits: array({}), sendRecords: array({}), items: array(objectSchema(["product"], documentItemFields), { minItems: 1, maxItems: 80 }) };
+const documentItemFields: Record<string, JsonSchema> = { id: string({ maxLength: 64 }), productId: string({ maxLength: 64 }), product: string({ minLength: 1, maxLength: 500 }), model: string({ maxLength: 200 }), sku: string({ maxLength: 80 }), material: string({ maxLength: 200 }), finish: string({ maxLength: 200 }), hsCode: string({ maxLength: 40 }), quantity: number({ minimum: 0 }), unit: string({ maxLength: 40 }), unitPrice: number({ minimum: 0 }), originCountry: string({ maxLength: 80 }), weightKg: number({ minimum: 0 }), packageCount: integer({ minimum: 0 }) };
+const documentFields: Record<string, JsonSchema> = { customerId: string({ maxLength: 64 }), dealId: string({ maxLength: 64 }), revision: integer({ minimum: 1 }), derivedFromDocumentId: string({ maxLength: 64 }), derivedFromType: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"), type: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS"), title: string({ minLength: 1, maxLength: 255 }), number: string({ minLength: 1, maxLength: 80 }), issueDate: string({ minLength: 1, maxLength: 40 }), buyer: string({ maxLength: 200 }), buyerAddress: string({ maxLength: 4000 }), buyerContact: string({ maxLength: 200 }), seller: string({ minLength: 1, maxLength: 200 }), sellerAddress: string({ maxLength: 4000 }), currency: string({ minLength: 1, maxLength: 12 }), incoterm: string({ minLength: 1, maxLength: 80 }), paymentTerm: string({ maxLength: 255 }), shippingMethod: string({ maxLength: 120 }), portLoading: string({ maxLength: 120 }), portDischarge: string({ maxLength: 120 }), validityDate: string({ maxLength: 40 }), bankInfo: string({ maxLength: 8000 }), notes: string({ maxLength: 8000 }), templateStyle: oneOf("executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b", "custom-c"), status: oneOf("draft", "ready", "pending_approval", "approved", "rejected", "exported"), approvalNote: string({ maxLength: 2000 }), approvedAt: string({ maxLength: 100 }), approvedBy: string({ maxLength: 64 }), audits: array({}), sendRecords: array({}), items: array(objectSchema(["product"], documentItemFields), { minItems: 1, maxItems: 80 }), templateData: objectSchema([], { orderNo: string({ maxLength: 80 }), purchaseRef: string({ maxLength: 80 }), buyerPhone: string({ maxLength: 120 }), buyerEmail: string({ maxLength: 180 }), buyerTaxNo: string({ maxLength: 160 }), consigneeAddress: string({ maxLength: 4000 }), deliveryTime: string({ maxLength: 200 }), depositPercent: number({ minimum: 0, maximum: 100 }), discount: number({ minimum: 0 }), packages: array(objectSchema([], { id: string({ maxLength: 64 }), label: string({ maxLength: 200 }), contents: string({ maxLength: 300 }), model: string({ maxLength: 120 }), netWeight: number({ minimum: 0 }), grossWeight: number({ minimum: 0 }), dimensions: string({ maxLength: 120 }), destination: string({ maxLength: 120 }) }), { maxItems: 60 }), packagingPlanId: string({ maxLength: 80 }), packagingPlanName: string({ maxLength: 200 }) }) };
 const documentAssetPlacementFields: Record<string, JsonSchema> = {
   horizontal: oneOf("template", "left", "center", "right"),
   vertical: oneOf("template", "top", "middle", "bottom"),
@@ -682,7 +783,7 @@ const documentDefaultFields: Record<string, JsonSchema> = {
   sellerPhone: string({ maxLength: 120 }), sellerEmail: string({ maxLength: 180 }), sellerWebsite: string({ maxLength: 500 }), sellerTaxNo: string({ maxLength: 160 }),
   bankInfo: string({ maxLength: 8000 }), currency: string({ maxLength: 12 }), incoterm: string({ maxLength: 80 }), paymentTerm: string({ maxLength: 255 }),
   shippingMethod: string({ maxLength: 120 }), portLoading: string({ maxLength: 120 }), validityDays: integer({ minimum: 0, maximum: 365 }), notes: string({ maxLength: 8000 }),
-  language: oneOf("EN", "ES", "RU", "AR", "ZH"), templateStyle: oneOf("executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b"),
+  language: oneOf("EN", "ES", "RU", "AR", "ZH"), templateStyle: oneOf("executive", "classic", "compact", "indigo", "emerald", "rose", "slate", "amber", "longtec", "custom-b", "custom-c"),
   letterheadId: string({ maxLength: 64 }), stampId: string({ maxLength: 64 }), signatureId: string({ maxLength: 64 }), includeProductImages: boolean()
 };
 define("DELETE /api/trade-document-imports/{id}", emptySchema, "删除尚未生成正式单据的导入分析及其源文件，需要明确确认。");
@@ -713,7 +814,7 @@ define("POST /api/document-assets/upload", objectSchema(["image", "mime", "kind"
   image: string({ minLength: 1, maxLength: 3000000 }), mime: oneOf("image/png", "image/jpeg"), kind: oneOf("letterhead-logo", "stamp", "signature", "product")
 }), "上传用户明确选择的 PNG/JPEG 单据素材，不得生成或替换用户未确认的图片。");
 define("POST /api/trade-documents", objectSchema(["title", "number", "issueDate", "seller", "items"], documentFields), "创建 PI/CI 单据；客户、商机、商品和贸易条款必须来自真实业务数据。");
-define("POST /api/trade-documents/{id}/convert", objectSchema(["targetType"], { targetType: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING") }), "从当前可见单据生成其它类型的独立草稿；源单据不会被覆盖，响应 document.id 是完成证据。");
+define("POST /api/trade-documents/{id}/convert", objectSchema(["targetType"], { targetType: oneOf("PI", "CI", "PO", "CUSTOMS", "PL", "CONTRACT", "QUOTATION", "COO", "SHIPPING", "MARKS") }), "从当前可见单据生成其它类型的独立草稿；源单据不会被覆盖，响应 document.id 是完成证据。");
 define("PATCH /api/trade-documents/{id}", objectSchema(["title", "number", "issueDate", "seller", "items"], documentFields), "完整更新未审批单据；已审批或导出单据必须创建新版本。");
 define("PATCH /api/trade-documents/{id}/excel-options", objectSchema([], { letterheadId: string({ maxLength: 64 }), stampId: string({ maxLength: 64 }), signatureId: string({ maxLength: 64 }), includeProductImages: boolean() }), "修改未审批单据的 Excel 抬头、印章、签名和商品图片选项。");
 defineMany(["POST /api/trade-documents/{id}/export-xlsx", "POST /api/trade-documents/{id}/preview-xlsx"], objectSchema(["templateId"], { templateId: string({ minLength: 1, maxLength: 120 }) }), "使用用户选定的有效模板预览或导出高级 Excel；服务端复核单据归属、模板类型和审批设置。");
@@ -1188,7 +1289,7 @@ function authorizationFor(method: string, path: string, risk: AgentOperationRisk
   if (path === "/api/files/{id}/hold"
     || path === "/api/files/transfer-owner"
     || path === "/api/orders/legacy-files/adopt") return "explicit_confirmation";
-  if (method === "DELETE" || /(bulk|batch|\/merge$|\/permanent$|\/release$|\/lost$)/u.test(path)) return "explicit_confirmation";
+  if (method === "DELETE" || /(bulk|batch|\/merge$|\/permanent$|\/release$|\/share$|\/lost$)/u.test(path)) return "explicit_confirmation";
   return "direct_user_intent";
 }
 

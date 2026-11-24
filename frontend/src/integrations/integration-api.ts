@@ -326,7 +326,7 @@ export function createIntegrationClient(request: IntegrationRequest) {
       }),
     connections: () => data<IntegrationConnection[]>("/api/integrations/connections"),
     localRunners: () => data<LocalRunner[]>("/api/integrations/local-runners"),
-    createLocalRunnerPairing: (deviceName: string) => data<{ pairingCode: string; expiresAt: string; command: string }>("/api/integrations/local-runners/pairings", {
+    createLocalRunnerPairing: (deviceName: string) => data<{ pairingCode: string; expiresAt: string; expiresInSeconds: number; command: string }>("/api/integrations/local-runners/pairings", {
       method: "POST", body: JSON.stringify({ deviceName })
     }),
     revokeLocalRunner: (id: string) => data<LocalRunner>(`/api/integrations/local-runners/${encodeURIComponent(id)}/revoke`, {

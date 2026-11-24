@@ -15,6 +15,7 @@ import { dismissDealRecommendation, linkRecommendationToDeal, resolveRecommendat
 import { recordAcquisitionOutcomeFeedback } from "../prospect-outcome-feedback.js";
 import { ensureOrderForWonDeal } from "../order-service.js";
 import { asyncRoute, createDealEvent, customerWithPipeline, dealProductSummary, findWritableCustomer } from "../server-core.js";
+import { getPackagingPlanRepository } from "../packaging-plan-repository.js";
 
 function ensureDealCustomerWritable(
   user: SessionUser,
@@ -46,7 +47,13 @@ const dealBodySchema = z.object({
   currency: z.string().trim().regex(/^[A-Z]{3}$/).default("USD"),
   nextAction: z.string().trim().min(1),
   nextActionAt: z.string().trim().min(1),
-  expectedCloseAt: z.string().trim().optional().default("")
+  expectedCloseAt: z.string().trim().optional().default(""),
+  /**
+   * 关联包装方案（packaging_plans.id）；空串表示不关联。
+   * 刻意不给 default("")：老客户端/其它入口不传这个字段时必须"保持原值"，
+   * 给了默认值就会把已关联的方案静默清空。
+   */
+  packagingPlanId: z.string().trim().max(80).optional()
 });
 
 const createDealBodySchema = dealBodySchema.extend({
@@ -213,6 +220,7 @@ export function registerDealsRoutes(app: Express) {
       nextAction: body.nextAction,
       nextActionAt: body.nextActionAt,
       expectedCloseAt: body.expectedCloseAt,
+      packagingPlanId: body.packagingPlanId || undefined,
       stageChangedAt: now,
       archivedAt: undefined
     };
@@ -276,6 +284,8 @@ export function registerDealsRoutes(app: Express) {
     deal.nextAction = body.nextAction;
     deal.nextActionAt = body.nextActionAt;
     deal.expectedCloseAt = body.expectedCloseAt;
+    // 只有明确传了这个字段才改；undefined 表示"这次编辑没动包装方案"
+    if (body.packagingPlanId !== undefined) deal.packagingPlanId = body.packagingPlanId || undefined;
     const changes = [
       before.customerId !== deal.customerId ? `客户改为 ${customer.company}` : "",
       before.amount !== deal.amount || before.currency !== deal.currency ? `金额更新为 ${deal.currency} ${deal.amount}` : "",
@@ -286,6 +296,43 @@ export function registerDealsRoutes(app: Express) {
         dealId: deal.id,
         type: "updated",
         content: changes.join("；"),
+        operatorId: req.user!.id,
+        nextAction: deal.nextAction,
+        nextActionAt: deal.nextActionAt
+      });
+    }
+    await store.persist();
+    res.json({ deal });
+  }));
+
+  // 只改包装方案：商机详情里「选择包装方案」是单字段操作，走全量 PATCH 需要把
+  // 标题/金额/下一动作等字段原样重发一遍，任何一处陈旧都会把别的字段改回去。
+  app.patch("/api/deals/:id/packaging-plan", requireAuth, asyncRoute(async (req, res) => {
+    const body = z.object({ planId: z.string().trim().max(80).optional().default("") }).parse(req.body);
+    const store = getStore();
+    const deal = store.deals.find((item) => item.id === req.params.id);
+    if (!deal || !canSeeOwner(req.user!, deal.ownerId, deal.teamId)) {
+      res.status(404).json({ message: "商机不存在" });
+      return;
+    }
+    if (deal.archivedAt) { res.status(400).json({ message: "已归档商机不能编辑" }); return; }
+    if (!ensureDealCustomerWritable(req.user!, deal, res)) return;
+    let planName = "";
+    if (body.planId) {
+      const repository = getPackagingPlanRepository();
+      if (!repository) { res.status(503).json({ message: "包装方案库不可用" }); return; }
+      const plan = await repository.get(req.user!.teamId, body.planId);
+      // 方案不存在/属于别的团队 → 明确拒绝，不能把空 id 静默写进去（看起来像"选成功了"）
+      if (!plan) { res.status(404).json({ message: "包装方案不存在或无权访问" }); return; }
+      planName = plan.name;
+    }
+    const previous = deal.packagingPlanId || "";
+    deal.packagingPlanId = body.planId || undefined;
+    if (previous !== (deal.packagingPlanId || "")) {
+      createDealEvent({
+        dealId: deal.id,
+        type: "updated",
+        content: body.planId ? `关联包装方案「${planName}」` : "解除包装方案关联",
         operatorId: req.user!.id,
         nextAction: deal.nextAction,
         nextActionAt: deal.nextActionAt

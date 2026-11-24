@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { getLocalRunnerService } from "./integration-runtime.js";
+import { LOCAL_RUNNER_PROMPT_MAX_CHARS } from "./local-runner-service.js";
 
 const agentRouter = Router();
 const webRouter = Router();
@@ -55,6 +56,7 @@ const agentIdentity = z.object({
   runnerVersion: z.string().trim().max(40).default(""),
   codexVersion: z.string().trim().max(80).default(""),
   workbuddyVersion: z.string().trim().max(80).default(""),
+  museVersion: z.string().trim().max(80).default(""),
   capabilities: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   workspaces: z.array(z.string().trim().min(1).max(1000)).max(20).default([])
 });
@@ -145,7 +147,7 @@ webRouter.post("/local-runner-tasks", handle(async (req, res) => {
   const body = z.object({
     runnerId: z.string().min(1).max(64),
     adapter: z.enum(["codex", "workbuddy"]).default("codex"),
-    prompt: z.string().trim().min(1).max(20_000),
+    prompt: z.string().trim().min(1).max(LOCAL_RUNNER_PROMPT_MAX_CHARS),
     workspace: z.string().min(1).max(1000),
     executionMode: z.enum(["read_only", "workspace_write"]).default("read_only"),
     timeoutSeconds: z.number().int().min(30).max(86_400).default(600)

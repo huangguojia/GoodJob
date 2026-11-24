@@ -24,25 +24,27 @@ export function installIntegrationCenterInteractions() {
   });
 }
 
-/** 登录页默认账号（静默内嵌用）：默认管理员 */
-const DEFAULT_LOGIN_EMAIL = "admin@goodjob.com";
-const DEFAULT_LOGIN_PASSWORD = "goodjob123";
-
 /**
- * 登录页默认账号静默内嵌：打开登录页时把默认管理员账号密码填进输入框。
- * 只在输入框为空时填充，不清空用户已输入内容；页面上不展示任何明文提示块。
+ * 登录页不再预填任何账号密码（2026-11-19 用户明确要求）。
+ *
+ * 历史实现会把内置管理员 admin@goodjob.com 静默填进输入框，公网部署后等于把
+ * 一个真实超管账号名暴露给所有访客，且用户每次都要手动清空。现在保留函数名
+ * 仅为兼容既有调用点，落点必须始终是空输入框。
  */
 export function prefillLoginCredentials() {
   if (document.body.classList.contains("is-authenticated")) return;
   const emailInput = qs<HTMLInputElement>("#loginEmail");
   const passwordInput = qs<HTMLInputElement>("#loginPassword");
   if (!emailInput || !passwordInput) return;
-  if (!emailInput.value.trim()) emailInput.value = DEFAULT_LOGIN_EMAIL;
-  if (!passwordInput.value) passwordInput.value = DEFAULT_LOGIN_PASSWORD;
+  // 只清理「上一版静默内嵌」可能残留的值，绝不写入默认账号
+  if (emailInput.value === "admin@goodjob.com") emailInput.value = "";
+  if (emailInput.value === "" && passwordInput.value === "goodjob123") passwordInput.value = "";
 }
 
 /** 邮件中心的子视图在「最近打开」里共用一个页签，别把一节拆成四个标签 */
 export function workspaceTabKey(view: string) {
   if (view !== "mail-center" && MAIL_SECTION_ITEMS.some((item) => item.view === view)) return "mail-center";
+  // 任务归档是自动流下的子页面：共用「自动流获客」一个页签
+  if (view === "auto-flow-history") return "auto-flow";
   return view;
 }

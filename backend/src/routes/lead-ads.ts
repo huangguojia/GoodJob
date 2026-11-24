@@ -24,6 +24,7 @@ import {
   readLeadAdsIngressSettings,
   writeLeadAdsIngressSettings
 } from "../lead-ads-ingress-settings.js";
+import { emitCrmEvent } from "../crm-events.js";
 
 export const LEAD_ADS_SOURCE_CHANNEL = "facebook_lead_ads";
 
@@ -59,7 +60,7 @@ function suppliedToken(req: Request) {
  * 归属账号：配置里指定优先；未指定时按创建时间取第一个有 lead.create 权限的启用账号。
  * 单用户个人版通常只有一个候选，这里不做额外猜测。
  */
-function resolveLeadAdsOwner(ownerId: string) {
+export function resolveLeadAdsOwner(ownerId: string) {
   const active = getStore().users.filter((user) => user.status === "active");
   const preferred = ownerId ? active.find((user) => user.id === ownerId) : undefined;
   if (preferred) {
@@ -140,6 +141,9 @@ export function registerLeadAdsRoutes(app: Express) {
       return;
     }
     await getStore().persist();
+    if (!result.duplicate) {
+      emitCrmEvent({ type: "lead.ads", teamId: result.lead.teamId, ownerId: result.lead.ownerId, leadId: result.lead.id, company: result.lead.company, contact: result.lead.contact, email: result.lead.email, phone: result.lead.phone, campaign: normalized.sourceCampaign, channel: "中转", occurredAt: new Date().toISOString() });
+    }
 
     res.status(result.duplicate ? 200 : 201).json({
       received: true,

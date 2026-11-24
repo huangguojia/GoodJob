@@ -487,13 +487,18 @@ function peerNameToneClass(peer: Peer): string {
   return "";
 }
 
+/** 当前页签的数据源：我的同行 / 全公司共享池 */
+function peerPoolSource(): Peer[] {
+  return state.peerPoolScope === "shared" ? state.peersShared : state.peers;
+}
+
 /** 与「未成交客户」同一套筛选口径：关键词命中任一字段 AND 关系标签命中 */
 function filteredPeers(): Peer[] {
   const q = state.peerSearch.trim().toLowerCase();
-  return state.peers.filter((peer) => {
+  return peerPoolSource().filter((peer) => {
     const matchRelation = state.peerRelationFilter === "all"
       || (state.peerRelationFilter === "未标注" ? peer.relations.length === 0 : peer.relations.includes(state.peerRelationFilter));
-    const haystack = [peer.company, peer.country, peer.industry, peer.contact, peer.phone, peer.email, peer.wechat, peer.website, peer.remark, peer.source]
+    const haystack = [peer.company, peer.country, peer.industry, peer.contact, peer.phone, peer.email, peer.wechat, peer.website, peer.remark, peer.source, peer.shareReason]
       .filter(Boolean).join(" ").toLowerCase();
     return matchRelation && (!q || haystack.includes(q));
   });
@@ -547,9 +552,24 @@ export function resetPeerFilters() {
   renderPeers();
 }
 
+/** 共享池来源信息：谁推的、什么时候、为什么 */
+function peerSharedMetaHtml(peer: Peer): string {
+  if (peer.poolStatus !== "shared") return "";
+  const fromTeam = peer.sharedFromTeamId && peer.sharedFromTeamId !== state.user?.teamId
+    ? peer.sharedFromTeamId
+    : "本团队";
+  const when = peer.sharedAt ? formatDateTime(peer.sharedAt) : "";
+  return `<div class="peer-shared-meta">
+    <span>来自 <b>${escapeHtml(fromTeam)}</b> · 推送人 ${escapeHtml(peer.sharedBy || "未知")}</span>
+    ${when || peer.shareReason ? `<span>${when ? escapeHtml(when) : ""}${peer.shareReason ? `${when ? " · " : ""}<span class="peer-shared-reason">${escapeHtml(peer.shareReason)}</span>` : ""}</span>` : ""}
+  </div>`;
+}
+
 export function renderPeers() {
   const tbody = qs<HTMLElement>("#peersTableBody");
   if (!tbody) return;
+  const sharedScope = state.peerPoolScope === "shared";
+  const source = peerPoolSource();
   const visible = sortedPeers(filteredPeers());
   const { pageCount, start, rows } = peerPageRows(visible);
   renderPeerPagination(visible.length, pageCount, start);
@@ -559,17 +579,29 @@ export function renderPeers() {
     return peer.industry.length > limit ? `${peer.industry.slice(0, limit)}…` : peer.industry;
   };
 
-  tbody.innerHTML = rows.length ? rows.map((peer) => `<tr data-peer-id="${escapeHtml(peer.id)}" class="${peer.id === state.selectedPeerId ? "selected" : ""}">
-    <td><div class="company">${countryFlag(peer.country)}<div><button type="button" class="customer-name ${peerNameToneClass(peer)}" data-open-peer="${escapeHtml(peer.id)}" title="查看这家同行">${escapeHtml(peer.company)}</button><span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span></div></div></td>
+  const rowActions = (peer: Peer) => {
+    if (sharedScope) {
+      const mine = peer.ownerId === state.user?.id;
+      return `<button class="btn" type="button" data-open-peer="${escapeHtml(peer.id)}">查看</button>${mine ? "" : `<button class="btn primary peer-adopt-btn" type="button" data-peer-adopt="${escapeHtml(peer.id)}">收录到我的同行</button>`}`;
+    }
+    const shared = peer.poolStatus === "shared";
+    return `<button class="btn" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button>${shared ? `<span class="peer-shared-badge" title="已推到全公司共享池，原记录仍归你维护">共享中</span>` : `<button class="btn" type="button" data-peer-share="${escapeHtml(peer.id)}">推到共享池</button>`}<button class="btn danger" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button>`;
+  };
+
+  tbody.innerHTML = rows.length ? rows.map((peer) => `<tr data-peer-id="${escapeHtml(peer.id)}" class="${peer.id === state.selectedPeerId ? "selected" : ""} ${peer.poolStatus === "shared" ? "is-shared" : ""}">
+    <td class="customer-pool-select-col">${sharedScope ? "" : `<input type="checkbox" data-peer-select="${escapeHtml(peer.id)}" aria-label="选择 ${escapeHtml(peer.company)}" ${state.selectedPeerIds.includes(peer.id) ? "checked" : ""}>`}</td>
+    <td><div class="company">${countryFlag(peer.country)}<div><button type="button" class="customer-name ${peerNameToneClass(peer)}" data-open-peer="${escapeHtml(peer.id)}" title="查看这家同行">${escapeHtml(peer.company)}</button><span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span>${peerSharedMetaHtml(peer)}</div></div></td>
     <td><div class="peer-relation-cell">${peerRelationBadges(peer)}</div></td>
     <td><div class="peer-industry-cell" title="${escapeHtml(peer.industry || "")}">${escapeHtml(industryText(peer, 60) || "待补充行业介绍")}</div></td>
     <td><div class="peer-contact-cell">${peerContactCell(peer)}</div></td>
     <td><div class="customer-follow-cell"><b>${escapeHtml(peer.source || "未登记")}</b><span>来源渠道</span></div></td>
     <td><div class="customer-follow-cell"><b>${escapeHtml(formatLeadDate(peer.createdAt))}</b><span>${peer.updatedAt ? `更新 ${escapeHtml(formatDateTime(peer.updatedAt))}` : "未更新"}</span></div></td>
-    <td><div class="customer-row-actions"><button class="btn" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button><button class="btn danger" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button></div></td>
-  </tr>`).join("") : (state.peers.length
-    ? `<tr><td colspan="7" class="empty-cell">没有符合筛选条件的同行。<button class="btn tiny" id="peerEmptyReset" type="button">清空筛选</button></td></tr>`
-    : `<tr><td colspan="7" class="empty-cell">暂无同行，点右上角「新增同行」开始维护这张关系网络。</td></tr>`);
+    <td><div class="customer-row-actions">${rowActions(peer)}</div></td>
+  </tr>`).join("") : (source.length
+    ? `<tr><td colspan="8" class="empty-cell">没有符合筛选条件的同行。<button class="btn tiny" id="peerEmptyReset" type="button">清空筛选</button></td></tr>`
+    : (sharedScope
+      ? `<tr><td colspan="8" class="empty-cell">共享池还是空的。到「我的同行」里点「整池推到共享池」，把可复用的关系网络放进来。</td></tr>`
+      : `<tr><td colspan="8" class="empty-cell">暂无同行，点右上角「新增同行」开始维护这张关系网络。</td></tr>`));
 
   const mobile = qs<HTMLElement>("#peerMobileList");
   if (mobile) {
@@ -577,27 +609,38 @@ export function renderPeers() {
     <article class="customer-mobile-card" data-peer-mobile-id="${escapeHtml(peer.id)}">
       <span class="customer-mobile-top"><span class="customer-mobile-company">${countryFlag(peer.country)}<button type="button" class="customer-name ${peerNameToneClass(peer)}" data-open-peer="${escapeHtml(peer.id)}">${escapeHtml(peer.company)}</button></span><span class="peer-relation-cell">${peerRelationBadges(peer)}</span></span>
       <span>${escapeHtml(peer.contact || "联系人待补充")} · ${escapeHtml(peer.country || "国家待补充")}</span>
+      ${peerSharedMetaHtml(peer)}
       <span class="peer-mobile-meta"><i>来源 · ${escapeHtml(peer.source || "未登记")}</i><i>添加 ${escapeHtml(formatLeadDate(peer.createdAt))}</i><i>${escapeHtml(industryText(peer, 40) || "行业待补充")}</i></span>
       <div class="peer-contact-cell">${peerContactCell(peer)}</div>
-      <div class="customer-row-actions"><button class="btn" type="button" data-peer-action="edit" data-peer-row-id="${escapeHtml(peer.id)}">编辑</button><button class="btn danger" type="button" data-peer-action="delete" data-peer-row-id="${escapeHtml(peer.id)}">删除</button></div>
-    </article>`).join("") : `<div class="empty-cell">${state.peers.length ? "没有符合筛选条件的同行。" : "暂无同行。"}</div>`;
+      <div class="customer-row-actions">${rowActions(peer)}</div>
+    </article>`).join("") : `<div class="empty-cell">${source.length ? "没有符合筛选条件的同行。" : (sharedScope ? "共享池还是空的。" : "暂无同行。")}</div>`;
   }
 
   // —— 关系汇总：总数 + 互补 / 竞争 / 互相推荐三条关系各自的家人数 ——
-  const setCount = (id: string, value: number) => {
+  const setCount = (id: string, value: number | string) => {
     const node = qs<HTMLElement>(`#${id}`);
     if (node) node.textContent = String(value);
   };
-  setCount("peerTotalCount", state.peers.length);
-  setCount("peerComplementCount", state.peers.filter((item) => item.relations.includes("互补")).length);
-  setCount("peerRivalCount", state.peers.filter((item) => item.relations.includes("竞争")).length);
-  setCount("peerReferralCount", state.peers.filter((item) => item.relations.includes("互相推荐")).length);
+  const totalLabel = qs<HTMLElement>("#peerTotalLabel");
+  if (totalLabel) totalLabel.textContent = sharedScope ? "共享池同行" : "我的同行";
+  setCount("peerTotalCount", source.length);
+  setCount("peerComplementCount", source.filter((item) => item.relations.includes("互补")).length);
+  setCount("peerRivalCount", source.filter((item) => item.relations.includes("竞争")).length);
+  setCount("peerReferralCount", source.filter((item) => item.relations.includes("互相推荐")).length);
+  setCount("peerPoolMineCount", state.peerPoolCounts.mineCount);
+  setCount("peerPoolSharedCount", state.peerPoolCounts.sharedCount);
+
+  // 共享池页签里不显示勾选框和批量推送
+  const selectHead = qs<HTMLElement>("#peerSelectHead");
+  if (selectHead) selectHead.hidden = sharedScope;
+  const pushAll = qs<HTMLButtonElement>("#peerPushAllButton");
+  if (pushAll) pushAll.hidden = sharedScope;
 
   // —— 事件：桌面表格行与移动卡片共用同一批 data-* 标记，一次绑完 ——
   const scope = qs<HTMLElement>("#peers");
   if (scope) {
     qsa<HTMLButtonElement>("[data-open-peer]", scope).forEach((button) => button.addEventListener("click", () => {
-      const peer = state.peers.find((item) => item.id === button.dataset.openPeer);
+      const peer = peerPoolSource().find((item) => item.id === button.dataset.openPeer);
       if (!peer) return;
       state.selectedPeerId = peer.id;
       renderPeerDrawer(peer);
@@ -606,16 +649,34 @@ export function renderPeers() {
     }));
     qsa<HTMLButtonElement>("[data-peer-action]", scope).forEach((button) => button.addEventListener("click", (event) => {
       event.stopPropagation();
-      const peer = state.peers.find((item) => item.id === button.dataset.peerRowId);
+      const peer = peerPoolSource().find((item) => item.id === button.dataset.peerRowId);
       if (!peer) return;
       if (button.dataset.peerAction === "edit") openPeerModal(peer);
       if (button.dataset.peerAction === "delete") void deletePeer(peer);
     }));
+    qsa<HTMLButtonElement>("[data-peer-share]", scope).forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const peer = state.peers.find((item) => item.id === button.dataset.peerShare);
+      if (peer) void openPeerShareModal([peer]);
+    }));
+    qsa<HTMLButtonElement>("[data-peer-adopt]", scope).forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const peer = state.peersShared.find((item) => item.id === button.dataset.peerAdopt);
+      if (peer) void adoptSharedPeer(peer);
+    }));
+    qsa<HTMLInputElement>("[data-peer-select]", scope).forEach((input) => input.addEventListener("change", () => {
+      const id = input.dataset.peerSelect || "";
+      if (!id) return;
+      if (input.checked && !state.selectedPeerIds.includes(id)) state.selectedPeerIds.push(id);
+      if (!input.checked) state.selectedPeerIds = state.selectedPeerIds.filter((item) => item !== id);
+      updatePeerSelectionControls();
+    }));
   }
   qs<HTMLButtonElement>("#peerEmptyReset")?.addEventListener("click", resetPeerFilters);
+  updatePeerSelectionControls();
 
   // 抽屉开着时同步刷新（编辑保存 / 删除后仍显示最新内容）
-  const selected = state.peers.find((item) => item.id === state.selectedPeerId);
+  const selected = peerPoolSource().find((item) => item.id === state.selectedPeerId);
   if (selected && qs("#peerDrawer")?.classList.contains("open")) renderPeerDrawer(selected);
 }
 
@@ -663,13 +724,155 @@ function renderPeerDrawer(peer?: Peer) {
       <h3>备注</h3>
       <p class="peer-drawer-text">${peer.remark ? escapeHtml(peer.remark) : "暂未维护合作历史与注意事项。"}</p>
     </section>
+    ${peer.poolStatus === "shared" ? `<section class="peer-drawer-block">
+      <h3>共享信息</h3>
+      <p class="peer-drawer-text">来自 ${escapeHtml(peer.sharedFromTeamId && peer.sharedFromTeamId !== state.user?.teamId ? peer.sharedFromTeamId : "本团队")} · 推送人 ${escapeHtml(peer.sharedBy || "未知")}${peer.sharedAt ? ` · ${escapeHtml(formatDateTime(peer.sharedAt))}` : ""}${peer.shareReason ? `\n${escapeHtml(peer.shareReason)}` : ""}</p>
+    </section>` : ""}
     <div class="inline-actions peer-drawer-actions">
-      <button class="btn primary" type="button" data-peer-drawer-edit>编辑同行</button>
-      <button class="btn danger" type="button" data-peer-drawer-delete>删除同行</button>
+      ${peer.ownerId === state.user?.id
+        ? `<button class="btn primary" type="button" data-peer-drawer-edit>编辑同行</button><button class="btn danger" type="button" data-peer-drawer-delete>删除同行</button>`
+        : ""}
+      ${peer.poolStatus === "shared"
+        ? (peer.ownerId === state.user?.id
+          ? `<span class="peer-shared-badge">已在共享池</span>`
+          : `<button class="btn primary" type="button" data-peer-drawer-adopt>收录到我的同行</button>`)
+        : `<button class="btn" type="button" data-peer-drawer-share>推到共享池</button>`}
     </div>`;
   qs("#peerDrawerClose", drawer)?.addEventListener("click", closePeerDrawer);
   qsa<HTMLButtonElement>("[data-peer-drawer-edit]", drawer).forEach((button) => button.addEventListener("click", () => openPeerModal(peer)));
   qs<HTMLButtonElement>("[data-peer-drawer-delete]", drawer)?.addEventListener("click", () => void deletePeer(peer));
+  qs<HTMLButtonElement>("[data-peer-drawer-share]", drawer)?.addEventListener("click", () => openPeerShareModal([peer]));
+  qs<HTMLButtonElement>("[data-peer-drawer-adopt]", drawer)?.addEventListener("click", () => { closePeerDrawer(); void adoptSharedPeer(peer); });
+}
+
+/** 切换「我的同行 / 共享池」页签：共享池按需拉一次 */
+export async function switchPeerPoolScope(scope: "mine" | "shared") {
+  if (state.peerPoolScope === scope) return;
+  state.peerPoolScope = scope;
+  state.peerPage = 1;
+  state.selectedPeerIds = [];
+  qsa<HTMLButtonElement>("[data-peer-scope]", qs("#peers") || undefined).forEach((button) => {
+    button.classList.toggle("active", button.dataset.peerScope === scope);
+  });
+  if (scope === "shared") {
+    try {
+      const response = await api<{ peers: Peer[]; mineCount: number; sharedCount: number; sharedByMeCount: number }>("/api/peers?scope=shared");
+      state.peersShared = response.peers;
+      state.peerPoolCounts = {
+        mineCount: response.mineCount ?? state.peerPoolCounts.mineCount,
+        sharedCount: response.sharedCount ?? state.peersShared.length,
+        sharedByMeCount: response.sharedByMeCount ?? 0
+      };
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "共享池加载失败", "error");
+    }
+  }
+  renderPeers();
+}
+
+/** 勾选状态回写：批量条、全选框（含半选态） */
+export function updatePeerSelectionControls() {
+  const selected = new Set(state.selectedPeerIds);
+  qsa<HTMLInputElement>("[data-peer-select]").forEach((input) => {
+    input.checked = selected.has(input.dataset.peerSelect || "");
+  });
+  const summary = qs<HTMLElement>("#peerSelectionSummary");
+  const button = qs<HTMLButtonElement>("#peerPushSelectedButton");
+  if (summary) {
+    summary.hidden = selected.size === 0;
+    summary.textContent = selected.size ? `已选 ${selected.size} 条` : "";
+  }
+  if (button) button.hidden = selected.size === 0;
+  const all = qs<HTMLInputElement>("#peerSelectAll");
+  if (all) {
+    const visibleIds = sortedPeers(filteredPeers()).map((item) => item.id);
+    all.checked = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+    all.indeterminate = !all.checked && visibleIds.some((id) => selected.has(id));
+  }
+}
+
+/** 全选框：勾上=当前筛选结果全选，取消=只清当前筛选结果 */
+export function toggleAllPeerSelection(checked: boolean) {
+  const ids = sortedPeers(filteredPeers()).map((item) => item.id);
+  state.selectedPeerIds = checked
+    ? [...new Set([...state.selectedPeerIds, ...ids])]
+    : state.selectedPeerIds.filter((id) => !ids.includes(id));
+  renderPeers();
+}
+
+/** 推送前先让用户看清清单：整池推送会一次改掉几十条记录 */
+export function openPeerShareModal(peers: Peer[], all = false) {
+  const pending = peers.filter((peer) => peer.poolStatus !== "shared");
+  if (!pending.length) {
+    toast(peers.length ? "这些同行都已经在共享池里了" : "没有可推送的同行", "error");
+    return;
+  }
+  const preview = pending.slice(0, 8).map((peer) => `<li>${escapeHtml(peer.company)}<span>${escapeHtml(peer.country || "国家未知")} · ${escapeHtml(peer.relations.join(" / ") || "未标注")}</span></li>`).join("");
+  const more = pending.length > 8 ? `<li class="more">… 还有 ${pending.length - 8} 条</li>` : "";
+  openModal(all ? "整池推到共享池" : "推到共享池", `
+    <div class="delete-warning"><b>${all ? `我的同行 ${pending.length} 条` : `${pending.length} 条同行`}</b><span>推送后全公司都能在共享池里看到并「收录」到自己名下。你自己的记录照旧保留，归属和团队都不变，只是多一个共享标记。</span></div>
+    <ul class="pool-share-preview">${preview}${more}</ul>
+    <div class="form-field full"><label>推送说明（可选）</label><textarea id="peerShareReasonInput" rows="3" maxlength="500" placeholder="例如：欧洲区仪器渠道商，可直接引荐给其他区域"></textarea></div>
+  `, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="confirmPeerShareButton">${all ? `推送全部 ${pending.length} 条` : `推送 ${pending.length} 条`}</button>`);
+  qs<HTMLButtonElement>("#confirmPeerShareButton")?.addEventListener("click", (event) => {
+    const reason = qs<HTMLTextAreaElement>("#peerShareReasonInput")?.value.trim() || "";
+    void pushPeersToShared({ ids: pending.map((peer) => peer.id), all, reason }, event.currentTarget as HTMLButtonElement);
+  });
+}
+
+async function reloadPeerPool() {
+  const [mine, shared] = await Promise.all([
+    api<{ peers: Peer[]; mineCount: number; sharedCount: number; sharedByMeCount: number }>("/api/peers?scope=mine"),
+    api<{ peers: Peer[]; mineCount: number; sharedCount: number; sharedByMeCount: number }>("/api/peers?scope=shared")
+  ]);
+  state.peers = mine.peers;
+  state.peersShared = shared.peers;
+  state.peerPoolCounts = {
+    mineCount: mine.mineCount ?? mine.peers.length,
+    sharedCount: mine.sharedCount ?? shared.peers.length,
+    sharedByMeCount: mine.sharedByMeCount ?? 0
+  };
+}
+
+async function pushPeersToShared(options: { ids: string[]; all: boolean; reason?: string }, button?: HTMLButtonElement) {
+  if (button) { button.disabled = true; button.textContent = "推送中"; }
+  try {
+    const result = await api<{ pushedCount: number; skipped: Array<{ id: string; company: string; reason: string }> }>("/api/peers/share-bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids: options.all ? [] : options.ids, all: options.all, reason: options.reason || "" })
+    });
+    closeModal();
+    state.selectedPeerIds = [];
+    await reloadPeerPool();
+    renderPeers();
+    const skipped = result.skipped?.length || 0;
+    toast(result.pushedCount
+      ? `已推送 ${result.pushedCount} 条同行到共享池${skipped ? `，跳过 ${skipped} 条` : ""}`
+      : "没有同行被推送，请检查状态后重试", result.pushedCount ? "info" : "error");
+  } catch (error) {
+    if (button) { button.disabled = false; button.textContent = "重试"; }
+    toast(error instanceof Error ? error.message : "推送失败", "error");
+  }
+}
+
+/** 从共享池收录一份到自己名下：原记录保留，双方各自维护 */
+async function adoptSharedPeer(peer: Peer) {
+  try {
+    const result = await api<{ peer: Peer; peers: Peer[]; mineCount: number; sharedCount: number; sharedByMeCount: number }>(`/api/peers/${encodeURIComponent(peer.id)}/adopt`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.peers = result.peers;
+    state.peerPoolCounts = {
+      mineCount: result.mineCount ?? result.peers.length,
+      sharedCount: result.sharedCount ?? state.peerPoolCounts.sharedCount,
+      sharedByMeCount: result.sharedByMeCount ?? state.peerPoolCounts.sharedByMeCount
+    };
+    renderPeers();
+    toast(`已收录「${peer.company}」到我的同行`);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "收录失败", "error");
+  }
 }
 
 function openPeerDrawer() {

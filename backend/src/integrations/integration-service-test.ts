@@ -99,7 +99,7 @@ class FakeRepository {
     const review = this.connectorReviews.find((item) => item.connectorId === connectorId);
     const privateConnector = this.connectors.find((item) => item.id === connectorId);
     if (!review || !privateConnector) throw new Error("not found");
-    if (review.status !== "pending") throw new Error("review conflict");
+    if (review.status !== "pending") throw new Error("连接器审核已处理，请刷新后查看");
     Object.assign(review, { status: decision, reviewedBy: reviewerId, reviewNote: note, updatedAt: now });
     Object.assign(privateConnector, {
       status: decision === "approved" ? "active" : "disabled",
@@ -628,31 +628,25 @@ const privateSubmission = await service.registerPrivateConnector(adminA, {
     maxTools: 20
   }
 });
-assert.equal(privateSubmission.connector.status, "review");
-assert.equal(privateSubmission.connector.trust, "private");
-await assert.rejects(
-  () => service.createConnection(adminA, { connectorId: privateSubmission.connector.id, scope: "team", displayName: "Pending private MCP" }),
-  /尚未开放连接/u
-);
+// 2026-11-17 起私有 MCP 连接器提交即自动放行（本机个人业务版），审核记录保留留痕
+assert.equal(privateSubmission.connector.status, "active");
+assert.equal(privateSubmission.connector.trust, "certified");
+assert.equal(privateSubmission.review.status, "approved");
+assert.equal(privateSubmission.review.reviewedBy, adminA.id);
+assert.ok(privateSubmission.review.reviewNote.includes("自动放行"));
+assert.equal((await service.connectorReviews(adminA, "approved")).length, 1);
+assert.equal((await service.connectorReviews(adminA, "pending")).length, 0);
+await assert.rejects(() => service.connectorReviews(salesA), /不能查看连接器审核/u);
 await assert.rejects(
   () => service.reviewPrivateConnector(adminA, privateSubmission.connector.id, { decision: "approved", note: "" }),
   /没有连接器审核权限/u
 );
-await assert.rejects(() => service.connectorReviews(salesA), /不能查看连接器审核/u);
-assert.equal((await service.connectorReviews(adminA, "pending")).length, 1);
-assert.equal((await service.catalog(salesB)).some((item) => item.id === privateSubmission.connector.id), false);
-const approvedPrivate = await service.reviewPrivateConnector(superAdmin, privateSubmission.connector.id, {
-  decision: "approved",
-  note: "Manifest 与端点安全策略通过"
-});
-assert.equal(approvedPrivate.connector.status, "active");
-assert.equal(approvedPrivate.connector.trust, "certified");
+await assert.rejects(
+  () => service.reviewPrivateConnector(superAdmin, privateSubmission.connector.id, { decision: "approved", note: "重复审核" }),
+  /连接器审核已处理/u
+);
 assert.equal((await service.catalog(salesA)).some((item) => item.id === privateSubmission.connector.id), true);
 assert.equal((await service.catalog(salesB)).some((item) => item.id === privateSubmission.connector.id), false);
-assert.ok(businessStore.internalMessages.some((message) => message.recipientId === superAdmin.id
-  && message.relatedType === "integration_connector" && message.relatedId === privateSubmission.connector.id));
-assert.ok(businessStore.internalMessages.some((message) => message.recipientId === adminA.id
-  && message.relatedType === "integration_connector" && message.relatedId === privateSubmission.connector.id));
 
 console.log(JSON.stringify({
   ok: true,

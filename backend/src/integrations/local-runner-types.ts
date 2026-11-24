@@ -1,7 +1,7 @@
 export type LocalRunnerStatus = "active" | "revoked";
 export type LocalRunnerTaskStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export type LocalRunnerExecutionMode = "read_only" | "workspace_write";
-export type LocalRunnerAdapter = "codex" | "workbuddy";
+export type LocalRunnerAdapter = "codex" | "workbuddy" | "muse";
 
 export interface LocalRunnerPairing {
   id: string;
@@ -29,6 +29,8 @@ export interface LocalRunner {
   runnerVersion: string;
   codexVersion: string;
   workbuddyVersion: string;
+  /** Muse Code（`muse`）版本；未安装为空串 */
+  museVersion: string;
   capabilities: string[];
   workspaces: string[];
   lastSeenAt: string;

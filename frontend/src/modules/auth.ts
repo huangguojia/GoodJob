@@ -13,7 +13,7 @@ import { renderProfile } from "./profile";
 import { recordLog } from "./logs";
 import { applyTheme, getInitialTheme, rememberedWorkspaceView } from "./navigation";
 
-async function completeLogin(user: User) {
+export async function completeLogin(user: User) {
   localStorage.setItem(storage.user, JSON.stringify(user));
   state.user = user;
   applyAuthedUser(user);
@@ -57,15 +57,144 @@ function openMfaChallenge(email: string, challengeId: string) {
   })().catch((error) => toast(error instanceof Error ? error.message : "安全验证失败", "error")));
 }
 
+type LoginResponse = {
+  user?: User;
+  mfaRequired?: boolean;
+  mfaSetupRequired?: boolean;
+  setupToken?: string;
+  challengeId?: string;
+  email?: string;
+};
+
+async function applyLoginResponse(result: LoginResponse, fallbackEmail: string) {
+  if (result.mfaSetupRequired && result.setupToken) { await openMfaEnrollment(result.setupToken); return; }
+  if (result.mfaRequired && result.challengeId) { openMfaChallenge(result.email || fallbackEmail, result.challengeId); return; }
+  if (!result.user) throw new Error("登录响应缺少用户信息");
+  await completeLogin(result.user);
+}
+
 export async function loginWithPassword(email: string, password: string) {
-  const result = await api<{ user?: User; mfaRequired?: boolean; mfaSetupRequired?: boolean; setupToken?: string; challengeId?: string; email?: string }>("/api/auth/login", {
+  const result = await api<LoginResponse>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  if (result.mfaSetupRequired && result.setupToken) { await openMfaEnrollment(result.setupToken); return; }
-  if (result.mfaRequired && result.challengeId) { openMfaChallenge(result.email || email, result.challengeId); return; }
-  if (!result.user) throw new Error("登录响应缺少用户信息");
-  await completeLogin(result.user);
+  await applyLoginResponse(result, email);
+}
+
+/**
+ * 本机一键登录：密码由服务端内置（personal / development 档位 + 本机回环才可用），
+ * 浏览器只发一个空 POST，不接触明文密码。
+ */
+export async function loginWithLocalAdmin() {
+  const result = await api<LoginResponse>("/api/auth/local-login", { method: "POST", body: JSON.stringify({}) });
+  await applyLoginResponse(result, result.email || "");
+}
+
+/**
+ * 登录页初始化：服务端说能用就显示「一键登录」；地址栏带 ?autologin=1 时直接进（单机版双击直达）。
+ */
+export async function initLocalOneClickLogin(options: { auto?: boolean } = {}) {
+  const button = qs<HTMLButtonElement>("#localLoginButton");
+  if (!button) return;
+  let info: { enabled?: boolean; email?: string; autoLogin?: boolean } = {};
+  try {
+    info = await api<{ enabled?: boolean; email?: string; autoLogin?: boolean }>("/api/auth/local-login");
+  } catch {
+    return;
+  }
+  if (!info.enabled) {
+    button.hidden = true;
+    return;
+  }
+  button.hidden = false;
+  const hint = qs<HTMLElement>("#localLoginHint");
+  if (hint) hint.hidden = false;
+  // 本机版把「一键登录」提到密码登录之上，并把密码登录降为备选（样式见 body.is-local-login）。
+  const submit = qs<HTMLButtonElement>("#loginButton");
+  const panel = button.parentElement;
+  if (submit && panel && submit.parentElement === panel) {
+    submit.textContent = "用密码登录";
+    panel.insertBefore(button, submit);
+    document.body.classList.add("is-local-login");
+  }
+  const emailInput = qs<HTMLInputElement>("#loginEmail");
+  if (emailInput && !emailInput.value.trim() && info.email) emailInput.value = info.email;
+
+  const idleLabel = button.textContent || "一键登录";
+  button.onclick = () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "正在登录…";
+    void loginWithLocalAdmin()
+      .catch((error) => toast(error instanceof Error ? error.message : "一键登录失败", "error"))
+      .finally(() => {
+        button.disabled = false;
+        button.textContent = idleLabel;
+      });
+  };
+
+  const wantsAuto = options.auto !== false
+    && (new URLSearchParams(window.location.search).get("autologin") === "1" || info.autoLogin === true);
+  if (wantsAuto) {
+    // 自动登录只跑一次：清掉地址栏参数，退出登录后停留在登录页而不是又被踢回工作台。
+    window.history.replaceState(null, "", window.location.pathname);
+    button.click();
+  }
+}
+
+/** 从官方 WhatsApp 跳走时记住当前视图，返回后可落回原处。 */
+const WHATSAPP_RETURN_KEY = "goodjob:whatsapp-return-view";
+const WHATSAPP_RETURN_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * 官方 WhatsApp 网页版入口。
+ *
+ * 同标签跳转，不开新窗口、不做 iframe：web.whatsapp.com 的 frame-ancestors 只允许
+ * *.whatsapp.com，任何站点内嵌都会被浏览器直接拒绝。这里也不走反向代理、不引第三方
+ * 协议库 —— 页面、凭据、消息全部留在 WhatsApp 官方站点与本机浏览器里。
+ */
+export function initOfficialWhatsAppEntry() {
+  const link = qs<HTMLAnchorElement>("#loginWhatsApp");
+  if (!link || link.dataset.wired === "1") return;
+  link.dataset.wired = "1";
+  const official = "https://web.whatsapp.com/";
+  link.addEventListener("click", (event) => {
+    // href 被改动就交回浏览器默认行为，避免把使用者带去非官方地址。
+    if (link.getAttribute("href") !== official) return;
+    event.preventDefault();
+    try {
+      const view = document.querySelector<HTMLElement>(".view.active")?.id || "dashboard";
+      sessionStorage.setItem(WHATSAPP_RETURN_KEY, JSON.stringify({ view, at: Date.now() }));
+    } catch {
+      // 隐私模式等场景写不了 sessionStorage：不影响跳转，只是返回时不定位原视图。
+    }
+    window.location.assign(official);
+  });
+}
+
+/**
+ * 从外站（官方 WhatsApp）回到 CRM 时恢复跳走前的视图。
+ * 只认 30 分钟内的记录，且目标视图必须真实存在，避免旧记录把人带错地方。
+ */
+export function restoreViewAfterExternalJump(): boolean {
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(WHATSAPP_RETURN_KEY);
+    if (raw) sessionStorage.removeItem(WHATSAPP_RETURN_KEY);
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { view?: string; at?: number };
+    if (!parsed?.view || typeof parsed.at !== "number") return false;
+    if (Date.now() - parsed.at > WHATSAPP_RETURN_TTL_MS) return false;
+    if (!document.getElementById(parsed.view)) return false;
+    activateNavView(parsed.view);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function applyAuthedUser(user: User) {
@@ -121,6 +250,7 @@ export const viewPermissionRequirements: Record<string, string> = {
   leads: "lead.read",
   customers: "customer.read",
   suppliers: "supplier.read",
+  "packaging-plans": "packaging.read",
   "customer-pool": "customer.pool.claim",
   whatsapp: "communication.read",
   wecom: "communication.read",

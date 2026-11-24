@@ -51,6 +51,8 @@ import {
   sendOutboundEmailFailure,
   sendProspectQualificationError
 } from "../server-core.js";
+import { emitCrmEvent } from "../crm-events.js";
+import { outboundLogCompany } from "../wecom-push.js";
 
 // ── 开发信打开/点击追踪（公开端点，收件人邮件客户端直接访问）────────────
 function resolveTrackedCandidate(
@@ -76,6 +78,7 @@ async function applyEmailEngagement(
   const store = getStore();
   const log = store.outboundEmailLogs.find((item) => item.messageId === messageId);
   const occurredAt = new Date().toISOString();
+  const previousOpenAt = log?.lastOpenedAt || "";
   if (log) {
     if (eventType === "open") {
       log.openCount = (log.openCount || 0) + 1;
@@ -85,6 +88,16 @@ async function applyEmailEngagement(
       log.clickCount = (log.clickCount || 0) + 1;
       log.lastClickedAt = occurredAt;
       log.lastClickedUrl = targetUrl.slice(0, 900);
+    }
+  }
+  if (log) {
+    // 推送中心：首次打开必推；再次打开要隔 6 小时以上才算（同一个人反复点开不刷屏）；点击每个链接推一次
+    const reopenWorthy = eventType === "open" && (log.openCount || 0) > 1
+      && previousOpenAt && Date.parse(occurredAt) - Date.parse(previousOpenAt) > 6 * 3600_000;
+    if (eventType === "open" && ((log.openCount || 0) === 1 || reopenWorthy)) {
+      emitCrmEvent({ type: "email.opened", teamId: log.teamId, ownerId: log.ownerId, logId: log.id, messageId: log.messageId, to: log.to || "", subject: log.subject || "", company: outboundLogCompany(log), openCount: log.openCount || 1, occurredAt });
+    } else if (eventType === "click") {
+      emitCrmEvent({ type: "email.clicked", teamId: log.teamId, ownerId: log.ownerId, logId: log.id, messageId: log.messageId, to: log.to || "", subject: log.subject || "", company: outboundLogCompany(log), url: targetUrl.slice(0, 300), occurredAt });
     }
   }
   const candidate = resolveTrackedCandidate(store, log, messageId);
@@ -1964,7 +1977,9 @@ export function registerMailRoutes(app: Express) {
       subject: z.string().trim().min(1).max(160),
       body: z.string().trim().min(10).max(6000),
       nextFollowAt: z.string().trim().max(100).default(""),
-      requestId: z.string().trim().min(1).max(120).optional()
+      requestId: z.string().trim().min(1).max(120).optional(),
+      /** 指定发件邮箱：必须是本人发件邮箱池里已启用的地址；不传/空 = 账号主发件邮箱 */
+      senderEmail: z.string().trim().max(200).optional()
     }).parse(req.body);
     const store = getStore();
     const user = store.users.find((item) => item.id === req.user!.id);
@@ -1972,6 +1987,44 @@ export function registerMailRoutes(app: Express) {
     if (!user || !entity) {
       res.status(404).json({ message: "收件对象不存在或无权访问" });
       return;
+    }
+    /**
+     * 发件身份：自动流可以指定用池里的哪个邮箱发信。
+     * 只换 SMTP 凭据与 From，ownerId/teamId 仍是原账号 —— 台账、触点、幂等键都不受影响。
+     */
+    let sender = user;
+    const requestedSender = (body.senderEmail || "").trim().toLowerCase();
+    const primarySender = (user.outboundEmail || "").trim().toLowerCase();
+    if (requestedSender) {
+      const repository = getSenderMailboxRepository();
+      const mailboxes = repository ? await repository.list(user.id, user.teamId).catch(() => []) : [];
+      const mailbox = mailboxes.find((row) => row.email.trim().toLowerCase() === requestedSender);
+      if (!mailbox) {
+        // 等于账号主邮箱时不要求登记（旧前端只传账号地址也照样能发）；其它地址必须在池里
+        if (requestedSender !== primarySender) {
+          res.status(400).json({ message: "该发件邮箱不在你的发件邮箱池里，请先到个人设置登记" });
+          return;
+        }
+      } else {
+        if (!mailbox.enabled) {
+          res.status(400).json({ message: "该发件邮箱已停用，请到个人设置启用或换一个邮箱" });
+          return;
+        }
+        const dayStart = new Date();
+        dayStart.setHours(0, 0, 0, 0);
+        const sentToday = store.outboundEmailLogs.filter((log) =>
+          log.ownerId === user.id
+          && (log.senderEmail || "").trim().toLowerCase() === requestedSender
+          && log.dispatchStatus !== "uncertain"
+          && Date.parse(log.sentAt) >= dayStart.getTime()
+        ).length;
+        const dailyLimit = mailbox.dailyLimit || 50;
+        if (sentToday >= dailyLimit) {
+          res.status(400).json({ message: `该发件邮箱今日已发 ${sentToday} 封，达到单邮箱上限 ${dailyLimit}，请换一个邮箱或明天再发` });
+          return;
+        }
+        sender = { ...user, ...senderMailboxOverrides(mailbox) };
+      }
     }
     const readiness = developmentEmailReadiness(user, companyProfileForTeam(req.user!.teamId));
     if (!readiness.companyReady) {
@@ -1998,7 +2051,7 @@ export function registerMailRoutes(app: Express) {
     const requestId = body.requestId || requestCorrelationId(req);
     let dispatch: Awaited<ReturnType<typeof dispatchOutboundEmail>>;
     try {
-      dispatch = await dispatchOutboundEmail(store, user, {
+      dispatch = await dispatchOutboundEmail(store, sender, {
         requestId,
         entityType: body.entityType === "prospect" ? "prospect_candidate" : body.entityType,
         entityId: body.entityId,
@@ -2008,7 +2061,7 @@ export function registerMailRoutes(app: Express) {
         source: "development_email_send"
       });
     } catch (error) {
-      sendOutboundEmailFailure(res, error, user);
+      sendOutboundEmailFailure(res, error, sender);
       return;
     }
     const sentAt = dispatch.log.sentAt;

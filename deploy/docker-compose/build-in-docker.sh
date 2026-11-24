@@ -41,4 +41,13 @@ for required in \
   [[ -f "$PACKAGE_ROOT/$required" ]] || die "构建完成但缺少：$required"
 done
 
+# 产物一致性守卫：3.5.6 曾出现过「backend/dist 里没有本次新加的路由」的镜像 ——
+# dist/server.js 的 import 指向一个不存在的文件，容器起得来但接口 404，静态检查也看不出来。
+# 这里逐个核对 dist/server.js 里 import 的路由文件是否真的编译出来了。
+missing_routes=""
+while IFS= read -r rel; do
+  [[ -f "$PACKAGE_ROOT/backend/dist/${rel#./}" ]] || missing_routes="$missing_routes $rel"
+done < <(grep -oE '"\./routes/[A-Za-z0-9._-]+\.js"' "$PACKAGE_ROOT/backend/dist/server.js" | tr -d '"' | sort -u)
+[[ -z "$missing_routes" ]] || die "backend/dist 缺少已注册路由的编译产物：$missing_routes（先确认 tsc 真的重跑过）"
+
 log "生产构建完成"

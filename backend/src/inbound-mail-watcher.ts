@@ -11,6 +11,8 @@ import { normalizeMessageIdValue } from "./email-tracking.js";
 import { recordProspectTouchpoint } from "./prospect-outreach.js";
 import { recordCrmEmailTouchpoint } from "./email-touchpoints.js";
 import { randomUUID } from "node:crypto";
+import { emitCrmEvent } from "./crm-events.js";
+import { outboundLogCompany } from "./wecom-push.js";
 
 /**
  * 回信/退信监听：定时用 IMAP 轮询各业务员自己的收件箱，
@@ -353,6 +355,20 @@ export class InboundMailWatcher {
     } else {
       if (log.repliedAt && log.repliedAt === occurredAt) return "duplicate" as const;
       log.repliedAt = log.repliedAt || occurredAt;
+      emitCrmEvent({
+        type: "email.replied",
+        teamId: log.teamId,
+        ownerId: log.ownerId,
+        logId: log.id,
+        messageId: log.messageId,
+        to: log.to || "",
+        subject: log.subject || "",
+        company: outboundLogCompany(log),
+        from: senderAddress(parsed) || "",
+        replySubject: subject,
+        snippet: content.slice(0, 300),
+        occurredAt
+      });
     }
 
     const candidate = this.candidateOfLog(log);

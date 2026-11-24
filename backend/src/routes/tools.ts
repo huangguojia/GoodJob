@@ -784,10 +784,18 @@ export function registerToolsRoutes(app: Express) {
       descriptionEn: z.string().max(4000).default(""),
       tags: z.array(z.string().max(60)).max(30).default([]),
       imageUrl: z.string().max(512).default(""),
-      packLength: z.number().min(0).optional(),
-      packWidth: z.number().min(0).optional(),
-      packHeight: z.number().min(0).optional(),
-      packWeight: z.number().min(0).optional()
+      // 规格与包装：一律 optional 且不带 default —— 「没传」要能被区分出来（下面按需覆盖），
+      // 否则 Agent 只改价格时会把已有的重量尺寸清空。
+      sku: z.string().max(64).optional(),
+      material: z.string().max(120).optional(),
+      color: z.string().max(120).optional(),
+      sizeSpec: z.string().max(200).optional(),
+      netWeight: z.number().min(0).nullable().optional(),
+      packLength: z.number().min(0).nullable().optional(),
+      packWidth: z.number().min(0).nullable().optional(),
+      packHeight: z.number().min(0).nullable().optional(),
+      packWeight: z.number().min(0).nullable().optional(),
+      unitsPerCarton: z.number().int().min(0).max(1000000).nullable().optional()
     });
     let body;
     try {
@@ -814,14 +822,20 @@ export function registerToolsRoutes(app: Express) {
       descriptionEn: body.descriptionEn,
       tags: body.tags,
       imageUrl: documentAssetUrlForLocalFile(body.imageUrl) || body.imageUrl,
-      packLength: body.packLength,
-      packWidth: body.packWidth,
-      packHeight: body.packHeight,
-      packWeight: body.packWeight,
       ownerId: req.user!.id,
       teamId: req.user!.teamId,
       updatedAt: new Date().toISOString()
     };
+    // 规格与包装按「传了才写」合并：Object.assign 会把显式 undefined 一起盖上去，
+    // 写成 `packWeight: body.packWeight` 等于「没传就清空」，对只改单个字段的调用方是灾难。
+    const specPatch: Record<string, string | number | undefined> = {};
+    for (const key of ["sku", "material", "color", "sizeSpec", "netWeight", "packLength", "packWidth", "packHeight", "packWeight", "unitsPerCarton"] as const) {
+      const value = body[key];
+      if (value === undefined) continue;
+      // 显式传 null = 用户清空了这一项，要写成 undefined 把老值抹掉
+      specPatch[key] = value === null ? undefined : value;
+    }
+    Object.assign(product, specPatch);
     if (existing) Object.assign(existing, product);
     else store.products.unshift(product);
     // 轻量级、同步落库：仅写 products 表，毫秒级完成，避免全量快照的卡顿，同时保证刷新不丢数据

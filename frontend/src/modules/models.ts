@@ -333,6 +333,7 @@ export interface Customer {
   wonDealAmount?: number;
   lastWonAt?: string;
   whatsappPhone?: string;
+  /** owned=有归属；public=团队公池 */
   poolStatus?: "owned" | "public";
   previousOwnerName?: string;
   releasedByName?: string;
@@ -385,6 +386,8 @@ export interface BackgroundResearch {
   talkTracks?: string[];
   risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
   contacts: Array<{ channel: string; value: string }>;
+  /** 关键人：公开页面上具名的人（姓名、岗位、邮箱、出处） */
+  keyPeople?: Array<{ name: string; title: string; email: string; phone: string; sourceUrl: string }>;
   sources: Array<{ title: string; url: string; observedAt: string; detail?: string; authority?: string }>;
   sourceChecks?: Array<{ providerId: string; providerName: string; status: "matched" | "empty" | "failed" | "skipped"; matchCount: number; message: string }>;
   nextAction: string;
@@ -517,7 +520,7 @@ export interface TradeDocumentOcrProviderConfig {
  */
 export type ResearchEngineSource = "crm" | "ai" | "cli";
 export type EmailEngineSource = "template" | "ai" | "cli";
-type AiEngineAdapter = "workbuddy" | "codex";
+type AiEngineAdapter = "workbuddy" | "codex" | "muse";
 
 export interface TeamAiEngineSettings {
   teamId: string;
@@ -532,6 +535,8 @@ export interface TeamAiEngineSettings {
   codexModel?: string;
   /** 选用 Codex CLI 时的思考档位（minimal / low / medium / high；留空 = 跟随 Codex 默认） */
   codexEffort?: string;
+  /** 选用 Muse Code（Meta 的 muse CLI）时的模型（muse-spark-1.3 等；留空 = 跟随 Muse 账号默认） */
+  museModel?: string;
   cliWorkspace: string;
   cliTimeoutSeconds: number;
   runnerId: string;
@@ -736,6 +741,8 @@ export interface Deal {
   closedAt?: string;
   /** 成交自动建单后回写的订单 id：商机详情据此提供「查看订单」入口。 */
   orderId?: string;
+  /** 关联的包装方案 id（packaging_plans.id）；为空表示未关联 */
+  packagingPlanId?: string;
   wonReason?: string;
   lostReason?: string;
   lostReasonCategory?: string;
@@ -803,6 +810,8 @@ export interface TradeDocumentItem {
   imageUrl?: string;
   product: string;
   model: string;
+  /** 货号：定制C 单据在品名下显示 SKU 小字 */
+  sku?: string;
   material?: string;
   finish?: string;
   hsCode: string;
@@ -961,6 +970,40 @@ export interface TradeDocumentSendRecord {
   createdAt: string;
 }
 
+/** 定制C（湛蓝制式）的补充字段。缺省一律按空串/0 处理，历史单据无需迁移。 */
+export interface TradeDocumentTemplateData {
+  orderNo?: string;
+  purchaseRef?: string;
+  buyerPhone?: string;
+  buyerEmail?: string;
+  buyerTaxNo?: string;
+  /** 独立收货方地址：为空时沿用买方地址 */
+  consigneeAddress?: string;
+  /** 交期，例如「定金到账后 45 天」 */
+  deliveryTime?: string;
+  /** 定金比例（百分比 0~100） */
+  depositPercent?: number;
+  /** 整单折扣金额（正数，从合计里减） */
+  discount?: number;
+  /** 运输唛头：逐件包装信息 */
+  packages?: TradeDocumentPackage[];
+  /** 选用的包装方案（packaging_plans.id）；packages 可独立于它被手工调整 */
+  packagingPlanId?: string;
+  /** 方案名快照：方案被改名或删除后，单据上仍能看出当初选的是哪一版 */
+  packagingPlanName?: string;
+}
+
+export interface TradeDocumentPackage {
+  id: string;
+  label?: string;
+  contents?: string;
+  model?: string;
+  netWeight?: number;
+  grossWeight?: number;
+  dimensions?: string;
+  destination?: string;
+}
+
 export interface TradeDocument {
   id: string;
   customerId: string;
@@ -971,7 +1014,7 @@ export interface TradeDocument {
   importAnalysisId?: string;
   importSourceFileName?: string;
   importSourceSha256?: string;
-  type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING";
+  type: "PI" | "CI" | "PO" | "CUSTOMS" | "PL" | "CONTRACT" | "QUOTATION" | "COO" | "SHIPPING" | "MARKS";
   title: string;
   number: string;
   issueDate: string;
@@ -996,7 +1039,9 @@ export interface TradeDocument {
   bankInfo: string;
   notes: string;
   language: "EN" | "ES" | "RU" | "AR" | "ZH";
-  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec" | "custom-b";
+  templateStyle: "executive" | "classic" | "compact" | "indigo" | "emerald" | "rose" | "slate" | "amber" | "longtec" | "custom-b" | "custom-c";
+  /** 定制C（湛蓝制式）补充字段：参考件比标准单据多出来的格子，统一放一个 JSON。 */
+  templateData?: TradeDocumentTemplateData;
   status: "draft" | "ready" | "pending_approval" | "approved" | "rejected" | "exported";
   approvalNote?: string;
   approvedAt?: string;
@@ -2761,7 +2806,26 @@ export interface Product {
   descriptionEn: string;
   tags: string[];
   imageUrl: string;
+  /** 内部货号 / SKU 编码；留空则视为用 model 当编码。 */
+  sku?: string;
+  /** 材质，PI / CI 商品描述常用。 */
+  material?: string;
+  /** 颜色。 */
+  color?: string;
+  /** 产品本体尺寸，自由文本（如 φ100×250 mm）。 */
+  sizeSpec?: string;
+  /** 单件净重 kg（N.W.）。 */
+  netWeight?: number;
+  /** 单件毛重 kg（G.W.），装柜与运费按它算。 */
   packWeight?: number;
+  /** 外箱长 / cm。 */
+  packLength?: number;
+  /** 外箱宽 / cm。 */
+  packWidth?: number;
+  /** 外箱高 / cm。 */
+  packHeight?: number;
+  /** 每箱装箱数 pcs/ctn。 */
+  unitsPerCarton?: number;
   ownerId: string;
   teamId: string;
   updatedAt: string;
@@ -2932,6 +2996,15 @@ export interface Peer {
   remark: string;
   source: string;
   ownerId: string;
+  /** 后端有、前端列表按需展示；老数据可能没有 */
+  teamId?: string;
+  /** private=只在自己同行池；shared=已推到全公司共享池（归属不变） */
+  poolStatus?: "private" | "shared";
+  sharedBy?: string;
+  sharedAt?: string;
+  shareReason?: string;
+  sharedFromTeamId?: string;
+  adoptedFromPeerId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -2981,6 +3054,76 @@ export const SUPPLIER_GRADE_LABEL: Record<SupplierGrade, string> = {
 
 export const SUPPLIER_STATUS_VALUES: SupplierStatus[] = ["active", "evaluating", "paused"];
 export const SUPPLIER_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+
+// ---------------------------------------------------------------------------
+// 包装方案（对应后端 packaging_plans 表）
+//
+// 一个方案 = 一组包装件。字段口径与参考系统「默认包装方案」的 packRow 一致：
+// 包装类型 + 归属设备 + 箱内物品 + 外尺寸 + 净重/毛重，体积由尺寸算出来、不单独存。
+// 两种形态：general（通用，不绑物料）/ product（绑定某个产品/物料）。
+// ---------------------------------------------------------------------------
+
+export type PackagingPlanScope = "general" | "product";
+
+export interface PackagingPlanItem {
+  id: string;
+  /** 包装类型：加固出口木箱 / 纸箱 / 托盘 */
+  label: string;
+  /** 箱内物品：主机框架 / Main frame */
+  contents: string;
+  /** 归属设备 / 货号：JW-T7 PRO #1 */
+  model: string;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+  netWeightKg: number;
+  grossWeightKg: number;
+}
+
+export interface PackagingPlan {
+  id: string;
+  ownerId: string;
+  teamId: string;
+  /** 团队内唯一编码（PKG-0001 形式，可人工改写） */
+  code: string;
+  name: string;
+  scope: PackagingPlanScope;
+  productId: string;
+  productName: string;
+  productModel: string;
+  summary: string;
+  remark: string;
+  items: PackagingPlanItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const PACKAGING_SCOPE_META: Record<PackagingPlanScope, { label: string; tone: string }> = {
+  general: { label: "通用方案", tone: "blue" },
+  product: { label: "物料方案", tone: "green" }
+};
+
+/** 单箱体积（m³）：与后端 packagingItemVolumeCbm 必须同口径 */
+export function packagingItemVolumeCbm(item: Pick<PackagingPlanItem, "lengthCm" | "widthCm" | "heightCm">) {
+  const length = Number(item.lengthCm) || 0;
+  const width = Number(item.widthCm) || 0;
+  const height = Number(item.heightCm) || 0;
+  if (length <= 0 || width <= 0 || height <= 0) return 0;
+  return Math.round((length * width * height) / 1000) / 1000;
+}
+
+/** 方案汇总：件数 / 总净重 / 总毛重 / 总体积 */
+export function packagingPlanSummary(plan: Pick<PackagingPlan, "items">) {
+  const items = plan.items || [];
+  return {
+    packages: items.length,
+    netWeightKg: Math.round(items.reduce((sum, item) => sum + (Number(item.netWeightKg) || 0), 0) * 1000) / 1000,
+    grossWeightKg: Math.round(items.reduce((sum, item) => sum + (Number(item.grossWeightKg) || 0), 0) * 1000) / 1000,
+    volumeCbm: Math.round(items.reduce((sum, item) => sum + packagingItemVolumeCbm(item), 0) * 1000) / 1000
+  };
+}
+
+export const PACKAGING_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 export interface CaseStudy {
   id: string;

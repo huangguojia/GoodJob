@@ -117,9 +117,10 @@ export function engineSkillDirectiveForCodex(skillName: string) {
  *     换成 Codex 只读沙箱的等价说明（命令不能联网，用联网搜索 / goodjob_browser）。
  * WorkBuddy 原样返回，行为不变。
  */
-export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbuddy" | "codex") {
-  if (adapter !== "codex") return prompt;
-  return prompt
+export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbuddy" | "codex" | "muse") {
+  // Muse Code 也没有 WorkBuddy 的 Skill / WebFetch 工具名，按 Codex 同一套改写
+  if (adapter === "workbuddy") return prompt;
+  const adapted = prompt
     .replace(
       /FIRST STEP: load the Skill named `([^`]+)` using the Skill tool, then follow that Skill's methodology for the whole task\. If that Skill is unavailable in this session, continue with the instructions below anyway — never stop, fail or ask because a Skill is missing\./gu,
       (_match, skillName: string) => engineSkillDirectiveForCodex(skillName)
@@ -136,6 +137,12 @@ export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbud
       "You do NOT need to have opened it with WebFetch for that — the search evidence IS your verification.",
       "You do NOT need to have opened the page yourself for that — the search evidence IS your verification."
     );
+  if (adapter === "codex") return adapted;
+  // Muse：沙箱对只读任务开放出网（--sandbox-network unrestricted），不能照抄 Codex 的「命令不能联网」
+  return adapted.replace(
+    "This session runs in a read-only sandbox: shell commands cannot reach the network, so do NOT try curl, wget or other commands to fetch pages.",
+    "This session runs inside Muse Code's sandbox. Prefer your built-in web search tool; if you do fetch a page directly, do it once and move on instead of retrying curl/wget in a loop."
+  );
 }
 
 export interface ResearchCliPromptInput {
@@ -178,11 +185,13 @@ export function buildResearchCliPrompt(input: ResearchCliPromptInput) {
     '  "risks": [{ "level": "high|medium|low", "title": "风险点", "detail": "判断依据" }],',
     '  "talkTracks": ["开场切入点，写成可以直接说出口的英文句子；有几条给几条"],',
     '  "nextAction": "下一步只做一件事的建议",',
+    '  "keyPeople": [{ "name": "姓名", "title": "岗位（如 Purchasing Manager / Sales Director / Owner）", "email": "公开的个人或部门邮箱，没有就留空", "phone": "", "sourceUrl": "https://出现这个人的公开页面" }],',
     '  "findings": [{ "label": "事实项", "value": "核实到的事实" }],',
     '  "sources": [{ "title": "页面标题", "url": "https://..." }]',
     "}",
     "Be thorough: list EVERY fact you verified and EVERY source you actually consulted — do not trim the list to look concise.",
     "Only include findings and sources you actually verified in this session. Leave them as empty arrays if you verified nothing.",
+    "keyPeople: look for decision makers relevant to buying our product (owner/director, purchasing/procurement, sales/business development, technical/product manager) on the company website (about/team/contact pages), press releases, trade-show exhibitor pages and industry directories. Every person must appear on the cited sourceUrl; never guess names or construct email addresses from patterns.",
     "",
     engineOutputContract(),
     "",
@@ -765,6 +774,38 @@ export interface EngineResearchSkeleton {
   talkTracks: string[];
   risks: Array<{ level: "high" | "medium" | "low"; title: string; detail: string }>;
   sources: Array<{ title: string; url: string; observedAt: string; detail?: string; authority?: string }>;
+  /** 关键人：只收公开页面上具名的人（官网团队/联系页、新闻稿、行业名录） */
+  keyPeople?: ResearchKeyPerson[];
+}
+
+export interface ResearchKeyPerson {
+  name: string;
+  title: string;
+  email: string;
+  phone: string;
+  sourceUrl: string;
+}
+
+/** 规范化引擎返回的关键人：必须有名字或岗位；邮箱不合法就丢掉，不让脏数据进发信 */
+export function normalizeKeyPeople(value: unknown): ResearchKeyPerson[] {
+  if (!Array.isArray(value)) return [];
+  const text = (input: unknown, max: number) => (typeof input === "string" ? input.trim().slice(0, max) : "");
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const raw = item as Record<string, unknown>;
+    const name = text(raw.name, 80);
+    const title = text(raw.title ?? raw.role ?? raw.position, 80);
+    const emailRaw = text(raw.email, 160);
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw) ? emailRaw : "";
+    const phone = text(raw.phone, 60);
+    const sourceUrl = /^https?:\/\//i.test(text(raw.sourceUrl, 400)) ? text(raw.sourceUrl, 400) : "";
+    if (!name && !title) return [];
+    const key = `${name.toLowerCase()}|${email.toLowerCase()}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ name, title, email, phone, sourceUrl }];
+  }).slice(0, 8);
 }
 
 /**
@@ -792,6 +833,12 @@ export function applyResearchEnginePatch<T extends EngineResearchSkeleton>(
   if (patch.talkTracks.length) { next.talkTracks = patch.talkTracks; applied.push("talkTracks"); }
   if (patch.nextAction) { next.nextAction = patch.nextAction; applied.push("nextAction"); }
   if (patch.risks.length) { next.risks = patch.risks.map((risk) => ({ ...risk })); applied.push("risks"); }
+  const enginePeople = normalizeKeyPeople(parsed?.keyPeople);
+  if (enginePeople.length) {
+    const known = new Set((next.keyPeople || []).map((person) => `${person.name.toLowerCase()}|${person.email.toLowerCase()}`));
+    next.keyPeople = [...(next.keyPeople || []), ...enginePeople.filter((person) => !known.has(`${person.name.toLowerCase()}|${person.email.toLowerCase()}`))].slice(0, 8);
+    applied.push("keyPeople");
+  }
   if (patch.findings.length || patch.overflow.length) {
     // 引擎查到的事实单独成组，避免和 CRM 事实混在一起后无法分辨来源。
     // overflow（超出首屏上限的条目）同样并进来：宁可列表长一点，也不要让「已经挖到的内容」消失。

@@ -77,6 +77,31 @@ function mailCredentialAdditionalData(context: MailCredentialContext) {
   return Buffer.from(["mail-credential", context.id, context.teamId, context.kind].join("|"), "utf8");
 }
 
+/**
+ * 通用加密封装（社媒授权令牌、企业微信应用 Secret 等）：每种用途独立派生密钥 + AAD，
+ * 不同用途的密文不能互换。密文格式：sec-v1.<iv>.<tag>.<payload>
+ */
+export function encryptSecretValue(purpose: string, aad: string, value: string) {
+  if (!value) return "";
+  const key = createHash("sha256").update(`goodjob-secret-${purpose}-v1|`).update(credentialSecret()).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(`${purpose}|${aad}`, "utf8"));
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return ["sec-v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), encrypted.toString("base64url")].join(".");
+}
+
+export function decryptSecretValue(purpose: string, aad: string, value: string) {
+  if (!value) return "";
+  const [version, ivValue, tagValue, payloadValue] = value.split(".");
+  if (version !== "sec-v1" || !ivValue || !tagValue || !payloadValue) throw new Error("密文格式无效");
+  const key = createHash("sha256").update(`goodjob-secret-${purpose}-v1|`).update(credentialSecret()).digest();
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivValue, "base64url"));
+  decipher.setAAD(Buffer.from(`${purpose}|${aad}`, "utf8"));
+  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+  return Buffer.concat([decipher.update(Buffer.from(payloadValue, "base64url")), decipher.final()]).toString("utf8");
+}
+
 export function isEncryptedMailCredential(value: string) {
   return value.startsWith("mail-v1.");
 }

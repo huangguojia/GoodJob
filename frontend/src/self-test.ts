@@ -247,7 +247,8 @@ const systemSettingsView = prototype.slice(
 );
 assert.match(systemSettingsView, /<h1>系统设置<\/h1>/, "系统设置页面必须使用正确标题");
 assert.doesNotMatch(systemSettingsView, /账号列表|新增账号|权限模板|角色权限/, "人员与权限配置不得在系统设置中重复出现");
-assert.match(systemSettingsView, /公司资料[\s\S]*单据设置[\s\S]*系统更新/, "系统设置必须保留公司资料、单据设置与系统更新");
+assert.match(systemSettingsView, /公司资料[\s\S]*单据设置/, "系统设置必须保留公司资料与单据设置");
+assert.doesNotMatch(systemSettingsView, /系统更新|检查更新|镜像源配置/, "BS 架构无法自更新：系统设置不得出现系统更新区块（2026-11-17 用户明确移除）");
 assert.equal(apiLayer.includes("leadFinderDetailMarkButton"), false, "自动获客不应保留标记可联系的授权语义");
 assert.match(apiLayer, /function prospectLookupDiagnosis[\s\S]*This does not mean the company is inactive/, "联系人缺失必须提供业务可理解的原因说明");
 assert.match(apiLayer, /data-lead-lookup-reason/, "联系人和联系方式未找到状态必须可以点击查看原因");
@@ -616,8 +617,8 @@ assert.match(apiLayer, /brandMarkText: qs<HTMLInputElement>\("#docBrandMarkTextI
 assert.match(apiLayer, /document\.type === "PI" && document\.templateStyle === "custom-b"/, "PI 必须支持「定制B」专用模板预览");
 assert.match(
   apiLayer,
-  /function renderCustomBPiPreview[\s\S]{0,1400}?letterhead \? \(letterhead\.logoUrl \|\| ""\) : \(document\.letterheadSnapshot\?\.logoUrl \|\| ""\)/,
-  "定制B 的左上角 Logo 必须取所选卖方公司档案的 logoUrl（没选档案的老单据才用保存快照），不能写死在模板里"
+  /function documentLogoFor\(document: TradeDocument\)[\s\S]{0,900}?letterhead\.logoUrl/,
+  "定制B 的左上角 Logo 必须取当前卖方公司档案的 logoUrl（档案不属于这家公司就不放），不能写死在模板里"
 );
 assert.match(apiLayer, /function renderCustomBPiPreview[\s\S]{0,9000}?cb-logo-image/, "定制B 必须把 Logo 真正渲染在页头（参考 PI 在右上角）");
 assert.doesNotMatch(apiLayer, /function renderCustomBPiPreview[\s\S]{0,9000}?ecore/i, "定制B 模板里不能残留参考件的品牌名");
@@ -677,8 +678,8 @@ assert.match(apiLayer, /async function saveDocumentLogoInline[\s\S]{0,900}?\/api
 assert.match(apiLayer, /document\.type === "PO" && document\.templateStyle === "custom-b"/, "PO 必须支持「定制B」专用模板预览");
 assert.match(
   apiLayer,
-  /function renderCustomBPoPreview[\s\S]{0,1500}?letterhead \? \(letterhead\.logoUrl \|\| ""\) : \(document\.letterheadSnapshot\?\.logoUrl \|\| ""\)/,
-  "PO 定制B 的左上角 Logo 也必须取所选公司档案的 logoUrl，不能写死在模板里"
+  /function documentLogoFor\(document: TradeDocument\)[\s\S]{0,900}?letterhead\.logoUrl/,
+  "PO 定制B 的左上角 Logo 也必须取当前卖方公司档案的 logoUrl，不能写死在模板里"
 );
 assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?cbp-parties/, "PO 定制B 必须有 Vendor / Ship to 两栏");
 assert.match(apiLayer, /function renderCustomBPoPreview[\s\S]{0,12000}?Confirmed By:/, "PO 定制B 必须有 Confirmed By 签章区");
@@ -692,6 +693,33 @@ assert.match(prototype, /\.custom-b-po \.cbp-table th \{[\s\S]{0,160}?background
 assert.match(prototype, /\.custom-b-po \.cbp-head \{[\s\S]{0,160}?justify-content: space-between/, "PO 页头必须是 Logo 与公司名左右分置");
 assert.match(prototype, /\.custom-b-po \.cbp-sign \{[\s\S]{0,120}?grid-template-columns: 1fr 1fr/, "PO 的 Confirmed By / For and on behalf of 必须是双栏签章区");
 assert.match(prototype, /\.custom-b-po \.cbp-terms-table th:nth-child\(4\) \{ width: 26%; \}/, "PO 条款表必须固定五列比例，否则 Payment Term 会把 Terms 挤没");
+// 定制C（湛蓝制式）：照参考件复刻的报价单 / 形式发票 / 销售合同 / 商业发票 / 运输唛头。
+// 守四件事：① 三处下拉都能选到定制C；② 纸张容器与固定配色不被通用样式冲掉；
+// ③ 五种单据都走同一套定制渲染，不会掉回通用版式；④ 补充字段（templateData）必须真的存得下来。
+assert.match(prototype, /id="docTemplateInput">(?:(?!<\/select>)[\s\S])*?<option value="custom-c">定制C<\/option>/, "单据编辑器必须提供「定制C」模板选项");
+assert.match(prototype, /id="docThemeInput">(?:(?!<\/select>)[\s\S])*?<option value="custom-c">定制C<\/option>/, "主题选择必须同步提供「定制C」");
+assert.match(prototype, /id="documentDefaultTemplateStyle">(?:(?!<\/select>)[\s\S])*?<option value="custom-c">定制C<\/option>/, "团队单据默认配置必须能选「定制C」");
+assert.match(prototype, /\.doc-paper\.custom-c \{[\s\S]{0,400}?padding: 48px 54px/, "定制C 必须按参考件的 A4 内距（12.7mm 14.3mm = 48px 54px）排版");
+assert.match(prototype, /\.doc-paper\.custom-c \{[\s\S]{0,400}?--cc-brand: #1d4ed8/, "定制C 必须固定湛蓝制式配色，不跟主题色板走");
+assert.match(apiLayer, /DOC_PINNED_TEMPLATE_STYLES = new Set<string>\(\["longtec", "custom-b", "custom-c"\]\)/, "主题色板切换不能覆盖定制C 的选择");
+assert.match(apiLayer, /\["QUOTATION", "PI", "CONTRACT", "CI"\]\.includes\(document\.type\)[\s\S]{0,120}?renderCustomCDocumentPreview/, "报价单 / 形式发票 / 销售合同 / 商业发票 必须都走定制C 专用渲染");
+assert.match(apiLayer, /document\.templateStyle === "custom-c" && document\.type === "MARKS"[\s\S]{0,80}?renderCustomCMarksPreview/, "运输唛头必须走定制C 的逐箱唛头渲染");
+assert.match(apiLayer, /templateData: collectDocumentTemplateData\(\)/, "单据保存必须带上定制C 补充字段");
+assert.match(apiLayer, /renderDocumentPackages\(document\.templateData\?\.packages \|\| \[\]\)/, "打开单据必须回填包装件清单");
+assert.match(prototype, /id="addDocumentPackageButton"/, "编辑区必须能新增包装件");
+assert.match(apiLayer, /fillDocumentPackagesFromItems/, "必须能按明细箱数批量生成包装件");
+// 定制C 只画得动那五类单据。PO / PL / COO / SHIPPING 套上 .custom-c 会被 794px 容器压坏
+// （明细表竖排、页脚被 overflow:hidden 截断），必须显式退回经典版式，并在界面上说明。
+assert.match(apiLayer, /document\.templateStyle === "custom-c" \? "classic" : document\.templateStyle/, "定制C 未覆盖的单据类型必须退回经典版式，不能带 custom-c 类渲染");
+assert.match(apiLayer, /CUSTOM_C_COVERED_TYPES = \["QUOTATION", "PI", "CONTRACT", "CI", "MARKS"\]/, "定制C 覆盖范围必须与专用渲染分支一致");
+assert.match(apiLayer, /syncCustomCCoverageHint\(document\)/, "预览渲染时必须同步定制C 覆盖范围提示");
+assert.match(prototype, /id="docTemplateCoverageHint"/, "模板下拉必须能提示定制C 的覆盖范围");
+// 编辑器为了好输入会留一行空包装件；一个字没填的空壳不能写进 templateData。
+assert.match(apiLayer, /rows\.filter\(\(pkg\) =>[\s\S]{0,200}?Number\(pkg\.grossWeight \|\| 0\) > 0/, "空白的包装件行不能被存进 templateData");
+// 5 个包装件时第三行正好压在 PDF 单页切割线上，导出会把唛头拦腰截断。
+assert.match(apiLayer, /function applyMarksPageBreaks/, "唛头跨页时必须把整行顶到页边界");
+assert.match(apiLayer, /if \(capture\.querySelector\("\.cc-marks"\)\) applyMarksPageBreaks\(capture\)/, "唛头必须在导出副本上做分页对齐，按面板窄宽度算会错位");
+
 assert.match(prototype, /id="leadFinderLfindButton"[\s\S]*Lfind 深入查询/, "自动获客页必须提供 Lfind 深入查询入口");
 assert.match(prototype, /id="leadFinderLfindInlineButton"[\s\S]*Lfind 深入查询/, "来源与执行设置中必须提供 Lfind 深入查询入口");
 assert.match(apiLayer, /\/api\/lead-finder\/lfind-tasks/, "前端必须通过 Lfind 任务接口启动和轮询本地 Skill");
@@ -2018,19 +2046,269 @@ assert.ok(
 
 // ---- 自动流：必须是真实链路，不许退回计时器动画（2026-11-03） ----
 assert.equal(apiLayer.includes("autoFlowStartTicking"), false, "自动流不得残留旧的计时器模拟引擎");
+assert.match(apiLayer, /function autoFlowPollDelay\(elapsedMs: number\)[\s\S]{0,120}1_000/u, "获客轮询刚派单时必须 1 秒一查，等待反馈要及时");
+assert.match(apiLayer, /autoFlowIsTransient\(error\) && transientFailures < 4/u, "查询进度遇到网络抖动必须自动重连，不能一次失败就判死整步");
+assert.match(apiLayer, /AUTO_FLOW_QUEUE_GIVE_UP_MS[\s\S]{0,40}10 \* 60_000/u, "Runner 长时间不领取任务必须有明确的放弃时限和处理提示");
+assert.match(apiLayer, /if \(autoFlowLiveToken && autoFlowLiveToken === autoFlowRunToken\) return;/u, "切回自动流页面时不得重复启动正在运行的步骤（会重复派单）");
+assert.match(apiLayer, /export function startAutoFlowScheduler\(\)/u, "自动流必须提供定时运行");
+assert.match(apiLayer, /startAutoFlowScheduler\(\);/u, "定时运行必须在应用启动时开始检查，不依赖停留在自动流页");
 assert.match(apiLayer, /gj\.autoflow\.v2/u, "自动流状态键升到 v2，避免读到旧版预演状态");
 assert.match(apiLayer, /autoFlowRunProspect\(token: number\)[\s\S]{0,3000}\/api\/lead-finder\/parse-goal"/u, "获客节点必须先用 AI 解析自然语言目标");
 assert.match(apiLayer, /autoFlowRunProspect\(token: number\)[\s\S]{0,5000}\/api\/lead-finder\/lfind-tasks"/u, "获客节点必须提交 Lfind 任务（本地 Runner → 本机 CLI）");
 assert.match(apiLayer, /autoFlowRunResearch\(token: number\)[\s\S]{0,2500}\/api\/ai-background-research"/u, "背调节点必须调真实背调接口");
-assert.match(apiLayer, /autoFlowRunCompose\(token: number\)[\s\S]{0,2500}\/api\/development-email\/draft"/u, "写信节点必须调真实草稿接口");
+// 先切出函数体再断言（固定字符窗口会随函数变长误报）
+const autoFlowComposeBody = apiLayer.slice(
+  apiLayer.indexOf("async function autoFlowRunCompose"),
+  apiLayer.indexOf("async function autoFlowDraftLocked")
+);
+assert.match(autoFlowComposeBody, /\/api\/development-email\/draft"/u, "写信节点必须调真实草稿接口");
 assert.match(apiLayer, /autoFlowRunSend\(token: number\)[\s\S]{0,2500}\/api\/development-email\/send"/u, "发送节点必须走真实发送接口");
 assert.match(apiLayer, /if \(!artifacts\.sendConfirmed\) \{[\s\S]{0,600}autoFlowSendPending = true;/u, "发送节点必须在拿到人工确认前暂停，不得自动外发");
 assert.match(apiLayer, /data-af-action="send-confirm"[\s\S]{0,400}data-af-action="send-skip"/u, "发送确认区必须同时提供确认与跳过两个动作");
 assert.match(apiLayer, /autoFlowConfirmSend\(action\.dataset\.afAction === "send-confirm"\)/u, "确认/跳过必须经事件委托接到 autoFlowConfirmSend");
 assert.match(apiLayer, /autoFlowPausePoint\(key: string\)[\s\S]{0,800}autoFlowPauseRequested/u, "暂停必须是协作式检查点，不打断真实任务");
+// 自动流发信邮箱：能选账号主邮箱 / 池内某个邮箱 / 按封数轮换，并且必须真的传给后端
+assert.match(prototype, /id="afSenderEmail" data-af-sender-select/u, "自动流命令栏必须提供发信邮箱选择控件");
+assert.match(apiLayer, /data-af-sender-select aria-label="本轮开发信用哪个邮箱发出"/u, "发送确认区必须能当场切换发信邮箱");
+assert.match(apiLayer, /\.\.\.\(senderEmail \? \{ senderEmail \} : \{\}\)/u, "自动流发信必须把选定的发件邮箱传给后端，否则永远用主邮箱");
+assert.match(apiLayer, /function autoFlowSenderForIndex\(index: number, sentOkBefore: number\)/u, "轮换发件邮箱的基准封数必须在循环外取一次，循环内现取会算两遍");
+assert.match(apiLayer, /function autoFlowAssertSenderReady\(\)[\s\S]{0,600}已不在发件邮箱池里/u, "选定的邮箱被删除/停用时必须明确拦下，不能悄悄回落主邮箱");
 assert.match(apiLayer, /function autoFlowStart\(\) \{[\s\S]{0,400}autoFlowSyncCommandFromDom\(state\);/u, "启动/继续前必须以输入框为准回写目标，否则重置后会出现「输入框有字却报先用一句话描述」");
 assert.match(apiLayer, /function autoFlowRenderCommand\(\)[\s\S]{0,500}if \(state\.command\) input\.value = state\.command;/u, "状态为空时不得清空输入框：界面有字、状态为空是最难查的错位");
 assert.match(apiLayer, /artifacts\.lfindTaskId = undefined;[\s\S]{0,200}throw new Error\(`没有候选入池/u, "终态失败的 Lfind 任务必须清掉任务号，否则重试永远卡在同一个坏任务上");
+// ---- 自动流不能被前置产出卡死（2026-11-19）----
+// 现场：第 3 步标着「已完成」但 0 封草稿，第 4 步报「没有草稿可发送」，点「重试第 4 步」永远同一句，
+// 用户既没法继续也没法回上一步。修法：缺前置产出时回退到真正没产出的那一步。
+assert.match(apiLayer, /function autoFlowRollbackTo\(upstreamKey: string, reason: string\)/u, "必须提供「前置产出缺失就回退」的统一入口");
+assert.match(
+  apiLayer,
+  /if \(!artifacts\.drafts\.length\) \{\s*autoFlowRollbackTo\("compose",/u,
+  "发送节点没有草稿时必须退回写信节点，不能抛错让「重试第 4 步」原地死循环"
+);
+assert.doesNotMatch(apiLayer, /throw new Error\("没有草稿可发送，先跑写信节点"\)/u, "发送节点不得再用一句无解的错误文案把用户钉死在第 4 步");
+assert.match(
+  apiLayer,
+  /if \(!artifacts\.opportunities\.length\) \{\s*autoFlowRollbackTo\("prospect",/u,
+  "背调/写信缺候选时必须退回获客节点"
+);
+assert.match(apiLayer, /autoFlowRollbackTo\("research", "写信需要背调结论/u, "写信缺少背调结论时必须退回背调节点");
+const autoFlowHealBody = apiLayer.slice(
+  apiLayer.indexOf("function autoFlowHealEmptyArtifacts"),
+  apiLayer.indexOf("let autoFlowWriteTimer")
+);
+assert.match(
+  autoFlowHealBody,
+  /标着完成，但这一步没有任何产出/u,
+  "加载时必须自愈「标着完成但没有产出」的假状态，否则用户刷新后仍然卡在同一处"
+);
+assert.match(
+  apiLayer,
+  /autoFlowHealLegacyFailure\(autoFlowState\);\s*autoFlowHealEmptyArtifacts\(autoFlowState\);/u,
+  "空产出自愈必须挂在状态加载链上，不能只在某个按钮里跑"
+);
+assert.match(
+  apiLayer,
+  /if \(!picked\.length && artifacts\.opportunities\.length\) \{[\s\S]{0,120}artifacts\.selectedIds = undefined;/u,
+  "勾选记录与当前候选对不上时必须回落全选，不能当成「一家都没勾」让背调永远失败"
+);
+assert.match(apiLayer, /data-af-cp="restart">从头重新开始</u, "失败停靠点必须给「从头重新开始」的出口，不能只留一个无效的重试");
+assert.match(
+  apiLayer,
+  /autoFlowState\.command = previousCommand;[\s\S]{0,900}找客户的目标保留在输入框里/u,
+  "重置必须保留找客户的目标，否则重来一轮还要把需求重打一遍"
+);
+// 云端快照体积有限，但不能因此把产物丢掉：多标签页/换设备拉回来必须能对上
+assert.match(
+  apiLayer,
+  /researched: Object\.fromEntries\([\s\S]{0,300}\{ score: item\.score, verdict: item\.verdict \}/u,
+  "云端快照必须带上背调结论（评分+判定），否则换设备拉回来会出现「第 2 步完成、实际 0 家背调」"
+);
+assert.match(
+  apiLayer,
+  /researched: Object\.keys\(remoteArtifacts\.researched \|\| \{\}\)\.length \? remoteArtifacts\.researched! : localArtifacts\.researched/u,
+  "拉取快照时远端缺背调结论必须保留本地的，不能拿空对象覆盖"
+);
+assert.match(
+  apiLayer,
+  /drafts: \(remoteArtifacts\.drafts \|\| \[\]\)\.length \? remoteArtifacts\.drafts! : localArtifacts\.drafts/u,
+  "拉取快照时远端缺草稿必须保留本地的，不能把已写好的信洗掉"
+);
+assert.match(
+  apiLayer,
+  /updatedAt: typeof parsed\.updatedAt === "number" \? parsed\.updatedAt : undefined/u,
+  "恢复本地状态必须带上 updatedAt，否则刷新后时间戳归零，会被服务器上更旧的快照覆盖"
+);
+
+// ---- 第 5 步「数据监控」（2026-11-20）：常驻监控，不是"等回信"的阻塞节点 ----
+assert.equal(apiLayer.includes('key: "monitor"'), true, "流水线必须有第 5 步「数据监控」：发完信后按批次盯着打开/回复");
+assert.equal(apiLayer.includes("autoFlowRunMonitor"), true, "第 5 步必须有自己的执行器：取一次基线后立刻完成，不能把流水线挂住");
+assert.match(
+  apiLayer,
+  /async function autoFlowRunMonitor[\s\S]{0,2200}autoFlowCompleteStep\("monitor"\)/u,
+  "监控节点取完基线就必须标记完成（之后由 30 秒线程刷新），不允许一直停在 running"
+);
+assert.match(
+  apiLayer,
+  /runs\/\$\{encodeURIComponent\(run\.id\)\}/u,
+  "监控读数必须来自批次台账（runs/:id），不能自己另算一套口径"
+);
+assert.match(
+  apiLayer,
+  /uncovered/u,
+  "回复/退信统计依赖 IMAP 收信监听：覆盖不到时必须显式提示，不能让人把 0 读成「客户都不回」"
+);
+assert.match(
+  apiLayer,
+  /整条流水线跑完[^\n]*\n[\s\S]{0,300}void autoFlowArchiveRun\(\);/u,
+  "跑完一轮必须自动归档一条任务，否则没有可切换的历史任务"
+);
+assert.match(
+  apiLayer,
+  /if \(state\.archivedAt === runId\) return;/u,
+  "归档必须按 runId 幂等：刷新/重复渲染不得把同一轮存成多条任务"
+);
+assert.match(
+  apiLayer,
+  /void autoFlowArchiveRun\("abandoned", previous\);/u,
+  "中途重置/从头重开前必须把这一轮归档成 partial，否则跑了半截的任务在归档里查不到"
+);
+assert.match(
+  apiLayer,
+  /reason === "abandoned" \? "partial" : "draft_only"/u,
+  "中途停下的任务要用 partial 状态，归档列表才能区分「没跑完」与「没发出」"
+);
+assert.match(
+  apiLayer,
+  /function autoFlowArchiveIfFinished\(\)[\s\S]{0,400}void autoFlowArchiveRun\(\);/u,
+  "跑完但归档没存上时，回到自动流页要补存，保证每轮都有一条归档"
+);
+assert.match(
+  apiLayer,
+  /autoFlowEnsure\(\);\s*autoFlowArchiveIfFinished\(\);/u,
+  "自动流页面渲染时必须触发补存检查"
+);
+assert.match(
+  apiLayer,
+  /batchId: artifacts\.batchId \|\| "",/u,
+  "归档必须带发信批次号，打开与回复全靠 batch:<id>: 前缀关联到这一批邮件"
+);
+assert.match(
+  apiLayer,
+  /if \(archived\?\.batchId\) \{\s*\n\s*artifacts\.batchId = archived\.batchId;/u,
+  "发送完成后必须记住 complete-send 返回的批次号，否则这一批的打开/回复永远统计不到"
+);
+assert.match(
+  apiLayer,
+  /artifacts\.pendingBatchId = undefined;\s*\n\s*artifacts\.pendingBatchItems = undefined;/u,
+  "归档成功后要清掉待归档明细：归档失败时它还要用来按同一批次号重试"
+);
+// ---- 失败后的三个出口：重试 / 退回上一步 / 重置，都不能把上一轮的状态带进新动作（2026-11-20）----
+assert.match(
+  apiLayer,
+  /if \(key === "send" && state\.artifacts\) state\.artifacts\.sendConfirmed = false;/u,
+  "发送失败后必须清掉人工确认标志：否则点「重试」会直接外发剩余的信，用户根本没再看一眼"
+);
+assert.match(
+  apiLayer,
+  /function autoFlowStepBack\(fromKey: string\)/u,
+  "失败停靠点必须提供「退回上一步重做」：否则只有重试（前提没变）和从头开始（前面白跑）两个出口"
+);
+assert.match(
+  apiLayer,
+  /function autoFlowDropArtifactsFrom\(key: string\): string\[\]/u,
+  "退回上一步必须连该步及下游产物一起清：只改状态的话各节点会走续跑分支，看着点了重做、实际一条都不重来"
+);
+assert.match(
+  apiLayer,
+  /state\.archivedAt = undefined;\s*\n\s*autoFlowFocusKey = target\.key;/u,
+  "退回后要允许这一轮重新归档：已归档的 runId 不清掉，重跑完也不会覆盖旧记录"
+);
+assert.match(
+  apiLayer,
+  /autoFlowState\.stepMode = previousStepMode;/u,
+  "重置不能静默关掉步进模式：用户下次点「开始运行」会一路跑到发送，和他预期正好相反"
+);
+assert.match(
+  apiLayer,
+  /void autoFlowArchiveRun\("abandoned", previous\);/u,
+  "重置前归档必须传上一轮快照：全局状态马上会被换成空白的新一轮，异步归档读全局会归档出一条空记录"
+);
+assert.match(
+  apiLayer,
+  /if \(autoFlowState\.status\.send === "paused" && !autoFlowState\.activeKey && !autoFlowState\.artifacts\?\.sendConfirmed\) \{/u,
+  "刷新页面后要按持久化状态重建发送确认区，否则确认列表整块消失，只剩「继续运行」可点"
+);
+assert.match(apiLayer, /"\/api\/auto-flow\/runs"/u, "归档列表必须读自己的任务归档接口");
+assert.match(apiLayer, /\/api\/auto-flow\/runs\/\$\{encodeURIComponent\(runId\)\}/u, "切换任务时按任务 id 拉这一批的打开/回复明细");
+assert.match(prototype, /id="afArchiveList"/u, "自动流页面必须有任务归档列表，否则「切换不同任务看效果」无处可点");
+assert.match(prototype, /id="afArchiveDetail"/u, "任务归档必须显示选中任务的已发/打开/点击/回复与收件人明细");
+// 归档是独立一页，入口在自动流右上角；不许再塞回页面底部（用户 2026-11-19 明确要求）
+const autoFlowViewHtml = prototype.slice(
+  prototype.indexOf('<div class="view" id="auto-flow">'),
+  Math.max(prototype.indexOf('<div class="view" id="auto-flow-history">'), 0) || undefined
+);
+assert.equal(
+  autoFlowViewHtml.includes('id="afArchiveList"'),
+  false,
+  "任务归档不能嵌在自动流页底部：历史列表要单独一页，从右上角点进去"
+);
+assert.match(
+  autoFlowViewHtml,
+  /id="afArchiveButton"[^>]*data-top-view="auto-flow-history"/u,
+  "自动流右上角必须有「任务归档」入口，点击进入独立页面"
+);
+assert.match(
+  prototype,
+  /<div class="view" id="auto-flow-history">/u,
+  "任务归档必须是独立视图（#auto-flow-history），不能是页面底部的内嵌区块"
+);
+assert.equal(
+  /\.af-arch-stat \{[^}]*border-radius/u.test(prototype),
+  false,
+  "统计项不得做成圆角小卡片：用户明确禁止「四个白色小格」的指标排版（2026-11-19）"
+);
+assert.match(
+  prototype,
+  /\.af-arch-stat \+ \.af-arch-stat \{[^}]*border-left/u,
+  "统计条必须是一条连续读数：项与项之间用竖分隔线，而不是四个各自带底色的独立小格"
+);
+assert.match(apiLayer, /data-af-run="\$\{escapeHtml\(run\.id\)\}"/u, "归档列表每一项必须能点开对应任务");
+assert.match(
+  apiLayer,
+  /senderRotateEvery: autoFlowState\.senderRotateEvery,[\s\S]{0,700}batchId: artifacts\.batchId,/u,
+  "云端快照必须带上批次号，否则换设备拉回后这一批的打开/回复永远关联不上"
+);
+// —— 通知总结：企业微信「本轮发完」/ 发送总结 / 打开回复（2026-11-19 用户要求） ——
+assert.match(
+  prototype,
+  /id="afNotify"[\s\S]{0,1000}id="afNotifyWecom"[\s\S]{0,600}id="afNotifyEmail"[\s\S]{0,600}id="afNotifyMonitor"/u,
+  "自动流页必须有「通知总结」，三行分别是企业微信、邮箱总结、打开回复"
+);
+assert.ok(
+  prototype.indexOf('id="afNotify"') > 0
+  && prototype.indexOf('id="afNotify"') < prototype.indexOf('<div class="view" id="auto-flow-history">'),
+  "通知总结属于自动流本页，不能跑到任务归档页去"
+);
+assert.match(
+  apiLayer,
+  /\/api\/auto-flow\/runs\/\$\{encodeURIComponent\(runId\)\}\/notify/u,
+  "通知总结必须读这一轮的企业微信推送与发送总结投递结果"
+);
+assert.match(
+  apiLayer,
+  /export function startAutoFlowMonitor\(\) \{\s*if \(autoFlowMonitorTimer !== null\) return;/u,
+  "打开/回复监控必须是全局单例：已经有刷新线程就直接返回，不许按任务再开一条"
+);
+assert.equal(
+  (apiLayer.match(/setInterval\(\(\) => void autoFlowMonitorTick\(\)/gu) || []).length,
+  1,
+  "只允许一条监控线程：同一时刻最多一个刷新定时器，任务再多也不加线程"
+);
+assert.match(
+  apiLayer,
+  /const watched = autoFlowRuns\.filter\(\(item\) => item\.batchId\);/u,
+  "监控读数必须覆盖所有已发批次，不能只盯当前选中的那一个任务"
+);
 
 // —— 客户成交状态：弹窗可编辑、默认未成交、保存必须真的提交 lifecycleStatus（2026-11-05） ——
 assert.match(
@@ -2132,6 +2410,140 @@ assert.match(
     serverCoreSource.includes('senderEmail: user.outboundEmail || ""'),
     "台账必须记录实际发件邮箱（senderEmail），否则日限额算不出来"
   );
+}
+
+// ---- 包装方案（2026-11-18）----
+// 需求：业务中心可维护「通用方案 / 物料方案」，单据平台可选用并在左侧按定制C 主题显示明细，
+// 商机可关联并悬浮查看。下面锁的是这条链路上坏掉就会静默失效的几处。
+{
+  const repoSource = readFileSync(new URL("../../backend/src/packaging-plan-repository.ts", import.meta.url), "utf8");
+  const routeSource = readFileSync(new URL("../../backend/src/routes/packaging-plans.ts", import.meta.url), "utf8");
+  const dealsRouteSource = readFileSync(new URL("../../backend/src/routes/deals.ts", import.meta.url), "utf8");
+  const tradeDocSource = readFileSync(new URL("./modules/trade-documents.ts", import.meta.url), "utf8");
+  const dealsSource = readFileSync(new URL("./modules/deals.ts", import.meta.url), "utf8");
+
+  // 「等方案库加载完再补渲染」必须带一次性闸门：缓存命中时 Promise 立即 resolve，
+  // 无条件挂 .then 会让渲染函数自我排队成微任务死循环，把页面主线程锁死（2026-11-18 实测卡死）。
+  assert.ok(
+    dealsSource.includes("dealPlanRetryKey !== retryKey"),
+    "商机抽屉补渲染必须加一次性闸门，否则打开抽屉即死循环卡死页面"
+  );
+  assert.ok(
+    tradeDocSource.includes("documentPlanRetryId !== id"),
+    "单据左侧方案明细补渲染必须加一次性闸门，方案被删时会无限自我重渲染"
+  );
+
+  assert.ok(repoSource.includes("CREATE TABLE IF NOT EXISTS packaging_plans"), "包装方案必须有独立表，不能挂在 trade_documents 上");
+  assert.ok(repoSource.includes("items_json JSON"), "包装件明细要落在 items_json（整套读写），不为几个箱子给主表加一排列");
+  assert.ok(repoSource.includes("uk_packaging_plans_code"), "方案编码必须团队内唯一，否则下拉里两个 PKG-0001 分不清");
+  // 体积口径：cm³ → m³ 必须 /1e6（写成 /1000 会大 1000 倍，唛头与装箱单全错）
+  assert.ok(
+    /Math\.round\(\(length \* width \* height\) \/ 1000\) \/ 1000/u.test(repoSource),
+    "单箱体积口径必须是 cm³ / 1e6 保留 3 位"
+  );
+  assert.ok(repoSource.includes("return rows.slice(0, 60)"), "包装件超过 60 行要截断，避免整柜明细把 payload 撑爆");
+
+  assert.ok(routeSource.includes("req.user!.teamId"), "包装方案是团队共享资产，必须按 teamId 取（不能按 ownerId 过滤）");
+  assert.ok(
+    dealsRouteSource.includes('"/api/deals/:id/packaging-plan"'),
+    "商机选方案必须走单字段端点：走全量 PATCH 会把标题/金额等字段一起重写"
+  );
+  // 给 default(\"\") 会让「编辑商机但没动方案」静默清空关联
+  assert.ok(
+    /packagingPlanId: z\.string\(\)\.trim\(\)\.max\(80\)\.optional\(\)/u.test(dealsRouteSource),
+    "packagingPlanId 不能带 default(空串)，否则未传该字段的编辑会清掉已关联方案"
+  );
+
+  assert.ok(prototype.includes('data-view="packaging-plans"'), "包装方案必须在导航里有入口");
+  assert.ok(prototype.includes('id="packagingPlansTableBody"'), "包装方案列表缺少表格容器");
+  assert.ok(prototype.includes('id="docPackagingPlanSummary"'), "单据左侧缺少包装方案明细容器");
+  assert.ok(prototype.includes('id="docPickPackagingPlanButton"'), "单据编辑区缺少「选择包装方案」入口");
+
+  // 「需要该主题才显示」：入口必须落在 #docCustomCFields 的 details 内
+  const customCStart = prototype.indexOf('id="docCustomCFields"');
+  const customCEnd = prototype.indexOf("</details>", customCStart);
+  assert.ok(customCStart > 0 && customCEnd > customCStart, "找不到定制C 补充字段区块");
+  const customCBlock = prototype.slice(customCStart, customCEnd);
+  assert.ok(customCBlock.includes('id="docPickPackagingPlanButton"'), "包装方案入口必须在定制C 专属区块里，其它主题不该显示");
+  assert.ok(
+    !prototype.slice(0, customCStart).includes('id="docPickPackagingPlanButton"'),
+    "包装方案入口不能同时出现在通用编辑区（会出现两套按钮互相抢事件）"
+  );
+  assert.ok(
+    tradeDocSource.includes('planBlock.hidden = !selected'),
+    "非定制C 主题必须整块隐藏包装方案入口：details 收起不够，仍能手动展开去选"
+  );
+
+  assert.ok(tradeDocSource.includes("packagingPlanId: documentPlanIdentity().id"), "保存单据时必须记录选用的方案 id");
+  assert.ok(
+    tradeDocSource.includes("packagingPlanName: documentPlanIdentity().name"),
+    "单据要存方案名快照：方案被改名/删除后，仍能看出当初选的是哪版"
+  );
+  assert.ok(
+    tradeDocSource.includes("syncDocumentPackagingPlan(document.templateData?.packagingPlanId"),
+    "打开单据时必须回填方案，否则左侧明细永远是空"
+  );
+  assert.ok(
+    readFileSync(new URL("../../backend/src/routes/trade-documents.ts", import.meta.url), "utf8")
+      .includes("packagingPlanId: z.string().trim().max(80).optional().default(\"\")"),
+    "后端 templateData schema 必须收下 packagingPlanId，否则 zod 会剥掉该字段导致方案关联静默丢失"
+  );
+
+  assert.ok(tradeDocSource.includes("packagingPlanSummary(plan)"), "左侧明细的件数/毛重/体积必须走同一份汇总口径");
+  assert.ok(apiLayer.includes("packagingPlanHoverBadge(deal.packagingPlanId)"), "商机卡片必须能悬浮查看包装件明细");
+  assert.ok(apiLayer.includes("/api/deals/${dealId}/packaging-plan"), "商机详情必须能改方案关联");
+  assert.ok(
+    tradeDocSource.includes("方案明细已带入下方「包装件」"),
+    "方案查不到时要退到快照名，不能显示成「未选择方案」"
+  );
+}
+
+// ---- 同行共享池（2026-11-18）----
+// 需求：同行管理（peers）里加共享池，可以把整个同行池推到全公司共享池；
+// 其他人看到后可「收录」一份到自己名下，原记录保留。
+// 锁的是最容易写错的四处：挂错模块、推送改归属、共享池按团队过滤、列没落库。
+{
+  const workspaceRoutes = readFileSync(new URL("../../backend/src/routes/workspace.ts", import.meta.url), "utf8");
+  const mysqlStore = readFileSync(new URL("../../backend/src/mysql-store.ts", import.meta.url), "utf8");
+  const iamSource = readFileSync(new URL("../../backend/src/iam/iam-foundation.ts", import.meta.url), "utf8");
+  const workspaceModule = readFileSync(new URL("./modules/workspace.ts", import.meta.url), "utf8");
+
+  // 必须挂在 peers（同行管理），不是 customers（客户公池）
+  assert.ok(workspaceRoutes.includes('"/api/peers/:id/share"'), "同行共享池缺单条推送端点");
+  assert.ok(workspaceRoutes.includes('"/api/peers/share-bulk"'), "同行共享池缺整池/批量推送端点");
+  assert.ok(workspaceRoutes.includes('"/api/peers/:id/adopt"'), "共享池缺「收录到自己名下」端点");
+  assert.ok(workspaceRoutes.includes('z.enum(["mine", "shared"])'), "同行列表必须支持 scope=shared，否则共享池永远是空的");
+  assert.ok(
+    workspaceRoutes.includes("function sharedPeersFor") && workspaceRoutes.includes("isPlatformIdentity(user)) return []"),
+    "共享池要跨团队可见，不能再套 canSeeOwner / teamId 过滤"
+  );
+  // 推送只改可见性：写入分支里不能出现 ownerId / teamId 的重新赋值
+  const shareBlock = workspaceRoutes.slice(
+    workspaceRoutes.indexOf('"/api/peers/:id/share"'),
+    workspaceRoutes.indexOf('"/api/peers/share-bulk"')
+  );
+  assert.ok(
+    !/ownerId\s*:/.test(shareBlock) && !/teamId\s*:/.test(shareBlock),
+    "推送同行到共享池不能改归属/团队，否则原主的同行会凭空消失"
+  );
+  // 收录是复制一份，不是转移
+  const adoptBlock = workspaceRoutes.slice(workspaceRoutes.indexOf('"/api/peers/:id/adopt"'));
+  assert.ok(
+    adoptBlock.includes("adoptedFromPeerId: source.id") && adoptBlock.includes("ownerId: req.user!.id"),
+    "收录共享同行必须复制成自己名下的一条新记录，并记录来源 id"
+  );
+  assert.ok(
+    mysqlStore.includes('await ensureColumn(pool, "peers", "pool_status"') && mysqlStore.includes("adopted_from_peer_id"),
+    "MySQL 必须给 peers 落 pool_status / shared_* 列，否则重启后共享池全丢"
+  );
+  assert.ok(mysqlStore.includes("pool_status,shared_by,shared_at,share_reason,shared_from_team_id"), "peers 整表写回必须带上共享列");
+  assert.ok(iamSource.includes('"peer.pool.share"'), "主管推送他人同行要有独立能力位");
+
+  assert.ok(workspaceModule.includes('state.peerPoolScope === "shared" ? state.peersShared'), "前端页签要切数据源");
+  assert.ok(workspaceModule.includes('"/api/peers/share-bulk"'), "前端整池推送要走 share-bulk");
+  assert.ok(workspaceModule.includes("/adopt`"), "前端收录要打 adopt 端点");
+  assert.ok(prototype.includes('data-peer-scope="shared"'), "同行页要有共享池页签入口");
+  assert.ok(prototype.includes('id="peerPushAllButton"'), "同行页要有整池推送按钮");
 }
 
 console.log(JSON.stringify({ ok: true, checked: required.length }, null, 2));

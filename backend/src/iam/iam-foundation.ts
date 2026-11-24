@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type mysql from "mysql2/promise";
 import { ensurePlatformMfaTables } from "./platform-mfa.js";
 
@@ -31,9 +32,16 @@ export const IAM_PERMISSION_CATALOG: IamPermissionDefinition[] = [
   { code: "customer.export", module: "客户", name: "导出客户", riskLevel: "critical", scopeModes: ["self", "org_subtree", "tenant"] },
   { code: "customer.pool.claim", module: "客户", name: "领取公池客户", riskLevel: "normal", scopeModes: ["public_pool"] },
   { code: "customer.pool.release", module: "客户", name: "释放客户到公池", riskLevel: "sensitive", scopeModes: ["self", "org_subtree", "tenant"] },
+  // 同行共享池：业务员推自己名下的同行不需要额外能力，这条只用于主管推别人名下的。
+  { code: "peer.pool.share", module: "同行", name: "推送成员同行到共享池", riskLevel: "sensitive", scopeModes: ["org_unit", "org_subtree", "tenant"] },
   // 供应商 = 公司共享的供应链资产：scopeModes 刻意不含 self。
   // 业务员拿到的 scope 因此落在 org_unit（本部门/本团队），全公司共用一份供应商库，
   // 否则同一个工厂会被每个业务员各录一遍。删除留给主管及以上（不进 salesPermissions）。
+  // 包装方案 = 单证资料：业务员要能自己建通用方案（做单证时现改），删除留给主管及以上。
+  { code: "packaging.read", module: "包装方案", name: "查看包装方案", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "packaging.create", module: "包装方案", name: "创建包装方案", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "packaging.update", module: "包装方案", name: "维护包装方案", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
+  { code: "packaging.delete", module: "包装方案", name: "删除包装方案", riskLevel: "high", scopeModes: ["org_unit", "org_subtree", "tenant"] },
   { code: "supplier.read", module: "供应商", name: "查看供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
   { code: "supplier.create", module: "供应商", name: "创建供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
   { code: "supplier.update", module: "供应商", name: "维护供应商", riskLevel: "normal", scopeModes: ["org_unit", "org_subtree", "tenant"] },
@@ -110,6 +118,7 @@ const salesPermissions = new Set([
   "workspace.dashboard.read", "workspace.dashboard.manage", "lead.read", "lead.create", "lead.update", "lead.delete",
   "customer.read", "customer.create", "customer.update", "customer.delete", "customer.pool.claim",
   "customer.pool.release", "customer.export", "supplier.read", "supplier.create", "supplier.update",
+  "packaging.read", "packaging.create", "packaging.update",
   "deal.read", "deal.create", "deal.update", "deal.delete",
   "deal.stage.advance", "deal.quote.create", "report.read", "daily_report.read",
   "daily_report.create", "daily_report.comment", "message.read", "message.send",
@@ -122,7 +131,7 @@ const salesPermissions = new Set([
 ]);
 
 const managerExtraPermissions = new Set([
-  "lead.assign", "lead.export", "customer.assign", "report.export", "supplier.delete",
+  "lead.assign", "lead.export", "customer.assign", "peer.pool.share", "report.export", "supplier.delete", "packaging.delete",
   "deal.stage.override",
   "order.status.override",
   "commission.manage", "document.approve", "agent.manage", "integration.manage", "integration.approval.act", "training.manage",
@@ -498,30 +507,48 @@ async function seedLegacyCompatibility(pool: mysql.Pool) {
     LEFT JOIN company_profiles cp ON cp.team_id = u.team_id
     WHERE u.role <> 'super_admin' AND u.team_id <> '' AND u.team_id <> 'all'
     ON DUPLICATE KEY UPDATE name=VALUES(name), updated_at=NOW(3)`);
-  await pool.query(`INSERT INTO organization_units
-    (id, tenant_id, parent_id, name, code, unit_type, path, depth, sort_order,
-     status, version_no, created_at, updated_at)
-    SELECT CONCAT('org_', LEFT(SHA2(t.id, 256), 32)), t.id, NULL, t.name,
-      'company-root', 'company',
-      CONCAT('/', CONCAT('org_', LEFT(SHA2(t.id, 256), 32)), '/'),
-      0, 0, 'active', 1, NOW(3), NOW(3)
-    FROM tenants t
-    ON DUPLICATE KEY UPDATE name=VALUES(name), updated_at=NOW(3)`);
+  // 只给「完全没有根组织」的租户补一条。自助开通与平台开通各有自己的根组织 id 方案，
+  // 老逻辑用哈希派生 id 硬插：会先撞掉 (tenant_id, code) 唯一键 → 自己没建成，
+  // 紧接着把 membership 的 primary_org_unit_id 回写成那个不存在的 id → 外键报错、后端起不来。
+  // 所以这里必须先按 unit_type='company' 判断「有没有根组织」，而不是假设 id 一定是哈希值。
+  const [tenantsWithoutRoot] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT t.id, t.name FROM tenants t
+     WHERE NOT EXISTS (
+       SELECT 1 FROM organization_units ou WHERE ou.tenant_id = t.id AND ou.unit_type = 'company'
+     )`
+  );
+  for (const tenant of tenantsWithoutRoot) {
+    const rootOrgId = `org_${createHash("sha256").update(String(tenant.id)).digest("hex").slice(0, 32)}`;
+    await pool.query(
+      `INSERT INTO organization_units
+        (id, tenant_id, parent_id, name, code, unit_type, path, depth, sort_order,
+         status, version_no, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, 'company-root', 'company', ?, 0, 0, 'active', 1, NOW(3), NOW(3))
+       ON DUPLICATE KEY UPDATE name=VALUES(name), updated_at=NOW(3)`,
+      [rootOrgId, tenant.id, tenant.name, `/${rootOrgId}/`]
+    );
+  }
   await pool.query(`INSERT INTO tenant_memberships
     (id, tenant_id, user_id, title, status, primary_org_unit_id,
      membership_auth_version, joined_at, created_at, updated_at)
     SELECT CONCAT('mem_', LEFT(SHA2(CONCAT(u.team_id, ':', u.id), 256), 40)),
       u.team_id, u.id, '', IF(u.status='active','active','suspended'),
-      CONCAT('org_', LEFT(SHA2(u.team_id, 256), 32)), 1, u.created_at, NOW(3), NOW(3)
+      (SELECT ou.id FROM organization_units ou
+        WHERE ou.tenant_id = u.team_id AND ou.unit_type = 'company'
+        ORDER BY ou.depth, ou.created_at LIMIT 1),
+      1, u.created_at, NOW(3), NOW(3)
     FROM users u
     WHERE u.role <> 'super_admin' AND u.team_id <> '' AND u.team_id <> 'all'
-    ON DUPLICATE KEY UPDATE status=VALUES(status), primary_org_unit_id=VALUES(primary_org_unit_id), updated_at=NOW(3)`);
+    ON DUPLICATE KEY UPDATE status=VALUES(status),
+      primary_org_unit_id=IFNULL(primary_org_unit_id, VALUES(primary_org_unit_id)),
+      updated_at=NOW(3)`);
   await pool.query(`INSERT INTO organization_memberships
     (id, tenant_id, membership_id, org_unit_id, relation_type, is_leader,
      valid_from, created_at)
     SELECT CONCAT('om_', LEFT(SHA2(CONCAT(tm.tenant_id, ':', tm.id, ':primary'), 256), 40)),
       tm.tenant_id, tm.id, tm.primary_org_unit_id, 'primary', FALSE, tm.joined_at, NOW(3)
     FROM tenant_memberships tm
+    JOIN organization_units ou ON ou.tenant_id = tm.tenant_id AND ou.id = tm.primary_org_unit_id
     WHERE tm.primary_org_unit_id IS NOT NULL
     ON DUPLICATE KEY UPDATE org_unit_id=VALUES(org_unit_id)`);
   await pool.query(`INSERT INTO roles
